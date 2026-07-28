@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any, Self
 
 import httpx
@@ -27,6 +28,7 @@ class MamClient:
         *,
         client: httpx.AsyncClient | None = None,
         timeout: float = 20,
+        cookie_store: Callable[[str], None] | None = None,
     ) -> None:
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
@@ -35,6 +37,7 @@ class MamClient:
             timeout=timeout,
             follow_redirects=True,
         )
+        self.cookie_store = cookie_store
         self.client.cookies.set("mam_id", mam_id, domain="www.myanonamouse.net")
 
     async def __aenter__(self) -> Self:
@@ -56,9 +59,18 @@ class MamClient:
         except httpx.HTTPStatusError as error:
             raise MamError(str(error)) from error
 
+    def _remember_cookie(self) -> None:
+        if self.cookie_store is None:
+            return
+        for cookie in self.client.cookies.jar:
+            if cookie.name == "mam_id":
+                self.cookie_store(cookie.value)
+                return
+
     async def check_mam_id(self) -> None:
         response = await self.client.get("/json/checkCookie.php")
         self._raise_for_status(response)
+        self._remember_cookie()
         if '"Success":true' not in response.text:
             raise MamError("session check failed (Success was false)")
 
@@ -67,11 +79,13 @@ class MamClient:
             "/jsonLoad.php", params={"snatch_summary": "true"}
         )
         self._raise_for_status(response)
+        self._remember_cookie()
         return response.json()
 
     async def search(self, query: dict[str, Any]) -> dict[str, Any]:
         response = await self.client.post("/tor/js/loadSearchJSONbasic.php", json=query)
         self._raise_for_status(response)
+        self._remember_cookie()
         result = response.json()
         if isinstance(result, dict) and result.get("error"):
             if result["error"] == "Nothing returned, out of 0":
@@ -110,6 +124,7 @@ class MamClient:
             params={"tid": torrent_id},
         )
         self._raise_for_status(response)
+        self._remember_cookie()
         return response.content
 
     async def wedge_torrent(self, torrent_id: int) -> None:
@@ -123,6 +138,7 @@ class MamClient:
             },
         )
         self._raise_for_status(response)
+        self._remember_cookie()
         result = response.json()
         if not result.get("success"):
             raise MamWedgeError(str(result.get("error") or "unknown wedge error"))
@@ -149,4 +165,5 @@ class MamClient:
             },
         )
         self._raise_for_status(response)
+        self._remember_cookie()
         return response.json()

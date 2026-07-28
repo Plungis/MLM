@@ -33,6 +33,72 @@ MEDIA_TYPE_BY_ID = {
 
 MAIN_CATEGORY_BY_ID = {13: "audiobook", 14: "ebook", 15: "musicology", 16: "radio"}
 
+LANGUAGE_BY_ID = {
+    1: "english",
+    2: "chinese",
+    3: "gujarati",
+    4: "spanish",
+    5: "kannada",
+    6: "burmese",
+    7: "thai",
+    8: "hindi",
+    9: "marathi",
+    10: "telugu",
+    11: "tamil",
+    12: "javanese",
+    13: "vietnamese",
+    14: "punjabi",
+    15: "urdu",
+    16: "russian",
+    17: "afrikaans",
+    18: "bulgarian",
+    19: "catalan",
+    20: "czech",
+    21: "danish",
+    22: "dutch",
+    23: "finnish",
+    24: "scottish",
+    25: "ukrainian",
+    26: "greek",
+    27: "hebrew",
+    28: "hungarian",
+    29: "tagalog",
+    30: "romanian",
+    31: "serbian",
+    32: "arabic",
+    33: "malay",
+    34: "portuguese",
+    35: "bengali",
+    36: "french",
+    37: "german",
+    38: "japanese",
+    39: "farsi",
+    40: "swedish",
+    41: "korean",
+    42: "turkish",
+    43: "italian",
+    44: "cantonese",
+    45: "polish",
+    46: "latin",
+    47: "other",
+    48: "norwegian",
+    49: "croatian",
+    50: "lithuanian",
+    51: "bosnian",
+    52: "brazilian",
+    53: "indonesian",
+    54: "slovenian",
+    55: "castilian",
+    56: "irish",
+    57: "manx",
+    58: "malayalam",
+    59: "ancient greek",
+    60: "sanskrit",
+    61: "estonian",
+    62: "latvian",
+    63: "icelandic",
+}
+
 SIZE_UNITS = {
     "b": 1,
     "kb": 1_000,
@@ -146,13 +212,16 @@ def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:
             actual = (
                 str(row.get("catname", row.get("cat", ""))).lower().replace(" ", "_")
             )
-            if actual not in names:
+            if not any(actual == name or actual.endswith(f"_{name}") for name in names):
                 return False
 
     languages = {str(value).lower() for value in rule.get("languages", [])}
     if languages:
-        actual_language = str(row.get("lang_code", row.get("language", ""))).lower()
-        if actual_language not in languages:
+        actual_languages = {
+            str(row.get("lang_code", "")).lower(),
+            LANGUAGE_BY_ID.get(as_int(row.get("language")), ""),
+        }
+        if languages.isdisjoint(actual_languages):
             return False
 
     bitfield = as_int(row.get("browseflags"))

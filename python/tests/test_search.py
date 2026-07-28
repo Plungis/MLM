@@ -26,6 +26,7 @@ def test_filter_size_flags_dates_and_peers() -> None:
         "added": "2025-07-06 05:40:54",
         "seeders": 8,
         "owner_name": "someone",
+        "language": 1,
     }
     assert matches_filter(
         row,
@@ -36,6 +37,7 @@ def test_filter_size_flags_dates_and_peers() -> None:
             "uploaded_after": "2025-07-06",
             "uploaded_before": "2025-07-06",
             "min_seeders": 8,
+            "languages": ["English"],
         },
     )
     assert parse_size("1.5 GiB") == int(1.5 * (1 << 30))

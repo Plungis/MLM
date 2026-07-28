@@ -42,7 +42,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        mam = MamClient(config.mam_id)
+        mam = MamClient(
+            repository.config_value("mam_id") or config.mam_id,
+            cookie_store=lambda value: repository.set_config_value("mam_id", value),
+        )
         state = ServiceState(config, repository, mam)
         app.state.services = state
         try:

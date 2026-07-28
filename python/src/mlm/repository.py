@@ -25,6 +25,23 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
+    def config_value(self, key: str) -> str | None:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT value FROM config WHERE key = ?", (key,)
+            ).fetchone()
+            return str(row[0]) if row else None
+
+    def set_config_value(self, key: str, value: str) -> None:
+        payload = {"key": key, "value": value}
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO config(key, value, payload_json) VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value=excluded.value, payload_json=excluded.payload_json""",
+                (key, value, canonical_json(payload)),
+            )
+
     def has_mam_id(self, mam_id: int) -> bool:
         with connect(self.path) as connection:
             selected = connection.execute(
