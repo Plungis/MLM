@@ -191,12 +191,13 @@ impl<'a> MaM<'a> {
         }
     }
 
-    pub async fn get_torrent_file(&self, dl_hash: &str) -> Result<Bytes> {
+    pub async fn get_torrent_file(&self, dl_hash: &str, mam_id: u64) -> Result<Bytes> {
         let resp = self
             .client
             .get(format!(
                 "https://www.myanonamouse.net/tor/download.php/{dl_hash}"
             ))
+            .query(&[("tid", mam_id)])
             .send()
             .await?
             .error_for_status()
