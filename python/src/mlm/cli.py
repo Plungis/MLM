@@ -39,18 +39,24 @@ async def _download(config_path: Path, database_path: Path) -> int:
     config = load_config(config_path)
     if not config.qbittorrent:
         raise ConfigError("at least one [[qbittorrent]] entry is required")
-    qbit_config = config.qbittorrent[0]
     repository = Repository(database_path)
-    async with (
-        MamClient(
-            repository.config_value("mam_id") or config.mam_id,
-            cookie_store=lambda value: repository.set_config_value("mam_id", value),
-        ) as mam,
-        QbitClient(qbit_config.url) as qbit,
-    ):
+    async with MamClient(
+        repository.config_value("mam_id") or config.mam_id,
+        cookie_store=lambda value: repository.set_config_value("mam_id", value),
+    ) as mam:
         await mam.check_mam_id()
-        await qbit.login(qbit_config.username, qbit_config.password)
-        result = await grab_selected_torrents(config, repository, mam, qbit)
+        qbits: list[QbitClient] = []
+        try:
+            for definition in config.qbittorrent:
+                qbit = QbitClient(definition.url)
+                await qbit.login(definition.username, definition.password)
+                qbits.append(qbit)
+            result = await grab_selected_torrents(
+                config, repository, mam, qbits[0], other_qbits=qbits[1:]
+            )
+        finally:
+            for qbit in qbits:
+                await qbit.close()
     print(
         f"Download run: {result.downloaded} downloaded, "
         f"{result.failed} failed, {result.skipped} skipped"

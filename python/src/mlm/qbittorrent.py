@@ -64,6 +64,8 @@ class QbitClient:
         tags_value = ",".join(tags)
         if tags_value:
             data["tags"] = tags_value
+        if category:
+            await self.ensure_category(category)
         response = await self.client.post(
             "/api/v2/torrents/add",
             data=data,

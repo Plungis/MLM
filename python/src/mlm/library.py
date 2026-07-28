@@ -178,6 +178,13 @@ async def organize_completed(
             continue
         torrent_hash = str(qbit_torrent["hash"])
         existing = repository.torrent(torrent_hash)
+        if existing and not existing.get("client_status"):
+            trackers = await qbit.trackers(torrent_hash)
+            if any(
+                tracker.get("msg") == "torrent not registered with this tracker"
+                for tracker in trackers
+            ):
+                repository.mark_removed_from_mam(existing)
         if existing and existing.get("library_path"):
             continue
         files = await qbit.files(torrent_hash)

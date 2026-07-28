@@ -73,11 +73,21 @@ class ServiceState:
     async def downloader(self) -> None:
         if not self.config.qbittorrent:
             return
-        qbit, _ = await self._qbit(0)
+        qbits: list[QbitClient] = []
         try:
-            await grab_selected_torrents(self.config, self.repository, self.mam, qbit)
+            for index in range(len(self.config.qbittorrent)):
+                qbit, _ = await self._qbit(index)
+                qbits.append(qbit)
+            await grab_selected_torrents(
+                self.config,
+                self.repository,
+                self.mam,
+                qbits[0],
+                other_qbits=qbits[1:],
+            )
         finally:
-            await qbit.close()
+            for qbit in qbits:
+                await qbit.close()
 
     async def organizer(self, index: int) -> None:
         qbit, qbit_config = await self._qbit(index)

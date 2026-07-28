@@ -181,6 +181,36 @@ class Repository:
                 ),
             )
 
+    def mark_removed_from_mam(self, torrent: dict[str, Any]) -> None:
+        if torrent.get("client_status") == "RemovedFromMam":
+            return
+        torrent = dict(torrent)
+        torrent["client_status"] = "RemovedFromMam"
+        event = {
+            "id": str(uuid4()),
+            "torrent_id": torrent["id"],
+            "mam_id": torrent["mam_id"],
+            "created_at": datetime.now(UTC).isoformat(),
+            "event": "RemovedFromMam",
+        }
+        with connect(self.path) as connection:
+            connection.execute(
+                "UPDATE torrents SET payload_json=? WHERE id=?",
+                (canonical_json(torrent), torrent["id"]),
+            )
+            connection.execute(
+                """INSERT INTO events
+                   (id_json, torrent_id, mam_id, created_at_json, payload_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    canonical_json(event["id"]),
+                    event["torrent_id"],
+                    event["mam_id"],
+                    canonical_json(event["created_at"]),
+                    canonical_json(event),
+                ),
+            )
+
     def upsert_list(self, row: dict[str, Any]) -> None:
         with connect(self.path) as connection:
             connection.execute(

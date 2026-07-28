@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .config import Config
@@ -34,6 +35,7 @@ async def grab_selected_torrents(
     repository: Repository,
     mam: MamClient,
     qbit: QbitClient,
+    other_qbits: Iterable[QbitClient] = (),
 ) -> DownloadRun:
     downloaded = failed = skipped = 0
     user = await mam.user_info()
@@ -69,6 +71,11 @@ async def grab_selected_torrents(
             )
             torrent_hash = info_hash(torrent_file)
             existing = await qbit.torrents(hashes=[torrent_hash])
+            if not existing:
+                for other_qbit in other_qbits:
+                    existing = await other_qbit.torrents(hashes=[torrent_hash])
+                    if existing:
+                        break
             wedged = False
             cost = selected.get("cost")
             if not existing and cost in {"UseWedge", "TryWedge"}:
