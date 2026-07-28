@@ -25,6 +25,143 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
+    def has_mam_id(self, mam_id: int) -> bool:
+        with connect(self.path) as connection:
+            selected = connection.execute(
+                "SELECT 1 FROM selected_torrents WHERE mam_id = ?", (mam_id,)
+            ).fetchone()
+            library = connection.execute(
+                "SELECT 1 FROM torrents WHERE mam_id = ?", (mam_id,)
+            ).fetchone()
+            return selected is not None or library is not None
+
+    def records_with_title(self, title_search: str) -> list[dict[str, Any]]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                """SELECT payload_json FROM selected_torrents WHERE title_search = ?
+                   UNION ALL
+                   SELECT payload_json FROM torrents WHERE title_search = ?""",
+                (title_search, title_search),
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def add_selected(self, selected: dict[str, Any]) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO selected_torrents
+                   (mam_id, hash, title_search, created_at_json, payload_json)
+                   VALUES (?, NULL, ?, ?, ?)""",
+                (
+                    selected["mam_id"],
+                    selected["title_search"],
+                    canonical_json(selected["created_at"]),
+                    canonical_json(selected),
+                ),
+            )
+
+    def add_duplicate(
+        self, torrent: dict[str, Any], duplicate_of: str | None = None
+    ) -> None:
+        row = {
+            "mam_id": torrent["mam_id"],
+            "dl_link": torrent.get("dl_link"),
+            "title_search": torrent["title_search"],
+            "meta": torrent["meta"],
+            "created_at": datetime.now(UTC).isoformat(),
+            "duplicate_of": duplicate_of,
+        }
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO duplicate_torrents
+                   (mam_id, title_search, created_at_json, payload_json)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(mam_id) DO UPDATE SET payload_json=excluded.payload_json""",
+                (
+                    row["mam_id"],
+                    row["title_search"],
+                    canonical_json(row["created_at"]),
+                    canonical_json(row),
+                ),
+            )
+
+    def torrent(self, torrent_id: str) -> dict[str, Any] | None:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM torrents WHERE id = ?", (torrent_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def library_torrents(self) -> list[dict[str, Any]]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                """SELECT payload_json FROM torrents
+                   WHERE json_extract(payload_json, '$.library_path') IS NOT NULL
+                   ORDER BY title_search"""
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def record_linked(self, torrent: dict[str, Any], selected_mam_id: int | None) -> None:
+        event = {
+            "id": str(uuid4()),
+            "torrent_id": torrent["id"],
+            "mam_id": torrent["mam_id"],
+            "created_at": datetime.now(UTC).isoformat(),
+            "event": {
+                "Linked": {
+                    "linker": torrent.get("linker"),
+                    "library_path": torrent.get("library_path"),
+                }
+            },
+        }
+        with connect(self.path) as connection:
+            with connection:
+                connection.execute(
+                    """INSERT INTO torrents
+                       (id, mam_id, title_search, created_at_json, payload_json)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                         mam_id=excluded.mam_id,
+                         title_search=excluded.title_search,
+                         payload_json=excluded.payload_json""",
+                    (
+                        torrent["id"],
+                        torrent["mam_id"],
+                        torrent["title_search"],
+                        canonical_json(torrent["created_at"]),
+                        canonical_json(torrent),
+                    ),
+                )
+                if selected_mam_id is not None:
+                    connection.execute(
+                        "DELETE FROM selected_torrents WHERE mam_id = ?",
+                        (selected_mam_id,),
+                    )
+                connection.execute(
+                    """INSERT INTO events
+                       (id_json, torrent_id, mam_id, created_at_json, payload_json)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        canonical_json(event["id"]),
+                        event["torrent_id"],
+                        event["mam_id"],
+                        canonical_json(event["created_at"]),
+                        canonical_json(event),
+                    ),
+                )
+
+    def update_torrent(self, torrent: dict[str, Any]) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                """UPDATE torrents SET mam_id=?, title_search=?, payload_json=?
+                   WHERE id=?""",
+                (
+                    torrent["mam_id"],
+                    torrent["title_search"],
+                    canonical_json(torrent),
+                    torrent["id"],
+                ),
+            )
+
     def record_started(
         self, selected: dict[str, Any], torrent_hash: str, *, wedged: bool = False
     ) -> None:

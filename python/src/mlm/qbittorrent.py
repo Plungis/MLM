@@ -77,3 +77,49 @@ class QbitClient:
             await self.client.get("/api/v2/torrents/info", params=params)
         )
         return response.json()
+
+    async def files(self, torrent_hash: str) -> list[dict]:
+        response = self._check(
+            await self.client.get(
+                "/api/v2/torrents/files", params={"hash": torrent_hash}
+            )
+        )
+        return response.json()
+
+    async def trackers(self, torrent_hash: str) -> list[dict]:
+        response = self._check(
+            await self.client.get(
+                "/api/v2/torrents/trackers", params={"hash": torrent_hash}
+            )
+        )
+        return response.json()
+
+    async def categories(self) -> dict[str, dict]:
+        response = self._check(await self.client.get("/api/v2/torrents/categories"))
+        return response.json()
+
+    async def ensure_category(self, category: str) -> None:
+        if category in await self.categories():
+            return
+        response = await self.client.post(
+            "/api/v2/torrents/createCategory", data={"category": category}
+        )
+        self._check(response)
+
+    async def set_category(self, hashes: Iterable[str], category: str) -> None:
+        await self.ensure_category(category)
+        response = await self.client.post(
+            "/api/v2/torrents/setCategory",
+            data={"hashes": "|".join(hashes), "category": category},
+        )
+        self._check(response)
+
+    async def add_tags(self, hashes: Iterable[str], tags: Iterable[str]) -> None:
+        tags_value = ",".join(tags)
+        if not tags_value:
+            return
+        response = await self.client.post(
+            "/api/v2/torrents/addTags",
+            data={"hashes": "|".join(hashes), "tags": tags_value},
+        )
+        self._check(response)

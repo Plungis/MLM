@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -10,6 +11,10 @@ class MamError(RuntimeError):
 
 
 class MamRateLimitError(MamError):
+    pass
+
+
+class MamWedgeError(MamError):
     pass
 
 
@@ -77,13 +82,22 @@ class MamClient:
     async def get_torrent_info_by_id(self, torrent_id: int) -> dict[str, Any] | None:
         result = await self.search(
             {
+                "description": True,
+                "mediaInfo": True,
+                "isbn": True,
+                "dlLink": True,
                 "tor": {"id": torrent_id},
-                "fields": {
-                    "description": True,
-                    "mediaInfo": True,
-                    "isbn": True,
-                    "dlLink": True,
-                },
+            }
+        )
+        rows = result.get("data", [])
+        return rows[-1] if rows else None
+
+    async def get_torrent_info(self, torrent_hash: str) -> dict[str, Any] | None:
+        result = await self.search(
+            {
+                "description": True,
+                "isbn": True,
+                "tor": {"hash": torrent_hash},
             }
         )
         rows = result.get("data", [])
@@ -97,3 +111,18 @@ class MamClient:
         )
         self._raise_for_status(response)
         return response.content
+
+    async def wedge_torrent(self, torrent_id: int) -> None:
+        timestamp = int(time.time() * 1000)
+        response = await self.client.get(
+            f"/json/bonusBuy.php/{timestamp}",
+            params={
+                "spendtype": "personalFL",
+                "torrentid": torrent_id,
+                "timestamp": timestamp,
+            },
+        )
+        self._raise_for_status(response)
+        result = response.json()
+        if not result.get("success"):
+            raise MamWedgeError(str(result.get("error") or "unknown wedge error"))
