@@ -12,10 +12,13 @@ The first implemented slice is a lossless database migration:
 
 ## Migrate an existing database
 
-Build the legacy exporter once:
+Check out and build the frozen one-time legacy exporter:
 
 ```powershell
+git clone --branch legacy-export-v1 https://github.com/Plungis/MLM legacy-export
+cd legacy-export
 cargo build --release -p mlm
+cd ..
 ```
 
 Then run:
@@ -26,11 +29,13 @@ python -m pip install -e .
 mlm-python migrate `
   --source-db "$env:LOCALAPPDATA\MLM\data.db" `
   --destination "$env:LOCALAPPDATA\MLM\data.sqlite3" `
-  --legacy-executable "..\target\release\mlm.exe"
+  --legacy-executable ".\legacy-export\target\release\mlm.exe"
 ```
 
-The command exports from the backup copy, not the live database. You can also
-pass `--export-json path\to\export.json` instead of `--legacy-executable`.
+The old executable is used only to decode its private `native_db` format. It
+exports from the automatic backup copy, not the live database, and is never
+used by the new application runtime. You can also pass
+`--export-json path\to\export.json` instead of `--legacy-executable`.
 
 ## Process migrated pending downloads
 
