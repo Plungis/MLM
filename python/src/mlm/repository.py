@@ -135,6 +135,10 @@ class Repository:
         }
         with connect(self.path) as connection, connection:
             connection.execute(
+                "DELETE FROM torrents WHERE mam_id = ? AND id <> ?",
+                (torrent["mam_id"], torrent["id"]),
+            )
+            connection.execute(
                 """INSERT INTO torrents
                        (id, mam_id, title_search, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)

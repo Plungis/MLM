@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlm-python"
-version = "0.1.0a1"
+version = "0.5.0b1"
 description = "Python migration of Myanonamouse Library Manager"
 readme = "README.md"
 requires-python = ">=3.11"
