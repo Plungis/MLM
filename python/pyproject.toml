@@ -8,7 +8,6 @@ version = "0.5.0b1"
 description = "Python migration of Myanonamouse Library Manager"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
 authors = [{ name = "MLM contributors" }]
 dependencies = [
   "fastapi>=0.115,<1",

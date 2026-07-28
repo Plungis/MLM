@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from mlm.search import build_search_query, matches_filter, normalize_title, parse_size
+from mlm.search import (
+    build_search_query,
+    matches_filter,
+    metadata_matches,
+    normalize_title,
+    parse_size,
+)
 
 
 def test_search_payload_matches_mam_shape() -> None:
@@ -45,3 +51,16 @@ def test_filter_size_flags_dates_and_peers() -> None:
 
 def test_normalize_title_matches_legacy_intent() -> None:
     assert normalize_title("The Café & Book: Vol. 2") == "cafe and book vol 2"
+
+
+def test_metadata_matching_requires_author_and_narrator_compatibility() -> None:
+    base = {
+        "media_type": "Audiobook",
+        "language": "English",
+        "edition": None,
+        "authors": ["Writer"],
+        "narrators": ["Narrator"],
+    }
+    assert metadata_matches(base, {**base, "media_type": "audiobook"})
+    assert not metadata_matches(base, {**base, "authors": ["Someone Else"]})
+    assert not metadata_matches(base, {**base, "narrators": []})

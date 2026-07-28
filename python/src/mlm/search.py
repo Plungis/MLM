@@ -176,7 +176,7 @@ def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
         "media_type": media_type,
         "main_cat": as_int(row.get("maincat")) or None,
         "categories": [as_int(value) for value in row.get("categories", [])],
-        "language": as_int(row.get("language")) or None,
+        "language": LANGUAGE_BY_ID.get(as_int(row.get("language")), "").title() or None,
         "flags": as_int(row.get("browseflags")),
         "filetypes": filetypes,
         "num_files": as_int(row.get("numfiles")),
@@ -193,6 +193,46 @@ def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
 
 def _date(value: Any) -> date:
     return date.fromisoformat(str(value)[:10])
+
+
+def metadata_matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_media = str(left.get("media_type", "")).lower()
+    right_media = str(right.get("media_type", "")).lower()
+    media_matches = (
+        left_media == right_media
+        or {
+            left_media,
+            right_media,
+        }
+        == {"ebook", "comicbook"}
+        or {left_media, right_media}
+        == {
+            "ebook",
+            "comic_book",
+        }
+    )
+    if not media_matches or left.get("language") != right.get("language"):
+        return False
+
+    left_edition = left.get("edition")
+    right_edition = right.get("edition")
+    if (left_edition is None) != (right_edition is None):
+        return False
+    if left_edition is not None:
+        if left_edition[1] != right_edition[1]:
+            return False
+        if left_edition[1] == 0 and left_edition[0] != right_edition[0]:
+            return False
+
+    left_authors = {str(value).casefold() for value in left.get("authors", [])}
+    right_authors = {str(value).casefold() for value in right.get("authors", [])}
+    if not left_authors.intersection(right_authors):
+        return False
+    left_narrators = {str(value).casefold() for value in left.get("narrators", [])}
+    right_narrators = {str(value).casefold() for value in right.get("narrators", [])}
+    return (not left_narrators and not right_narrators) or bool(
+        left_narrators.intersection(right_narrators)
+    )
 
 
 def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:

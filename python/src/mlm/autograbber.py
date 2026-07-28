@@ -6,7 +6,14 @@ from typing import Any
 from .config import Config
 from .mam import MamClient
 from .repository import Repository
-from .search import as_bool, matches_filter, normalize_title, search_pages, torrent_meta
+from .search import (
+    as_bool,
+    matches_filter,
+    metadata_matches,
+    normalize_title,
+    search_pages,
+    torrent_meta,
+)
 
 
 def _preferred_types(config: Config, media_type: str) -> tuple[str, ...]:
@@ -115,6 +122,8 @@ async def select_row(
     duplicate = False
     for existing in repository.records_with_title(title_search):
         old_meta = existing.get("meta", {})
+        if not metadata_matches(meta, old_meta):
+            continue
         old_preference = _preference(old_meta.get("filetypes", []), preferred)
         if old_preference is not None and old_preference <= preference:
             duplicate = True
