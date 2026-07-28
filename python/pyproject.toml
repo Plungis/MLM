@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mlm-python"
+version = "0.1.0a1"
+description = "Python migration of Myanonamouse Library Manager"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "MLM contributors" }]
+dependencies = ["httpx>=0.27,<1"]
+
+[project.scripts]
+mlm-python = "mlm.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlm"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -4,3 +4,7 @@ docs/book
 config.toml
 data.db
 data.db.*
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/

@@ -194,13 +194,21 @@ async fn app_main() -> Result<()> {
     let db = native_db::Builder::new().create(&mlm_db::MODELS, database_file)?;
     mlm_db::migrate(&db)?;
 
-    if env::args().any(|arg| arg == "--update-search-title") {
+    let args = env::args().collect::<Vec<_>>();
+    if let Some(index) = args.iter().position(|arg| arg == "--export-db") {
+        let output_path = args
+            .get(index + 1)
+            .map(PathBuf::from)
+            .context("--export-db requires an output JSON path")?;
+        export_db(&db, &output_path)?;
+        return Ok(());
+    }
+
+    if args.iter().any(|arg| arg == "--update-search-title") {
         mlm_db::update_search_title(&db)?;
         return Ok(());
     }
 
-    // export_db(&db)?;
-    // return Ok(());
     let db = Arc::new(db);
 
     #[cfg(target_family = "windows")]

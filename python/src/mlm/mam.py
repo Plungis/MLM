@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+
+class MamError(RuntimeError):
+    pass
+
+
+class MamRateLimitError(MamError):
+    pass
+
+
+class MamClient:
+    BASE_URL = "https://www.myanonamouse.net"
+
+    def __init__(
+        self,
+        mam_id: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 20,
+    ) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.AsyncClient(
+            base_url=self.BASE_URL,
+            headers={"User-Agent": "MLM"},
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        self.client.cookies.set("mam_id", mam_id, domain="www.myanonamouse.net")
+
+    async def __aenter__(self) -> MamClient:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        if self._owns_client:
+            await self.client.aclose()
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> None:
+        if response.status_code == 429:
+            raise MamRateLimitError("Myanonamouse rate limit reached")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise MamError(str(error)) from error
+
+    async def check_mam_id(self) -> None:
+        response = await self.client.get("/json/checkCookie.php")
+        self._raise_for_status(response)
+        if '"Success":true' not in response.text:
+            raise MamError("session check failed (Success was false)")
+
+    async def user_info(self) -> dict[str, Any]:
+        response = await self.client.get("/jsonLoad.php", params={"snatch_summary": "true"})
+        self._raise_for_status(response)
+        return response.json()
+
+    async def search(self, query: dict[str, Any]) -> dict[str, Any]:
+        response = await self.client.post(
+            "/tor/js/loadSearchJSONbasic.php", json=query
+        )
+        self._raise_for_status(response)
+        result = response.json()
+        if isinstance(result, dict) and result.get("error"):
+            if result["error"] == "Nothing returned, out of 0":
+                return {"data": [], "found": 0}
+            raise MamError(str(result["error"]))
+        return result
+
+    async def get_torrent_info_by_id(self, torrent_id: int) -> dict[str, Any] | None:
+        result = await self.search(
+            {
+                "tor": {"id": torrent_id},
+                "fields": {
+                    "description": True,
+                    "mediaInfo": True,
+                    "isbn": True,
+                    "dlLink": True,
+                },
+            }
+        )
+        rows = result.get("data", [])
+        return rows[-1] if rows else None
+
+    async def get_torrent_file(self, download_hash: str, torrent_id: int) -> bytes:
+        """Download a .torrent; MaM requires the numeric tid query argument."""
+        response = await self.client.get(
+            f"/tor/download.php/{download_hash}",
+            params={"tid": torrent_id},
+        )
+        self._raise_for_status(response)
+        return response.content
