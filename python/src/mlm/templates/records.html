@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<table><tr><th>Summary</th><th>Record</th>{% if table == "selected_torrents" %}<th></th>{% endif %}</tr>
+{% for row in rows %}
+<tr>
+  <td>{{ row.title or row.meta.title or row.id or row.mam_id or row.guid }}</td>
+  <td><pre>{{ row | tojson(indent=2) }}</pre></td>
+  {% if table == "selected_torrents" %}<td>
+    <form action="/selected/remove" method="post">
+      <input type="hidden" name="mam_id" value="{{ row.mam_id }}"><button>Remove</button>
+    </form>
+  </td>{% endif %}
+</tr>
+{% else %}<tr><td colspan="3">No records.</td></tr>{% endfor %}
+</table>
+{% endblock %}

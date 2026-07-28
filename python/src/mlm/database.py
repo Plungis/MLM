@@ -97,3 +97,19 @@ def connect(path: Path) -> sqlite3.Connection:
 
 def initialize(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA)
+
+
+def ensure_database(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return
+    connection = connect(path)
+    try:
+        initialize(connection)
+        connection.executemany(
+            "INSERT INTO migration_meta(key, value) VALUES (?, ?)",
+            [("schema_version", str(SCHEMA_VERSION)), ("created_fresh", "true")],
+        )
+        connection.commit()
+    finally:
+        connection.close()

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from .database import connect
 from .migration import canonical_json
+from .search import normalize_title
 
 
 class Repository:
@@ -161,6 +162,129 @@ class Repository:
                     torrent["id"],
                 ),
             )
+
+    def upsert_list(self, row: dict[str, Any]) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO lists(id, title, payload_json) VALUES (?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     title=excluded.title, payload_json=excluded.payload_json""",
+                (row["id"], row["title"], canonical_json(row)),
+            )
+
+    def list_item(self, guid: list[str]) -> dict[str, Any] | None:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM list_items WHERE guid_json = ?",
+                (canonical_json(guid),),
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def upsert_list_item(self, row: dict[str, Any]) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO list_items
+                   (guid_json, list_id, title, created_at_json, payload_json)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(guid_json) DO UPDATE SET
+                     title=excluded.title, payload_json=excluded.payload_json""",
+                (
+                    canonical_json(row["guid"]),
+                    row["list_id"],
+                    row["title"],
+                    canonical_json(row["created_at"]),
+                    canonical_json(row),
+                ),
+            )
+
+    def table_rows(self, table: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        allowed = {
+            "torrents",
+            "selected_torrents",
+            "duplicate_torrents",
+            "errored_torrents",
+            "events",
+            "lists",
+            "list_items",
+        }
+        if table not in allowed:
+            raise ValueError(f"unsupported table: {table}")
+        order = "created_at_json DESC" if table not in {"lists"} else "title"
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                f"SELECT payload_json FROM {table} ORDER BY {order} LIMIT ?",
+                (limit,),
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def counts(self) -> dict[str, int]:
+        tables = (
+            "torrents",
+            "selected_torrents",
+            "duplicate_torrents",
+            "errored_torrents",
+            "events",
+            "lists",
+            "list_items",
+        )
+        with connect(self.path) as connection:
+            return {
+                table: connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
+                for table in tables
+            }
+
+    def delete_selected(self, mam_id: int) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                "DELETE FROM selected_torrents WHERE mam_id = ?", (mam_id,)
+            )
+
+    def delete_error(self, id_json: Any) -> None:
+        with connect(self.path) as connection:
+            connection.execute(
+                "DELETE FROM errored_torrents WHERE id_json = ?",
+                (canonical_json(id_json),),
+            )
+
+    def add_metadata_torrent(self, meta: dict[str, Any], linker: str | None) -> str:
+        torrent_id = str(uuid4())
+        now = datetime.now(UTC).isoformat()
+        row = {
+            "id": torrent_id,
+            "id_is_hash": False,
+            "mam_id": meta["mam_id"],
+            "abs_id": None,
+            "goodreads_id": None,
+            "library_path": None,
+            "library_files": [],
+            "linker": linker,
+            "category": None,
+            "selected_audio_format": None,
+            "selected_ebook_format": None,
+            "title_search": normalize_title(meta["title"]),
+            "meta": meta,
+            "created_at": now,
+            "replaced_with": None,
+            "request_matadata_update": False,
+            "library_mismatch": None,
+            "client_status": None,
+        }
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO torrents
+                   (id, mam_id, title_search, created_at_json, payload_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    row["id"],
+                    row["mam_id"],
+                    row["title_search"],
+                    canonical_json(now),
+                    canonical_json(row),
+                ),
+            )
+        return torrent_id
 
     def record_started(
         self, selected: dict[str, Any], torrent_hash: str, *, wedged: bool = False

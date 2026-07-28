@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Configuration</h1>
+<p>Secrets are redacted. Edit the TOML file and restart MLM to apply changes.</p>
+<pre class="card">{{ config | tojson(indent=2) }}</pre>
+{% endblock %}

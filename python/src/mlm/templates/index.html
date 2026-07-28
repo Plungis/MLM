@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="cards">
+{% for table,count in counts.items() %}
+  <a class="card" href="/records/{{ table }}" style="color:inherit;text-decoration:none">
+    <div>{{ table.replace("_"," ").title() }}</div><div class="count">{{ count }}</div>
+  </a>
+{% endfor %}
+</div>
+<h2>Run now</h2>
+{% for name in ["autograb","downloader","organizer","cleaner"] %}
+<form action="/actions/{{ name }}" method="post" style="display:inline"><button>{{ name.title() }}</button></form>
+{% endfor %}
+<h2>Jobs</h2>
+<table><tr><th>Job</th><th>Running</th><th>Last run</th><th>Error</th></tr>
+{% for name,status in jobs.items() %}
+<tr><td>{{ name }}</td><td>{{ status.running }}</td><td>{{ status.last_run or "—" }}</td>
+<td class="error">{{ status.last_error or "" }}</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

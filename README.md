@@ -14,5 +14,33 @@ Limitations:
 - MLM works with torrents, meaning collections (multiple books in a single torrents) will be treated as one book (however if you link these with [booktree](https://github.com/myxdvz/booktree), MLM will not touch those files)
 - MLM works with torrents from MaM, meaning files not via a torrent from here can not be handled (however if you link these with [booktree](https://github.com/myxdvz/booktree), MLM will not touch those files)
 
-It is available as both a docker container and a Windows application. See the docs for install and configuration instructions:
-https://stirlingmouse.github.io/MLM/introduction.html
+The application runtime is now Python 3.11+ and is available as a Docker
+container or an installable Python package.
+
+## Run with Docker
+
+```shell
+docker compose up --build -d
+```
+
+Put the existing `config.toml` in `./config/config.toml`. Data is stored under
+`./data`.
+
+## Run with Python
+
+```shell
+python -m pip install -e ./python
+mlm-python run --config ./config.toml --database ./data.sqlite3
+```
+
+The web UI listens on port 3157 by default.
+
+## Migrate legacy data
+
+The Python migrator imports the versioned JSON export into SQLite while
+preserving every source record, making an automatic backup, checking record
+counts, and running SQLite's integrity check before installing the new database.
+See [the Python migration guide](python/README.md).
+
+Existing configuration fields and aliases remain supported. Full configuration
+documentation is under [`docs/src`](docs/src).

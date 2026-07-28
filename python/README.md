@@ -43,3 +43,15 @@ mlm-python download `
 This command currently performs one downloader pass. It validates the MaM
 cookie, logs into the first configured qBittorrent server, includes the required
 `tid` on every MaM download, and records successes or errors in SQLite.
+
+## Run the Python service
+
+```powershell
+mlm-python run `
+  --config "$env:APPDATA\MLM\config.toml" `
+  --database "$env:LOCALAPPDATA\MLM\data.sqlite3"
+```
+
+The service runs the configured autograbbers, Goodreads and Notion imports,
+pending downloader, qBittorrent library organizers, and duplicate cleaner on
+their configured intervals. The dashboard listens on `web_host:web_port`.

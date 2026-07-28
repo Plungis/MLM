@@ -1,0 +1,9 @@
+services:
+  mlm:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3157:3157"
+    volumes:
+      - ./config:/config
+      - ./data:/data

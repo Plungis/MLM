@@ -29,6 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     downloader.add_argument("--config", required=True, type=Path)
     downloader.add_argument("--database", required=True, type=Path)
+    run = subparsers.add_parser("run", help="start the Python MLM service and web UI")
+    run.add_argument("--config", required=True, type=Path)
+    run.add_argument("--database", required=True, type=Path)
     return parser
 
 
@@ -51,6 +54,22 @@ async def _download(config_path: Path, database_path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "run":
+        try:
+            import uvicorn
+
+            from .web import create_app
+
+            config = load_config(args.config)
+            uvicorn.run(
+                create_app(args.config, args.database),
+                host=config.web_host,
+                port=config.web_port,
+            )
+            return 0
+        except (ConfigError, OSError) as error:
+            print(f"Startup failed: {error}", file=sys.stderr)
+            return 1
     if args.command == "download":
         try:
             return asyncio.run(_download(args.config, args.database))

@@ -73,59 +73,73 @@ async def run_autograbber(
 
     selected_count = 0
     async for row in search_pages(mam, rule):
-        torrent_id = int(row.get("id", 0))
-        if not torrent_id or torrent_id in config.ignore_torrents:
-            continue
-        if not matches_filter(row, rule) or repository.has_mam_id(torrent_id):
-            continue
-        requested_cost = rule.get("cost", "free")
-        if requested_cost == "free" and not any(
-            as_bool(row.get(field)) for field in ("vip", "personal_freeleech", "free", "fl_vip")
-        ):
-            continue
-        if requested_cost in {"metadata_only", "metadata_only_add"}:
-            continue
-
-        meta = torrent_meta(row)
-        title_search = normalize_title(meta["title"])
-        preferred = _preferred_types(config, meta["media_type"])
-        preference = _preference(meta["filetypes"], preferred)
-        if preference is None:
-            continue
-        duplicate = False
-        for existing in repository.records_with_title(title_search):
-            old_meta = existing.get("meta", {})
-            old_preference = _preference(old_meta.get("filetypes", []), preferred)
-            if old_preference is not None and old_preference <= preference:
-                duplicate = True
-                break
-        category, tags = _tagging(config, row)
-        candidate = {
-            "mam_id": torrent_id,
-            "goodreads_id": None,
-            "hash": None,
-            "dl_link": row.get("dl"),
-            "unsat_buffer": rule.get("unsat_buffer"),
-            "wedge_buffer": rule.get("wedge_buffer"),
-            "cost": _cost(row, requested_cost),
-            "category": rule.get("category") or category,
-            "tags": tags,
-            "title_search": title_search,
-            "meta": meta,
-            "grabber": rule.get("name", str(index)),
-            "created_at": datetime.now(UTC).isoformat(),
-            "started_at": None,
-            "removed_at": None,
-        }
-        if duplicate:
-            if not rule.get("dry_run", False):
-                repository.add_duplicate(candidate)
-            continue
-        if not candidate["dl_link"]:
-            continue
-        if not rule.get("dry_run", False):
-            repository.add_selected(candidate)
-        selected_count += 1
+        if await select_row(config, repository, row, rule, index=index):
+            selected_count += 1
         if selected_count >= maximum:
             break
     return selected_count
+
+
+async def select_row(
+    config: Config,
+    repository: Repository,
+    row: dict[str, Any],
+    rule: dict[str, Any],
+    *,
+    index: int = 0,
+    goodreads_id: int | None = None,
+) -> bool:
+    torrent_id = int(row.get("id", 0))
+    if not torrent_id or torrent_id in config.ignore_torrents:
+        return False
+    if not matches_filter(row, rule) or repository.has_mam_id(torrent_id):
+        return False
+    requested_cost = rule.get("cost", "free")
+    if requested_cost == "free" and not any(
+        as_bool(row.get(field))
+        for field in ("vip", "personal_freeleech", "free", "fl_vip")
+    ):
+        return False
+    if requested_cost in {"metadata_only", "metadata_only_add"}:
+        return False
+
+    meta = torrent_meta(row)
+    title_search = normalize_title(meta["title"])
+    preferred = _preferred_types(config, meta["media_type"])
+    preference = _preference(meta["filetypes"], preferred)
+    if preference is None:
+        return False
+    duplicate = False
+    for existing in repository.records_with_title(title_search):
+        old_meta = existing.get("meta", {})
+        old_preference = _preference(old_meta.get("filetypes", []), preferred)
+        if old_preference is not None and old_preference <= preference:
+            duplicate = True
+            break
+    category, tags = _tagging(config, row)
+    candidate = {
+        "mam_id": torrent_id,
+        "goodreads_id": goodreads_id,
+        "hash": None,
+        "dl_link": row.get("dl"),
+        "unsat_buffer": rule.get("unsat_buffer"),
+        "wedge_buffer": rule.get("wedge_buffer"),
+        "cost": _cost(row, requested_cost),
+        "category": rule.get("category") or category,
+        "tags": tags,
+        "title_search": title_search,
+        "meta": meta,
+        "grabber": rule.get("name", str(index)),
+        "created_at": datetime.now(UTC).isoformat(),
+        "started_at": None,
+        "removed_at": None,
+    }
+    if duplicate:
+        if not rule.get("dry_run", False):
+            repository.add_duplicate(candidate)
+        return False
+    if not candidate["dl_link"]:
+        return False
+    if not rule.get("dry_run", False):
+        repository.add_selected(candidate)
+    return True

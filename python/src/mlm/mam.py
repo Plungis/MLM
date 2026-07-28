@@ -126,3 +126,27 @@ class MamClient:
         result = response.json()
         if not result.get("success"):
             raise MamWedgeError(str(result.get("error") or "unknown wedge error"))
+
+    async def snatchlist(
+        self, kind: str, page: int, cache_timestamp: int
+    ) -> dict[str, Any]:
+        user = await self.user_info()
+        kinds = {
+            "unsat": "unsat",
+            "inact_unsat": "inactUnsat",
+            "seed_unsat": "seedUnsat",
+            "seed_sat": "sSat",
+            "inact_sat": "inactSat",
+            "uploads_active": "upAct",
+        }
+        response = await self.client.get(
+            "https://cdn.myanonamouse.net/json/loadUserDetailsTorrents.php",
+            params={
+                "uid": user["uid"],
+                "iteration": page,
+                "type": kinds[kind],
+                "cacheTime": cache_timestamp,
+            },
+        )
+        self._raise_for_status(response)
+        return response.json()
