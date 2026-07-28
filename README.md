@@ -23,8 +23,9 @@ container or an installable Python package.
 docker compose up --build -d
 ```
 
-Put the existing `config.toml` in `./config/config.toml`. Data is stored under
-`./data`.
+Copy `config.example.toml` to `./config/config.toml` and edit it. Data is
+stored under `./data`, and the example Compose file mounts `./library` at
+`/library`.
 
 ## Run with Python
 

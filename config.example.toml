@@ -1,0 +1,42 @@
+mam_id = "replace-with-your-mam-id-cookie"
+
+web_host = "0.0.0.0"
+web_port = 3157
+min_ratio = 2.0
+unsat_buffer = 10
+wedge_buffer = 0
+search_interval = 30
+link_interval = 10
+import_interval = 135
+
+audio_types = ["m4b", "m4a", "mp4", "mp3", "ogg"]
+ebook_types = ["cbz", "epub", "pdf", "mobi", "azw3", "azw", "cbr"]
+
+[[qbittorrent]]
+url = "http://host.docker.internal:8080"
+username = "qbittorrent-username"
+password = "qbittorrent-password"
+
+[[autograb]]
+name = "Bookmarks"
+type = "bookmarks"
+cost = "free"
+languages = ["English"]
+
+[[tag]]
+categories = { audio = true, ebook = false }
+category = "Audiobooks"
+
+[[tag]]
+categories = { audio = false, ebook = true }
+category = "Ebooks"
+
+[[library]]
+category = "Audiobooks"
+library_dir = "/library/Audiobooks"
+method = "hardlink"
+
+[[library]]
+category = "Ebooks"
+library_dir = "/library/Ebooks"
+method = "hardlink"

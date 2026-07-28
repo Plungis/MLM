@@ -28,3 +28,11 @@ dry_run = true
     assert config.web_port == 3157
     assert config.qbittorrent[0].url == "http://localhost:8080"
     assert config.autograbs[0]["dry_run"] is True
+
+
+def test_repository_example_config_is_valid() -> None:
+    example = Path(__file__).parents[2] / "config.example.toml"
+    config = load_config(example)
+
+    assert config.autograbs[0]["type"] == "bookmarks"
+    assert len(config.libraries) == 2

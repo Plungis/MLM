@@ -7,3 +7,7 @@ services:
     volumes:
       - ./config:/config
       - ./data:/data
+      - ./library:/library
+      # Mount qBittorrent's download directory at the same path it reports,
+      # or configure qbittorrent.path_mapping in config.toml.
+      # - /path/to/qbittorrent/downloads:/downloads
