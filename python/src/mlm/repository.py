@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -76,7 +75,8 @@ class Repository:
                 """INSERT INTO duplicate_torrents
                    (mam_id, title_search, created_at_json, payload_json)
                    VALUES (?, ?, ?, ?)
-                   ON CONFLICT(mam_id) DO UPDATE SET payload_json=excluded.payload_json""",
+                   ON CONFLICT(mam_id) DO UPDATE SET
+                     payload_json=excluded.payload_json""",
                 (
                     row["mam_id"],
                     row["title_search"],
@@ -101,7 +101,9 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
-    def record_linked(self, torrent: dict[str, Any], selected_mam_id: int | None) -> None:
+    def record_linked(
+        self, torrent: dict[str, Any], selected_mam_id: int | None
+    ) -> None:
         event = {
             "id": str(uuid4()),
             "torrent_id": torrent["id"],
@@ -114,41 +116,40 @@ class Repository:
                 }
             },
         }
-        with connect(self.path) as connection:
-            with connection:
-                connection.execute(
-                    """INSERT INTO torrents
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                """INSERT INTO torrents
                        (id, mam_id, title_search, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET
                          mam_id=excluded.mam_id,
                          title_search=excluded.title_search,
                          payload_json=excluded.payload_json""",
-                    (
-                        torrent["id"],
-                        torrent["mam_id"],
-                        torrent["title_search"],
-                        canonical_json(torrent["created_at"]),
-                        canonical_json(torrent),
-                    ),
-                )
-                if selected_mam_id is not None:
-                    connection.execute(
-                        "DELETE FROM selected_torrents WHERE mam_id = ?",
-                        (selected_mam_id,),
-                    )
+                (
+                    torrent["id"],
+                    torrent["mam_id"],
+                    torrent["title_search"],
+                    canonical_json(torrent["created_at"]),
+                    canonical_json(torrent),
+                ),
+            )
+            if selected_mam_id is not None:
                 connection.execute(
-                    """INSERT INTO events
+                    "DELETE FROM selected_torrents WHERE mam_id = ?",
+                    (selected_mam_id,),
+                )
+            connection.execute(
+                """INSERT INTO events
                        (id_json, torrent_id, mam_id, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        canonical_json(event["id"]),
-                        event["torrent_id"],
-                        event["mam_id"],
-                        canonical_json(event["created_at"]),
-                        canonical_json(event),
-                    ),
-                )
+                (
+                    canonical_json(event["id"]),
+                    event["torrent_id"],
+                    event["mam_id"],
+                    canonical_json(event["created_at"]),
+                    canonical_json(event),
+                ),
+            )
 
     def update_torrent(self, torrent: dict[str, Any]) -> None:
         with connect(self.path) as connection:
@@ -209,7 +210,7 @@ class Repository:
         }
         if table not in allowed:
             raise ValueError(f"unsupported table: {table}")
-        order = "created_at_json DESC" if table not in {"lists"} else "title"
+        order = "created_at_json DESC" if table != "lists" else "title"
         with connect(self.path) as connection:
             rows = connection.execute(
                 f"SELECT payload_json FROM {table} ORDER BY {order} LIMIT ?",
@@ -229,9 +230,7 @@ class Repository:
         )
         with connect(self.path) as connection:
             return {
-                table: connection.execute(
-                    f"SELECT COUNT(*) FROM {table}"
-                ).fetchone()[0]
+                table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in tables
             }
 
@@ -326,38 +325,38 @@ class Repository:
                 }
             },
         }
-        with connect(self.path) as connection:
-            with connection:
-                connection.execute(
-                    """UPDATE selected_torrents
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                """UPDATE selected_torrents
                        SET hash = ?, payload_json = ? WHERE mam_id = ?""",
-                    (torrent_hash, canonical_json(selected), selected["mam_id"]),
-                )
-                connection.execute(
-                    """INSERT INTO torrents
+                (torrent_hash, canonical_json(selected), selected["mam_id"]),
+            )
+            connection.execute(
+                """INSERT INTO torrents
                        (id, mam_id, title_search, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json""",
-                    (
-                        torrent_hash,
-                        selected["mam_id"],
-                        selected["title_search"],
-                        canonical_json(now),
-                        canonical_json(torrent),
-                    ),
-                )
-                connection.execute(
-                    """INSERT INTO events
+                       ON CONFLICT(id) DO UPDATE SET
+                         payload_json=excluded.payload_json""",
+                (
+                    torrent_hash,
+                    selected["mam_id"],
+                    selected["title_search"],
+                    canonical_json(now),
+                    canonical_json(torrent),
+                ),
+            )
+            connection.execute(
+                """INSERT INTO events
                        (id_json, torrent_id, mam_id, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        canonical_json(event["id"]),
-                        torrent_hash,
-                        selected["mam_id"],
-                        canonical_json(now),
-                        canonical_json(event),
-                    ),
-                )
+                (
+                    canonical_json(event["id"]),
+                    torrent_hash,
+                    selected["mam_id"],
+                    canonical_json(now),
+                    canonical_json(event),
+                ),
+            )
 
     def record_grab_error(self, selected: dict[str, Any], error: Exception) -> None:
         now = datetime.now(UTC).isoformat()

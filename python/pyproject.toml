@@ -18,6 +18,9 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.16,<1"]
+
 [project.scripts]
 mlm-python = "mlm.cli:main"
 
@@ -27,3 +30,10 @@ packages = ["src/mlm"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "DTZ", "FURB", "PYI"]

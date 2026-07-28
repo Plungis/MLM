@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from .config import Config
@@ -11,7 +12,8 @@ def _preference(config: Config, torrent: dict) -> int:
     media = torrent.get("meta", {}).get("media_type")
     preferred = (
         config.audio_types
-        if media in {"audiobook", "periodical_audiobook", "Audiobook", "PeriodicalAudiobook"}
+        if media
+        in {"audiobook", "periodical_audiobook", "Audiobook", "PeriodicalAudiobook"}
         else config.ebook_types
     )
     formats = torrent.get("meta", {}).get("filetypes", [])
@@ -38,10 +40,8 @@ def remove_library_files(torrent: dict) -> None:
     if all(path.name in {"cover.jpg", "metadata.json"} for path in remaining):
         for path in remaining:
             path.unlink(missing_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         library_path.rmdir()
-    except OSError:
-        pass
 
 
 async def clean_superseded(
@@ -56,11 +56,16 @@ async def clean_superseded(
     for rows in grouped.values():
         if len(rows) < 2:
             continue
-        rows.sort(key=lambda row: (_preference(config, row), -sum(
-            (Path(row["library_path"]) / file).stat().st_size
-            for file in row.get("library_files", [])
-            if (Path(row["library_path"]) / file).exists()
-        )))
+        rows.sort(
+            key=lambda row: (
+                _preference(config, row),
+                -sum(
+                    (Path(row["library_path"]) / file).stat().st_size
+                    for file in row.get("library_files", [])
+                    if (Path(row["library_path"]) / file).exists()
+                ),
+            )
+        )
         keep, *remove_rows = rows
         for torrent in remove_rows:
             for qbit_config, qbit in qbit_clients:

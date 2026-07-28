@@ -53,7 +53,9 @@ def back_up_source(source: Path) -> Path:
     return backup
 
 
-def export_legacy_database(executable: Path, database_backup: Path, output: Path) -> None:
+def export_legacy_database(
+    executable: Path, database_backup: Path, output: Path
+) -> None:
     executable = executable.resolve()
     if not executable.is_file():
         raise MigrationError(f"legacy executable does not exist: {executable}")
@@ -72,10 +74,14 @@ def export_legacy_database(executable: Path, database_backup: Path, output: Path
             check=False,
         )
     if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "no error output"
+        detail = (
+            completed.stderr.strip() or completed.stdout.strip() or "no error output"
+        )
         raise MigrationError(f"legacy export failed ({completed.returncode}): {detail}")
     if not output.is_file():
-        raise MigrationError("legacy exporter reported success but produced no JSON file")
+        raise MigrationError(
+            "legacy exporter reported success but produced no JSON file"
+        )
 
 
 def _load_export(path: Path) -> tuple[dict[str, Any], str]:
@@ -98,7 +104,9 @@ def _load_export(path: Path) -> tuple[dict[str, Any], str]:
     declared = document.get("counts")
     actual = {table: len(document[table]) for table in DATA_TABLES}
     if declared != actual:
-        raise MigrationError(f"export count mismatch: declared={declared!r}, actual={actual!r}")
+        raise MigrationError(
+            f"export count mismatch: declared={declared!r}, actual={actual!r}"
+        )
     return document, digest
 
 
@@ -200,7 +208,9 @@ def _validate(connection: sqlite3.Connection, expected: dict[str, int]) -> None:
         for table in DATA_TABLES
     }
     if actual != expected:
-        raise MigrationError(f"SQLite count mismatch: expected={expected!r}, actual={actual!r}")
+        raise MigrationError(
+            f"SQLite count mismatch: expected={expected!r}, actual={actual!r}"
+        )
     result = connection.execute("PRAGMA integrity_check").fetchone()[0]
     if result != "ok":
         raise MigrationError(f"SQLite integrity check failed: {result}")
@@ -225,7 +235,9 @@ def migrate(
     destination.parent.mkdir(parents=True, exist_ok=True)
     backup = back_up_source(source_database)
 
-    with tempfile.TemporaryDirectory(prefix="mlm-migration-", dir=destination.parent) as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="mlm-migration-", dir=destination.parent
+    ) as temp_dir:
         temp_dir_path = Path(temp_dir)
         if legacy_executable is not None:
             selected_export = temp_dir_path / "legacy-export.json"

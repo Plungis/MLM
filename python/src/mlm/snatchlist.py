@@ -12,15 +12,21 @@ from .search import as_bool, as_int, matches_filter, parse_size
 def user_torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
     authors = [
         str(item.get("name", ""))
-        for item in sorted(row.get("author", []), key=lambda item: as_int(item.get("id")))
+        for item in sorted(
+            row.get("author", []), key=lambda item: as_int(item.get("id"))
+        )
     ]
     narrators = [
         str(item.get("name", ""))
-        for item in sorted(row.get("narrator", []), key=lambda item: as_int(item.get("id")))
+        for item in sorted(
+            row.get("narrator", []), key=lambda item: as_int(item.get("id"))
+        )
     ]
     series = [
         {"name": item.get("name", ""), "entries": [item.get("number", "")]}
-        for item in sorted(row.get("series", []), key=lambda item: as_int(item.get("id")))
+        for item in sorted(
+            row.get("series", []), key=lambda item: as_int(item.get("id"))
+        )
     ]
     category = as_int(row.get("category"))
     return {

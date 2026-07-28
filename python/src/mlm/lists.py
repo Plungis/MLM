@@ -16,12 +16,16 @@ from .repository import Repository
 from .search import search_pages
 
 SERIES_PATTERN = re.compile(r"(.*?) \(([^)]*?),? #?(\d+(?:\.\d+)?)\)$")
-BOOK_LINK = re.compile(r'href=["\']((?:https://www\.goodreads\.com)?/book/show/[^"\']+)')
+BOOK_LINK = re.compile(
+    r'href=["\']((?:https://www\.goodreads\.com)?/book/show/[^"\']+)'
+)
 COVER_LINK = re.compile(r'<img[^>]+src=["\']([^"\']+)')
 
 
 def _text(element: ET.Element, name: str) -> str | None:
-    child = next((item for item in element if item.tag.rsplit("}", 1)[-1] == name), None)
+    child = next(
+        (item for item in element if item.tag.rsplit("}", 1)[-1] == name), None
+    )
     return child.text.strip() if child is not None and child.text else None
 
 
@@ -72,9 +76,7 @@ async def run_goodreads_import(
             {"id": list_id, "title": title, "updated_at": now, "build_date": now}
         )
     selected = 0
-    for xml_item in [
-        item for item in channel if item.tag.rsplit("}", 1)[-1] == "item"
-    ]:
+    for xml_item in [item for item in channel if item.tag.rsplit("}", 1)[-1] == "item"]:
         guid_value = _text(xml_item, "guid") or _text(xml_item, "book_id")
         item_title = html.unescape(_text(xml_item, "title") or "")
         if not guid_value or not item_title:
@@ -119,7 +121,9 @@ async def run_goodreads_import(
         )
         if not definition.get("dry_run", False):
             repository.upsert_list_item(list_item)
-        query = " ".join(filter(None, [f'"{item_title}"', f'"{author}"' if author else ""]))
+        query = " ".join(
+            filter(None, [f'"{item_title}"', f'"{author}"' if author else ""])
+        )
         for grab in definition.get("grab", []):
             rule = {
                 **grab,

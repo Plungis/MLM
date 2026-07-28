@@ -3,8 +3,9 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from datetime import datetime
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import date
+from typing import Any
 
 from .mam import MamClient
 
@@ -61,10 +62,12 @@ def as_bool(value: Any) -> bool:
 def parse_size(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
-    match = re.fullmatch(r"\s*([\d.]+)\s*([kmgt]?i?b)?\s*", str(value), re.I)
+    match = re.fullmatch(r"\s*([\d.]+)\s*([kmgt]?i?b)?\s*", str(value), re.IGNORECASE)
     if not match:
         raise ValueError(f"invalid size: {value!r}")
-    return int(float(match.group(1)) * SIZE_UNITS.get((match.group(2) or "b").lower(), 1))
+    return int(
+        float(match.group(1)) * SIZE_UNITS.get((match.group(2) or "b").lower(), 1)
+    )
 
 
 def normalize_title(value: str) -> str:
@@ -88,7 +91,9 @@ def _mapping_values(value: Any) -> list[str]:
 def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
     media_id = as_int(row.get("mediatype"))
     main_id = as_int(row.get("main_cat"))
-    media_type = MEDIA_TYPE_BY_ID.get(media_id) or MAIN_CATEGORY_BY_ID.get(main_id, "unknown")
+    media_type = MEDIA_TYPE_BY_ID.get(media_id) or MAIN_CATEGORY_BY_ID.get(
+        main_id, "unknown"
+    )
     series = []
     raw_series = row.get("series_info")
     if isinstance(raw_series, str):
@@ -120,8 +125,8 @@ def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _date(value: Any) -> datetime:
-    return datetime.strptime(str(value)[:10], "%Y-%m-%d")
+def _date(value: Any) -> date:
+    return date.fromisoformat(str(value)[:10])
 
 
 def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:
@@ -133,14 +138,14 @@ def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:
     categories = rule.get("categories", {})
     if categories:
         main = MAIN_CATEGORY_BY_ID.get(as_int(row.get("main_cat")))
-        category_rule = categories.get(
-            {"audiobook": "audio"}.get(main, main), False
-        )
+        category_rule = categories.get({"audiobook": "audio"}.get(main, main), False)
         if category_rule is False:
             return False
         if isinstance(category_rule, list):
             names = {str(value).lower().replace(" ", "_") for value in category_rule}
-            actual = str(row.get("catname", row.get("cat", ""))).lower().replace(" ", "_")
+            actual = (
+                str(row.get("catname", row.get("cat", ""))).lower().replace(" ", "_")
+            )
             if actual not in names:
                 return False
 
@@ -163,9 +168,13 @@ def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:
         return False
     if str(row.get("owner_name", "")) in rule.get("exclude_uploader", []):
         return False
-    if rule.get("uploaded_after") and _date(row.get("added")) < _date(rule["uploaded_after"]):
+    if rule.get("uploaded_after") and _date(row.get("added")) < _date(
+        rule["uploaded_after"]
+    ):
         return False
-    if rule.get("uploaded_before") and _date(row.get("added")) > _date(rule["uploaded_before"]):
+    if rule.get("uploaded_before") and _date(row.get("added")) > _date(
+        rule["uploaded_before"]
+    ):
         return False
 
     comparisons = {

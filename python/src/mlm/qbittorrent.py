@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
+from typing import Self
 
 import httpx
 
@@ -22,7 +23,7 @@ class QbitClient:
             base_url=url.rstrip("/"), timeout=timeout
         )
 
-    async def __aenter__(self) -> QbitClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -66,7 +67,13 @@ class QbitClient:
         response = await self.client.post(
             "/api/v2/torrents/add",
             data=data,
-            files={"torrents": ("download.torrent", torrent_file, "application/x-bittorrent")},
+            files={
+                "torrents": (
+                    "download.torrent",
+                    torrent_file,
+                    "application/x-bittorrent",
+                )
+            },
         )
         self._check(response)
 

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Search MaM</h1>
+<form method="get"><input name="q" value="{{ query }}" style="padding:8px;width:min(600px,70%)"><button>Search</button></form>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if rows %}
+<table><tr><th>ID</th><th>Title</th><th>Format</th><th>Size</th><th></th></tr>
+{% for row in rows %}
+<tr><td>{{ row.id }}</td><td>{{ row.title }}</td><td>{{ row.filetype }}</td><td>{{ row.size }}</td>
+<td><form action="/search/select" method="post">
+<input type="hidden" name="mam_id" value="{{ row.id }}"><button>Select</button>
+</form></td></tr>
+{% endfor %}</table>
+{% endif %}
+{% endblock %}

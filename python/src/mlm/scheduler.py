@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Awaitable, Callable
 
 from .audiobookshelf import AudiobookshelfClient, match_torrents_to_audiobookshelf
 from .autograbber import run_autograbber
@@ -46,7 +46,7 @@ class ServiceState:
             await job()
         except asyncio.CancelledError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
             status.last_error = f"{type(error).__name__}: {error}"
         finally:
             status.running = False
@@ -59,12 +59,10 @@ class ServiceState:
     ) -> None:
         while not self.stop_event.is_set():
             await self.run_job(name, job)
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self.stop_event.wait(), timeout=max(1, interval_minutes * 60)
                 )
-            except TimeoutError:
-                pass
 
     async def _qbit(self, index: int) -> tuple[QbitClient, object]:
         qbit_config = self.config.qbittorrent[index]
@@ -77,9 +75,7 @@ class ServiceState:
             return
         qbit, _ = await self._qbit(0)
         try:
-            await grab_selected_torrents(
-                self.config, self.repository, self.mam, qbit
-            )
+            await grab_selected_torrents(self.config, self.repository, self.mam, qbit)
         finally:
             await qbit.close()
 

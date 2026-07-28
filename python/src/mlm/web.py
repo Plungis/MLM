@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import AsyncIterator
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from .autograbber import select_row
 from .config import Config, load_config
 from .database import ensure_database
 from .mam import MamClient
@@ -76,7 +77,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "records.html",
-            context(request, title=table.replace("_", " ").title(), table=table, rows=rows),
+            context(
+                request, title=table.replace("_", " ").title(), table=table, rows=rows
+            ),
         )
 
     @app.get("/config", response_class=HTMLResponse)
@@ -87,12 +90,52 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             context(request, title="Configuration", config=_redacted_config(config)),
         )
 
+    @app.get("/search", response_class=HTMLResponse)
+    async def search(request: Request, q: str = "") -> HTMLResponse:
+        rows = []
+        error = None
+        if q:
+            try:
+                result = await app.state.services.mam.search(
+                    {
+                        "dlLink": True,
+                        "description": True,
+                        "isbn": True,
+                        "perpage": 100,
+                        "tor": {"text": q},
+                    }
+                )
+                rows = result.get("data", [])
+            except Exception as caught:  # noqa: BLE001 - display API failure in UI
+                error = str(caught)
+        return templates.TemplateResponse(
+            request,
+            "search.html",
+            context(request, title="Search MaM", query=q, rows=rows, error=error),
+        )
+
+    @app.post("/search/select")
+    async def select_search_result(mam_id: int = Form(...)) -> RedirectResponse:
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            raise HTTPException(404, f"MaM torrent {mam_id} was not found")
+        selected = await select_row(
+            config,
+            repository,
+            row,
+            {"cost": "ratio", "name": "manual"},
+        )
+        if not selected and not repository.has_mam_id(mam_id):
+            raise HTTPException(
+                409, "torrent did not match a configured preferred format"
+            )
+        return RedirectResponse("/records/selected_torrents", status_code=303)
+
     @app.post("/actions/{name}")
     async def action(name: str) -> RedirectResponse:
-        try:
-            asyncio.create_task(app.state.services.trigger(name))
-        except ValueError as error:
-            raise HTTPException(404, str(error)) from error
+        if name not in {"autograb", "downloader", "organizer", "cleaner"}:
+            raise HTTPException(404, f"unknown job: {name}")
+        asyncio.create_task(app.state.services.trigger(name))
         return RedirectResponse("/", status_code=303)
 
     @app.post("/selected/remove")

@@ -63,7 +63,11 @@ class AudiobookshelfClient:
     ) -> None:
         title_parts = str(meta.get("title", "")).split(":", 1)
         title = title_parts[0] if len(title_parts[0]) >= 4 else meta.get("title", "")
-        subtitle = title_parts[1].strip() if len(title_parts) > 1 and title != meta.get("title") else None
+        subtitle = (
+            title_parts[1].strip()
+            if len(title_parts) > 1 and title != meta.get("title")
+            else None
+        )
         isbn_value = str(mam_row.get("isbn") or "").strip()
         payload = {
             "metadata": {
@@ -81,7 +85,9 @@ class AudiobookshelfClient:
                 ],
                 "narrators": meta.get("narrators", []),
                 "description": mam_row.get("description"),
-                "isbn": None if not isbn_value or isbn_value.startswith("ASIN:") else isbn_value,
+                "isbn": None
+                if not isbn_value or isbn_value.startswith("ASIN:")
+                else isbn_value,
                 "asin": isbn_value.removeprefix("ASIN:").strip()
                 if isbn_value.startswith("ASIN:")
                 else None,

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 class ConfigError(ValueError):
@@ -73,9 +74,7 @@ def _environment_overrides(environment: Mapping[str, str]) -> dict[str, Any]:
     return overrides
 
 
-def load_config(
-    path: Path, *, environment: Mapping[str, str] | None = None
-) -> Config:
+def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> Config:
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -83,7 +82,9 @@ def load_config(
     for old, new in _ALIASES.items():
         if old in raw and new not in raw:
             raw[new] = raw.pop(old)
-    raw.update(_environment_overrides(os.environ if environment is None else environment))
+    raw.update(
+        _environment_overrides(os.environ if environment is None else environment)
+    )
 
     allowed = set(Config.__dataclass_fields__)
     unknown = sorted(set(raw) - allowed)

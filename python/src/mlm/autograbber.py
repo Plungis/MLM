@@ -68,7 +68,10 @@ async def run_autograbber(
             for selected in repository.pending_selected()
         )
         maximum = min(maximum, max(0, int(rule["max_active_downloads"]) - active))
-    if maximum == 0 and rule.get("cost", "free") not in {"metadata_only", "metadata_only_add"}:
+    if maximum == 0 and rule.get("cost", "free") not in {
+        "metadata_only",
+        "metadata_only_add",
+    }:
         return 0
 
     selected_count = 0

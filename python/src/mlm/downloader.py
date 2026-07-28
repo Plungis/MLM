@@ -38,9 +38,7 @@ async def grab_selected_torrents(
     downloaded = failed = skipped = 0
     user = await mam.user_info()
     unsat = user.get("unsat", {})
-    available_slots = max(
-        0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0))
-    )
+    available_slots = max(0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0)))
     downloading_size = sum(
         int(row.get("meta", {}).get("size", 0))
         for row in repository.pending_selected()
@@ -60,7 +58,10 @@ async def grab_selected_torrents(
                 else config.unsat_buffer
             )
             size = int(selected.get("meta", {}).get("size", 0))
-            if available_slots - downloaded <= slot_buffer or remaining_buffer - size <= 0:
+            if (
+                available_slots - downloaded <= slot_buffer
+                or remaining_buffer - size <= 0
+            ):
                 skipped += 1
                 continue
             torrent_file = await _torrent_file_with_backoff(
@@ -104,7 +105,7 @@ async def grab_selected_torrents(
             repository.record_started(selected, torrent_hash, wedged=wedged)
             downloaded += 1
             remaining_buffer -= size
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - isolate failures per torrent
             repository.record_grab_error(selected, error)
             failed += 1
         await asyncio.sleep(1)

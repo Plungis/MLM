@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 from datetime import UTC, datetime
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any
 
 from .config import Config, QbitConfig
@@ -15,7 +15,7 @@ from .repository import Repository
 from .search import normalize_title, torrent_meta
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-DISC_PATTERN = re.compile(r"(?:CD|Disc|Disk)\s*(\d+)", re.I)
+DISC_PATTERN = re.compile(r"(?:CD|Disc|Disk)\s*(\d+)", re.IGNORECASE)
 
 
 def sanitize_filename(value: str) -> str:
@@ -45,10 +45,13 @@ def find_library(config: Config, torrent: dict[str, Any]) -> dict[str, Any] | No
         tag.strip() for tag in str(torrent.get("tags", "")).split(",") if tag.strip()
     }
     for library in config.libraries:
-        by_category = "category" in library and torrent.get("category") == library["category"]
+        by_category = (
+            "category" in library and torrent.get("category") == library["category"]
+        )
         by_directory = "download_dir" in library and (
             Path(torrent.get("save_path", "")) == Path(library["download_dir"])
-            or Path(library["download_dir"]) in Path(torrent.get("save_path", "")).parents
+            or Path(library["download_dir"])
+            in Path(torrent.get("save_path", "")).parents
         )
         if not (by_category or by_directory):
             continue
@@ -87,13 +90,17 @@ def library_directory(
     if series:
         series_name, number = series
         leaf = f"{series_name} #{number} - {title}" if number else title
-        relative = Path(author) / sanitize_filename(series_name) / sanitize_filename(leaf)
+        relative = (
+            Path(author) / sanitize_filename(series_name) / sanitize_filename(leaf)
+        )
     else:
         relative = Path(author) / sanitize_filename(title)
     edition = meta.get("edition")
     if edition:
         edition_name = edition[0] if isinstance(edition, list) else str(edition)
-        relative = relative.with_name(sanitize_filename(f"{relative.name}, {edition_name}"))
+        relative = relative.with_name(
+            sanitize_filename(f"{relative.name}, {edition_name}")
+        )
     narrators = meta.get("narrators", [])
     if narrators and not exclude_narrator:
         relative = relative.with_name(
@@ -195,11 +202,16 @@ async def organize_completed(
         library_files: list[str] = []
         if target_dir is not None:
             target_dir.mkdir(parents=True, exist_ok=True)
-            download_root = map_path(qbit_config.path_mapping, str(qbit_torrent["save_path"]))
+            download_root = map_path(
+                qbit_config.path_mapping, str(qbit_torrent["save_path"])
+            )
             for content in files:
                 torrent_path = safe_torrent_path(str(content["name"]))
                 lower_name = torrent_path.name.lower()
-                if not ((audio and lower_name.endswith(audio)) or (ebook and lower_name.endswith(ebook))):
+                if not (
+                    (audio and lower_name.endswith(audio))
+                    or (ebook and lower_name.endswith(ebook))
+                ):
                     continue
                 relative = _destination_relative(torrent_path)
                 destination = target_dir / relative

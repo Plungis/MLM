@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -37,7 +37,7 @@ class MamClient:
         )
         self.client.cookies.set("mam_id", mam_id, domain="www.myanonamouse.net")
 
-    async def __aenter__(self) -> MamClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -63,14 +63,14 @@ class MamClient:
             raise MamError("session check failed (Success was false)")
 
     async def user_info(self) -> dict[str, Any]:
-        response = await self.client.get("/jsonLoad.php", params={"snatch_summary": "true"})
+        response = await self.client.get(
+            "/jsonLoad.php", params={"snatch_summary": "true"}
+        )
         self._raise_for_status(response)
         return response.json()
 
     async def search(self, query: dict[str, Any]) -> dict[str, Any]:
-        response = await self.client.post(
-            "/tor/js/loadSearchJSONbasic.php", json=query
-        )
+        response = await self.client.post("/tor/js/loadSearchJSONbasic.php", json=query)
         self._raise_for_status(response)
         result = response.json()
         if isinstance(result, dict) and result.get("error"):
