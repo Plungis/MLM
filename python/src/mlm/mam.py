@@ -6,6 +6,10 @@ from typing import Any, Self
 
 import httpx
 
+from . import __version__
+
+USER_AGENT = f"HeavyMLM/{__version__} (+https://github.com/Plungis/MLM)"
+
 
 class MamError(RuntimeError):
     pass
@@ -33,7 +37,7 @@ class MamClient:
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
             base_url=self.BASE_URL,
-            headers={"User-Agent": "MLM"},
+            headers={"User-Agent": USER_AGENT},
             timeout=timeout,
             follow_redirects=True,
         )

@@ -4,7 +4,17 @@ import asyncio
 
 import httpx
 
-from mlm.mam import MamClient
+from mlm.mam import USER_AGENT, MamClient
+
+
+def test_mam_uses_approved_heavy_mlm_identity() -> None:
+    mam = MamClient("cookie")
+    try:
+        assert mam.client.headers["User-Agent"] == USER_AGENT
+        assert USER_AGENT.startswith("HeavyMLM/")
+        assert "github.com/Plungis/MLM" in USER_AGENT
+    finally:
+        asyncio.run(mam.close())
 
 
 def test_torrent_download_always_includes_tid() -> None:
