@@ -31,3 +31,15 @@ mlm-python migrate `
 
 The command exports from the backup copy, not the live database. You can also
 pass `--export-json path\to\export.json` instead of `--legacy-executable`.
+
+## Process migrated pending downloads
+
+```powershell
+mlm-python download `
+  --config "$env:APPDATA\MLM\config.toml" `
+  --database "$env:LOCALAPPDATA\MLM\data.sqlite3"
+```
+
+This command currently performs one downloader pass. It validates the MaM
+cookie, logs into the first configured qBittorrent server, includes the required
+`tid` on every MaM download, and records successes or errors in SQLite.

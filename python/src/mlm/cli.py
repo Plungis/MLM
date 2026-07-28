@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
+from .config import ConfigError, load_config
+from .downloader import grab_selected_torrents
+from .mam import MamClient
 from .migration import MigrationError, migrate
+from .qbittorrent import QbitClient
+from .repository import Repository
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,11 +24,40 @@ def build_parser() -> argparse.ArgumentParser:
     source = migration.add_mutually_exclusive_group(required=True)
     source.add_argument("--legacy-executable", type=Path)
     source.add_argument("--export-json", type=Path)
+    downloader = subparsers.add_parser(
+        "download", help="process migrated pending torrents once"
+    )
+    downloader.add_argument("--config", required=True, type=Path)
+    downloader.add_argument("--database", required=True, type=Path)
     return parser
+
+
+async def _download(config_path: Path, database_path: Path) -> int:
+    config = load_config(config_path)
+    if not config.qbittorrent:
+        raise ConfigError("at least one [[qbittorrent]] entry is required")
+    qbit_config = config.qbittorrent[0]
+    repository = Repository(database_path)
+    async with MamClient(config.mam_id) as mam, QbitClient(qbit_config.url) as qbit:
+        await mam.check_mam_id()
+        await qbit.login(qbit_config.username, qbit_config.password)
+        result = await grab_selected_torrents(config, repository, mam, qbit)
+    print(
+        f"Download run: {result.downloaded} downloaded, "
+        f"{result.failed} failed, {result.skipped} skipped"
+    )
+    return 1 if result.failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "download":
+        try:
+            return asyncio.run(_download(args.config, args.database))
+        except (ConfigError, OSError) as error:
+            print(f"Download failed: {error}", file=sys.stderr)
+            return 1
+
     try:
         result = migrate(
             args.source_db,
