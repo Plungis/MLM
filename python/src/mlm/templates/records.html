@@ -4,7 +4,7 @@
 <table><tr><th>Summary</th><th>Record</th>{% if table == "selected_torrents" %}<th></th>{% endif %}</tr>
 {% for row in rows %}
 <tr>
-  <td>{{ row.title or row.meta.title or row.id or row.mam_id or row.guid }}</td>
+  <td>{{ row.get("title") or (row.get("meta") or {}).get("title") or row.get("id") or row.get("mam_id") or row.get("guid") }}</td>
   <td><pre>{{ row | tojson(indent=2) }}</pre></td>
   {% if table == "selected_torrents" %}<td>
     <form action="/selected/remove" method="post">

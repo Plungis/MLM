@@ -35,3 +35,5 @@ def test_format_preference_and_path_traversal() -> None:
     assert select_format(None, ("m4b", "mp3"), files) == ".m4b"
     with pytest.raises(ValueError):
         safe_torrent_path("../escape.mp3")
+    with pytest.raises(ValueError):
+        safe_torrent_path("C:/escape.mp3")

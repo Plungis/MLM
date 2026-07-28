@@ -122,7 +122,7 @@ def select_format(
 def safe_torrent_path(name: str) -> Path:
     normalized = name.replace("\\", "/")
     parts = [part for part in normalized.split("/") if part not in {"", "."}]
-    if not parts or any(part == ".." for part in parts):
+    if not parts or any(part == ".." or ":" in part for part in parts):
         raise ValueError(f"unsafe torrent path: {name!r}")
     return Path(*parts)
 
