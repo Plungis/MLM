@@ -18,6 +18,10 @@ The organizer asks qBittorrent only for categories explicitly named by
 inventory query is used only when a library intentionally matches by
 `download_dir` instead of category.
 
+MaM search metadata uses nested JSON strings for fields such as authors,
+narrators, series, and categories. The Python runtime decodes both those live
+API values and already-decoded structures, matching the legacy Rust client.
+
 Limitations:
 
 - At the moment MLM only works with qbittorrent

@@ -6,6 +6,7 @@ from mlm.search import (
     metadata_matches,
     normalize_title,
     parse_size,
+    torrent_meta,
 )
 
 
@@ -65,3 +66,33 @@ def test_metadata_matching_requires_author_and_narrator_compatibility() -> None:
     assert metadata_matches(base, {**base, "media_type": "audiobook"})
     assert not metadata_matches(base, {**base, "authors": ["Someone Else"]})
     assert not metadata_matches(base, {**base, "narrators": []})
+
+
+def test_torrent_meta_decodes_mam_nested_json_fields() -> None:
+    meta = torrent_meta(
+        {
+            "id": "123",
+            "added": "2026-07-29 12:00:00",
+            "author_info": '{"42":"Julian Barnes"}',
+            "narrator_info": '{"7":"A Narrator &amp; Reader"}',
+            "series_info": '{"9":["Example Series","2"]}',
+            "categories": "[4, 6]",
+            "browseflags": "0",
+            "main_cat": "14",
+            "category": "39",
+            "mediatype": "2",
+            "maincat": "2",
+            "catname": "Ebook",
+            "filetype": "epub",
+            "language": "1",
+            "numfiles": "1",
+            "size": "1,018.3 KiB",
+            "title": "Departure(s)",
+            "vip": "0",
+        }
+    )
+
+    assert meta["authors"] == ["Julian Barnes"]
+    assert meta["narrators"] == ["A Narrator & Reader"]
+    assert meta["series"] == [{"name": "Example Series", "entries": ["2"]}]
+    assert meta["categories"] == [4, 6]

@@ -62,6 +62,16 @@ class FakeMam:
         }
 
 
+class NestedJsonMam(FakeMam):
+    async def get_torrent_info(self, torrent_hash: str) -> dict:
+        row = await super().get_torrent_info(torrent_hash)
+        row["author_info"] = '{"1":"An Author"}'
+        row["narrator_info"] = '{"1":"A Narrator"}'
+        row["series_info"] = "{}"
+        row["categories"] = "[]"
+        return row
+
+
 class MixedQbit(FakeQbit):
     async def torrents(self, *, category: str | None = None) -> list[dict]:
         self.requested_categories.append(category)
@@ -218,6 +228,40 @@ def test_organizer_continues_after_one_torrent_fails(tmp_path: Path) -> None:
     assert qbit.requested_categories == ["Audiobooks"]
     assert repository.torrent("abc123") is not None
     assert any(message.startswith("Failed Missing Book") for message, _, _ in progress)
+
+
+def test_organizer_accepts_live_mam_nested_json_metadata(tmp_path: Path) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"audio")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(tmp_path / "library"),
+                "method": "copy",
+            },
+        ),
+    )
+
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            FakeQbit(downloads),
+            NestedJsonMam(),
+        )
+    )
+
+    assert result.linked == 1
+    assert result.skip_reasons.get("missing_author", 0) == 0
 
 
 def test_organizer_only_requests_configured_library_categories(

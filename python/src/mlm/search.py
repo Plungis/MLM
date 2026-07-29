@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 import unicodedata
 from collections.abc import AsyncIterator
@@ -149,9 +150,45 @@ def normalize_title(value: str) -> str:
     return re.sub(r"(?i)(volume|vol\.)", "", ascii_title)
 
 
+def _nested_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        return json.loads(stripped)
+    except (TypeError, ValueError):
+        return value
+
+
 def _mapping_values(value: Any) -> list[str]:
+    value = _nested_json(value)
     if isinstance(value, dict):
-        return [str(item) for item in value.values()]
+        items = sorted(
+            value.items(),
+            key=lambda item: (
+                (
+                    0,
+                    int(item[0]),
+                )
+                if str(item[0]).isdigit()
+                else (1, str(item[0]))
+            ),
+        )
+        return [
+            html.unescape(str(item)).strip()
+            for _, item in items
+            if item is not None and str(item).strip()
+        ]
+    if isinstance(value, list):
+        names = []
+        for item in value:
+            if isinstance(item, dict):
+                item = item.get("name") or item.get("author") or item.get("narrator")
+            if item is not None and str(item).strip():
+                names.append(html.unescape(str(item)).strip())
+        return names
     return []
 
 
@@ -162,21 +199,22 @@ def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
         main_id, "unknown"
     )
     series = []
-    raw_series = row.get("series_info")
-    if isinstance(raw_series, str):
-        raw_series = {}
+    raw_series = _nested_json(row.get("series_info"))
     if isinstance(raw_series, dict):
         for value in raw_series.values():
             if isinstance(value, list) and value:
                 series.append({"name": str(value[0]), "entries": value[1:2]})
     filetypes = [part.lower() for part in str(row.get("filetype", "")).split() if part]
+    raw_categories = _nested_json(row.get("categories", []))
+    if not isinstance(raw_categories, list):
+        raw_categories = []
     return {
         "mam_id": as_int(row.get("id")),
         "vip_status": "Permanent" if as_bool(row.get("vip")) else "NotVip",
         "cat": {"id": as_int(row.get("category")), "name": str(row.get("catname", ""))},
         "media_type": media_type,
         "main_cat": as_int(row.get("maincat")) or None,
-        "categories": [as_int(value) for value in row.get("categories", [])],
+        "categories": [as_int(value) for value in raw_categories],
         "language": LANGUAGE_BY_ID.get(as_int(row.get("language")), "").title() or None,
         "flags": as_int(row.get("browseflags")),
         "filetypes": filetypes,

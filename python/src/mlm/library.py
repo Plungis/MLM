@@ -353,17 +353,24 @@ async def _organize_torrent(
         else library_directory(config.exclude_narrator_in_library_dir, library, meta)
     )
     if method != "no_link" and target_dir is None:
+        author_diagnostics = {
+            **context,
+            "author_info_type": type(mam_row.get("author_info")).__name__,
+            "author_info": mam_row.get("author_info"),
+            "decoded_authors": meta.get("authors", []),
+            "metadata_keys": sorted(str(key) for key in mam_row),
+        }
         repository.log_activity(
             "organizer",
             f"Skipped {torrent_name}: metadata has no author for the library path",
             level="warning",
-            context=context,
+            context=author_diagnostics,
         )
         _progress(
             progress,
             f"Skipped {torrent_name}: metadata has no author",
             level="warning",
-            context=context,
+            context=author_diagnostics,
         )
         return "missing_author"
 
