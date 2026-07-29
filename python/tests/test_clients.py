@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 
-from mlm.mam import USER_AGENT, MamClient
+import mlm.mam as mam_module
+from mlm.mam import USER_AGENT, MamClient, MamError, authenticated_mam_client
 
 
 def test_mam_uses_approved_heavy_mlm_identity() -> None:
@@ -35,3 +37,44 @@ def test_torrent_download_always_includes_tid() -> None:
     assert asyncio.run(exercise()) == b"torrent bytes"
     assert observed[0].url.path == "/tor/download.php/download-hash"
     assert observed[0].url.params["tid"] == "123456"
+
+
+def test_rejected_cookie_is_not_persisted() -> None:
+    stored: list[str] = []
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://www.myanonamouse.net",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"Success": False})
+            ),
+        ) as http:
+            mam = MamClient("rejected", client=http, cookie_store=stored.append)
+            with pytest.raises(MamError, match="rejected"):
+                await mam.check_mam_id()
+
+    asyncio.run(exercise())
+    assert stored == []
+
+
+def test_authentication_falls_back_to_config_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[str] = []
+
+    class FakeMamClient:
+        def __init__(self, mam_id: str, **_: object) -> None:
+            self.mam_id = mam_id
+
+        async def check_mam_id(self) -> None:
+            attempts.append(self.mam_id)
+            if self.mam_id == "stale":
+                raise MamError("stale")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(mam_module, "MamClient", FakeMamClient)
+    result = asyncio.run(authenticated_mam_client("configured", stored_mam_id="stale"))
+    assert result.mam_id == "configured"
+    assert attempts == ["stale", "configured"]

@@ -74,9 +74,14 @@ class MamClient:
     async def check_mam_id(self) -> None:
         response = await self.client.get("/json/checkCookie.php")
         self._raise_for_status(response)
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise MamError("session check returned invalid JSON") from error
+        if not isinstance(result, dict) or result.get("Success") is not True:
+            detail = result.get("Error") or result.get("Message") or result
+            raise MamError(f"session check rejected the mam_id cookie: {detail}")
         self._remember_cookie()
-        if '"Success":true' not in response.text:
-            raise MamError("session check failed (Success was false)")
 
     async def user_info(self) -> dict[str, Any]:
         response = await self.client.get(
@@ -171,3 +176,30 @@ class MamClient:
         self._raise_for_status(response)
         self._remember_cookie()
         return response.json()
+
+
+async def authenticated_mam_client(
+    configured_mam_id: str,
+    *,
+    stored_mam_id: str | None = None,
+    cookie_store: Callable[[str], None] | None = None,
+) -> MamClient:
+    """Authenticate with a stored cookie, then fall back to the configured one."""
+    candidates = [stored_mam_id, configured_mam_id]
+    attempted: set[str] = set()
+    last_error: MamError | None = None
+    for candidate in candidates:
+        if not candidate or candidate in attempted:
+            continue
+        attempted.add(candidate)
+        client = MamClient(candidate, cookie_store=cookie_store)
+        try:
+            await client.check_mam_id()
+        except MamError as error:
+            last_error = error
+            await client.close()
+            continue
+        return client
+    if last_error is not None:
+        raise last_error
+    raise MamError("no mam_id cookie is configured")

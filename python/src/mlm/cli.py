@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import ConfigError, load_config
 from .downloader import grab_selected_torrents
-from .mam import MamClient
+from .mam import authenticated_mam_client
 from .migration import MigrationError, migrate
 from .qbittorrent import QbitClient
 from .repository import Repository
@@ -40,11 +40,12 @@ async def _download(config_path: Path, database_path: Path) -> int:
     if not config.qbittorrent:
         raise ConfigError("at least one [[qbittorrent]] entry is required")
     repository = Repository(database_path)
-    async with MamClient(
-        repository.config_value("mam_id") or config.mam_id,
+    mam = await authenticated_mam_client(
+        config.mam_id,
+        stored_mam_id=repository.config_value("mam_id"),
         cookie_store=lambda value: repository.set_config_value("mam_id", value),
-    ) as mam:
-        await mam.check_mam_id()
+    )
+    async with mam:
         qbits: list[QbitClient] = []
         try:
             for definition in config.qbittorrent:

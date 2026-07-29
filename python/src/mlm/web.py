@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from .autograbber import select_row
 from .config import Config, load_config
 from .database import ensure_database
-from .mam import MamClient
+from .mam import authenticated_mam_client
 from .repository import Repository
 from .scheduler import ServiceState
 
@@ -42,14 +42,14 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        mam = MamClient(
-            repository.config_value("mam_id") or config.mam_id,
+        mam = await authenticated_mam_client(
+            config.mam_id,
+            stored_mam_id=repository.config_value("mam_id"),
             cookie_store=lambda value: repository.set_config_value("mam_id", value),
         )
         state = ServiceState(config, repository, mam)
         app.state.services = state
         try:
-            await mam.check_mam_id()
             state.start()
             yield
         finally:
