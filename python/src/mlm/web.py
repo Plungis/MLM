@@ -109,9 +109,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.get("/diagnostics", response_class=HTMLResponse)
     async def diagnostics(request: Request, component: str = "") -> HTMLResponse:
-        activity = repository.recent_activity(
-            limit=300, component=component or None
-        )
+        activity = repository.recent_activity(limit=300, component=component or None)
         return templates.TemplateResponse(
             request,
             "diagnostics.html",

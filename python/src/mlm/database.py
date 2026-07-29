@@ -114,9 +114,13 @@ def ensure_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(path)
     try:
-        if not path.exists() or not connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_meta'"
-        ).fetchone():
+        if (
+            not path.exists()
+            or not connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='migration_meta'"
+            ).fetchone()
+        ):
             initialize(connection)
             connection.executemany(
                 "INSERT INTO migration_meta(key, value) VALUES (?, ?)",
