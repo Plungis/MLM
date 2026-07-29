@@ -43,5 +43,11 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
     assert dashboard.status_code == 200
-    assert "MLM Python" in dashboard.text
-    assert client.get("/records/events").status_code == 200
+    assert "HeavyMLM" in dashboard.text
+    assert "Run pipeline" in dashboard.text
+    assert 'class="nav-link active"' in dashboard.text
+    assert client.get("/static/app.css").status_code == 200
+    events = client.get("/records/events")
+    assert events.status_code == 200
+    assert "Raw record" in events.text
+    assert client.get("/config").status_code == 200

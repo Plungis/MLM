@@ -8,8 +8,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import __version__
 from .autograbber import select_row
 from .config import Config, load_config
 from .database import ensure_database
@@ -56,19 +58,29 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             await state.close()
 
     app = FastAPI(title="Myanonamouse Library Manager", lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     def context(request: Request, **values: object) -> dict:
+        counts = repository.counts()
         return {
             "request": request,
-            "counts": repository.counts(),
+            "counts": counts,
+            "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
+            "version": __version__,
             **values,
         }
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
-            request, "index.html", context(request, title="Dashboard")
+            request,
+            "index.html",
+            context(
+                request,
+                title="Dashboard",
+                triggered=request.query_params.get("triggered"),
+            ),
         )
 
     @app.get("/records/{table}", response_class=HTMLResponse)
@@ -139,7 +151,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if name not in {"autograb", "downloader", "organizer", "cleaner"}:
             raise HTTPException(404, f"unknown job: {name}")
         asyncio.create_task(app.state.services.trigger(name))
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse(f"/?triggered={name}", status_code=303)
 
     @app.post("/selected/remove")
     async def remove_selected(mam_id: int = Form(...)) -> RedirectResponse:

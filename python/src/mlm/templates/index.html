@@ -1,22 +1,107 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Dashboard</h1>
-<div class="cards">
-{% for table,count in counts.items() %}
-  <a class="card" href="/records/{{ table }}" style="color:inherit;text-decoration:none">
-    <div>{{ table.replace("_"," ").title() }}</div><div class="count">{{ count }}</div>
-  </a>
-{% endfor %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Operations console</p>
+    <h1>Dashboard</h1>
+    <p class="subtitle">Monitor your library pipeline, run jobs on demand, and catch anything that needs attention.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip"><span class="status-dot"></span> MaM connected</span>
+    <span class="chip">{{ jobs | length }} scheduled jobs</span>
+  </div>
+</header>
+
+{% if triggered %}
+<div class="flash" role="status">
+  <span>Job queued: <code>{{ triggered }}</code></span>
+  <span class="status running">Running</span>
 </div>
-<h2>Run now</h2>
-{% for name in ["autograb","downloader","organizer","cleaner"] %}
-<form action="/actions/{{ name }}" method="post" style="display:inline"><button>{{ name.title() }}</button></form>
-{% endfor %}
-<h2>Jobs</h2>
-<table><tr><th>Job</th><th>Running</th><th>Last run</th><th>Error</th></tr>
-{% for name,status in jobs.items() %}
-<tr><td>{{ name }}</td><td>{{ status.running }}</td><td>{{ status.last_run or "—" }}</td>
-<td class="error">{{ status.last_error or "" }}</td></tr>
-{% endfor %}
-</table>
+{% endif %}
+
+<section class="metric-grid" aria-label="Library metrics">
+  {% for key,label,help in [
+    ("torrents","Library","organized titles"),
+    ("selected_torrents","Queue","awaiting download"),
+    ("duplicate_torrents","Duplicates","replacement candidates"),
+    ("errored_torrents","Errors","need attention")] %}
+  <a class="metric" href="/records/{{ key }}">
+    <span class="metric-label">{{ label }}</span>
+    <strong class="metric-value">{{ counts.get(key, 0) }}</strong>
+    <span class="metric-help">{{ help }} →</span>
+  </a>
+  {% endfor %}
+</section>
+
+<section class="grid two">
+  <article class="panel">
+    <header class="panel-header">
+      <div>
+        <h2>Run pipeline</h2>
+        <p>Start a single stage without waiting for its schedule.</p>
+      </div>
+      <span class="status ok">Ready</span>
+    </header>
+    <div class="panel-body quick-actions">
+      {% for name,label,description in [
+        ("autograb","Find releases","Run configured MaM searches and list imports."),
+        ("downloader","Process queue","Send selected torrents to qBittorrent."),
+        ("organizer","Organize files","Link completed downloads into libraries."),
+        ("cleaner","Clean duplicates","Apply replacement and cleanup rules.")] %}
+      <form class="action-card" action="/actions/{{ name }}" method="post">
+        <div>
+          <h3>{{ label }}</h3>
+          <p>{{ description }}</p>
+        </div>
+        <button class="{% if name == 'downloader' %}primary{% endif %}" type="submit">{{ name }}</button>
+      </form>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <header class="panel-header">
+      <div>
+        <h2>Scheduler</h2>
+        <p>Latest state for every active background job.</p>
+      </div>
+      <span class="chip">{{ jobs | length }} jobs</span>
+    </header>
+    {% if jobs %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Job</th><th>Status</th><th>Last run</th></tr></thead>
+        <tbody>
+        {% for name,status in jobs.items() %}
+        <tr>
+          <td>
+            <span class="job-name">{{ name }}</span>
+            {% if status.last_error %}<div class="error-text">{{ status.last_error }}</div>{% endif %}
+          </td>
+          <td>
+            {% if status.running %}
+              <span class="status running">Running</span>
+            {% elif status.last_error %}
+              <span class="status error">Error</span>
+            {% else %}
+              <span class="status ok">Idle</span>
+            {% endif %}
+          </td>
+          <td class="muted">
+            {% if status.last_run %}
+              <span data-local-time="{{ status.last_run }}">{{ status.last_run }}</span>
+            {% else %}Never{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div><strong>No jobs registered yet</strong><p>Scheduler status appears after application startup.</p></div>
+    </div>
+    {% endif %}
+  </article>
+</section>
 {% endblock %}

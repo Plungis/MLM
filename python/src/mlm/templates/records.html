@@ -1,17 +1,58 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ title }}</h1>
-<table><tr><th>Summary</th><th>Record</th>{% if table == "selected_torrents" %}<th></th>{% endif %}</tr>
-{% for row in rows %}
-<tr>
-  <td>{{ row.get("title") or (row.get("meta") or {}).get("title") or row.get("id") or row.get("mam_id") or row.get("guid") }}</td>
-  <td><pre>{{ row | tojson(indent=2) }}</pre></td>
-  {% if table == "selected_torrents" %}<td>
-    <form action="/selected/remove" method="post">
-      <input type="hidden" name="mam_id" value="{{ row.mam_id }}"><button>Remove</button>
-    </form>
-  </td>{% endif %}
-</tr>
-{% else %}<tr><td colspan="3">No records.</td></tr>{% endfor %}
-</table>
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Data browser</p>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">Review {{ rows | length }} stored {{ "record" if rows | length == 1 else "records" }}. Raw details stay collapsed until you need them.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip">{{ rows | length }} records</span>
+    {% if table == "selected_torrents" %}<a class="button primary" href="/search">Add release</a>{% endif %}
+  </div>
+</header>
+
+<section class="panel">
+  {% if rows %}
+  <div class="record-list">
+    {% for row in rows %}
+    {% set meta = row.get("meta") or {} %}
+    {% set summary = row.get("title") or meta.get("title") or row.get("name") or row.get("id") or row.get("mam_id") or row.get("guid") %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ summary or "Untitled record" }}</span>
+          <span class="record-id">
+            {% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }}{% endif %}
+            {% if row.get("id") %} · ID {{ row.get("id") }}{% endif %}
+            {% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}
+          </span>
+        </div>
+        <div class="record-actions">
+          {% if table == "selected_torrents" %}
+          <form action="/selected/remove" method="post">
+            <input type="hidden" name="mam_id" value="{{ row.mam_id }}">
+            <button class="danger" type="submit">Remove</button>
+          </form>
+          {% endif %}
+          <span class="status ok">Stored</span>
+        </div>
+      </div>
+      <details>
+        <summary>Raw record</summary>
+        <pre>{{ row | tojson(indent=2) }}</pre>
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>No {{ title | lower }} yet</strong>
+      <p>This view will populate as HeavyMLM processes your pipeline.</p>
+      {% if table == "selected_torrents" %}<p><a class="button primary" href="/search">Search MaM</a></p>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
