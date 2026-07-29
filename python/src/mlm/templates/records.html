@@ -4,10 +4,19 @@
   <div>
     <p class="eyebrow">Data browser</p>
     <h1>{{ title }}</h1>
+    {% if table == "selected_torrents" %}
+    <p class="subtitle">These releases are in the download pipeline. “Awaiting checks” items still need downloader approval; “In qBittorrent” items are waiting for completion and organization.</p>
+    {% else %}
     <p class="subtitle">Review {{ rows | length }} stored {{ "record" if rows | length == 1 else "records" }}. Raw details stay collapsed until you need them.</p>
+    {% endif %}
   </div>
   <div class="page-meta">
+    {% if table == "selected_torrents" %}
+    <span class="chip">{{ pipeline.awaiting }} awaiting checks</span>
+    <span class="chip">{{ pipeline.downloading }} in qBittorrent</span>
+    {% else %}
     <span class="chip">{{ rows | length }} records</span>
+    {% endif %}
     {% if table == "selected_torrents" %}<a class="button primary" href="/search">Add release</a>{% endif %}
   </div>
 </header>
@@ -35,7 +44,13 @@
             <button class="danger" type="submit">Remove</button>
           </form>
           {% endif %}
+          {% if table == "selected_torrents" and row.get("started_at") %}
+          <span class="status running">In qBittorrent</span>
+          {% elif table == "selected_torrents" %}
+          <span class="status waiting">Awaiting checks</span>
+          {% else %}
           <span class="status ok">Stored</span>
+          {% endif %}
         </div>
       </div>
       <details>

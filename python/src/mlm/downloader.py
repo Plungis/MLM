@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import Config
 from .mam import MamClient, MamRateLimitError, MamWedgeError
@@ -16,6 +16,9 @@ class DownloadRun:
     downloaded: int = 0
     failed: int = 0
     skipped: int = 0
+    skip_reasons: dict[str, int] = field(default_factory=dict)
+    available_slots: int = 0
+    ratio_buffer_bytes: int = 0
 
 
 async def _torrent_file_with_backoff(
@@ -38,19 +41,17 @@ async def grab_selected_torrents(
     other_qbits: Iterable[QbitClient] = (),
 ) -> DownloadRun:
     downloaded = failed = skipped = 0
+    skip_reasons = {"unsat_slots": 0, "ratio_buffer": 0}
     user = await mam.user_info()
     unsat = user.get("unsat", {})
     available_slots = max(0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0)))
-    downloading_size = sum(
-        int(row.get("meta", {}).get("size", 0))
-        for row in repository.pending_selected()
-        if row.get("started_at") is not None
-    )
+    downloading_size = repository.selected_pipeline_status()["downloading_bytes"]
     remaining_buffer = (
         float(user.get("uploaded_bytes", 0))
         - float(user.get("downloaded_bytes", 0))
         - downloading_size
     ) / config.min_ratio
+    starting_ratio_buffer = max(0, int(remaining_buffer))
     for selected in repository.pending_selected():
         try:
             torrent_id = int(selected["mam_id"])
@@ -60,11 +61,13 @@ async def grab_selected_torrents(
                 else config.unsat_buffer
             )
             size = int(selected.get("meta", {}).get("size", 0))
-            if (
-                available_slots - downloaded <= slot_buffer
-                or remaining_buffer - size <= 0
-            ):
+            if available_slots - downloaded <= slot_buffer:
                 skipped += 1
+                skip_reasons["unsat_slots"] += 1
+                continue
+            if remaining_buffer - size <= 0:
+                skipped += 1
+                skip_reasons["ratio_buffer"] += 1
                 continue
             torrent_file = await _torrent_file_with_backoff(
                 mam, selected["dl_link"], torrent_id
@@ -116,4 +119,11 @@ async def grab_selected_torrents(
             repository.record_grab_error(selected, error)
             failed += 1
         await asyncio.sleep(1)
-    return DownloadRun(downloaded=downloaded, failed=failed, skipped=skipped)
+    return DownloadRun(
+        downloaded=downloaded,
+        failed=failed,
+        skipped=skipped,
+        skip_reasons={key: value for key, value in skip_reasons.items() if value},
+        available_slots=available_slots,
+        ratio_buffer_bytes=starting_ratio_buffer,
+    )

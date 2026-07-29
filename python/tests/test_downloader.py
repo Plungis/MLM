@@ -41,12 +41,7 @@ class FakeQbit:
         self.added.append(torrent_file)
 
 
-def test_download_job_moves_selected_record_into_library_catalog(
-    tmp_path: Path,
-) -> None:
-    database = tmp_path / "data.sqlite3"
-    ensure_database(database)
-    repository = Repository(database)
+def add_selected(repository: Repository, *, size: int = 12) -> None:
     repository.add_selected(
         {
             "mam_id": 42,
@@ -59,13 +54,22 @@ def test_download_job_moves_selected_record_into_library_catalog(
             "category": None,
             "tags": [],
             "title_search": "book",
-            "meta": {"mam_id": 42, "title": "Book", "size": 12},
+            "meta": {"mam_id": 42, "title": "Book", "size": size},
             "grabber": "test",
             "created_at": "2025-01-01T00:00:00Z",
             "started_at": None,
             "removed_at": None,
         }
     )
+
+
+def test_download_job_moves_selected_record_into_library_catalog(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
     mam = FakeMam()
     qbit = FakeQbit()
 
@@ -77,4 +81,54 @@ def test_download_job_moves_selected_record_into_library_catalog(
     assert mam.requested == [("secret-hash", 42)]
     assert len(qbit.added) == 1
     assert repository.pending_selected() == []
+    assert repository.selected_pipeline_status() == {
+        "awaiting": 0,
+        "downloading": 1,
+        "downloading_bytes": 12,
+    }
     assert repository.table_rows("torrents")[0]["mam_id"] == 42
+
+
+def test_download_job_reports_unsatisfied_slot_deferral(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
+    mam = FakeMam()
+
+    async def no_slots() -> dict:
+        user = await FakeMam.user_info(mam)
+        user["unsat"] = {"limit": 1, "count": 1}
+        return user
+
+    mam.user_info = no_slots  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        grab_selected_torrents(Config(mam_id="cookie"), repository, mam, FakeQbit())
+    )
+
+    assert result.downloaded == 0
+    assert result.skipped == 1
+    assert result.skip_reasons == {"unsat_slots": 1}
+    assert result.available_slots == 0
+
+
+def test_download_job_reports_ratio_reserve_deferral(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository, size=6_000)
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(mam_id="cookie", min_ratio=2),
+            repository,
+            FakeMam(),
+            FakeQbit(),
+        )
+    )
+
+    assert result.downloaded == 0
+    assert result.skipped == 1
+    assert result.skip_reasons == {"ratio_buffer": 1}
+    assert result.ratio_buffer_bytes == 5_000

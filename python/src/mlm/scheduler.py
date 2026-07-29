@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 
 from .audiobookshelf import AudiobookshelfClient, match_torrents_to_audiobookshelf
@@ -23,6 +23,7 @@ from .snatchlist import run_snatchlist_search
 class JobStatus:
     last_run: str | None = None
     last_error: str | None = None
+    last_result: object | None = None
     running: bool = False
 
 
@@ -42,8 +43,10 @@ class ServiceState:
         status.running = True
         status.last_run = datetime.now(UTC).isoformat()
         status.last_error = None
+        status.last_result = None
         try:
-            await job()
+            result = await job()
+            status.last_result = asdict(result) if is_dataclass(result) else result
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
@@ -70,15 +73,15 @@ class ServiceState:
         await qbit.login(qbit_config.username, qbit_config.password)
         return qbit, qbit_config
 
-    async def downloader(self) -> None:
+    async def downloader(self) -> object:
         if not self.config.qbittorrent:
-            return
+            return {"downloaded": 0, "failed": 0, "skipped": 0}
         qbits: list[QbitClient] = []
         try:
             for index in range(len(self.config.qbittorrent)):
                 qbit, _ = await self._qbit(index)
                 qbits.append(qbit)
-            await grab_selected_torrents(
+            return await grab_selected_torrents(
                 self.config,
                 self.repository,
                 self.mam,

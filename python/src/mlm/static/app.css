@@ -372,9 +372,25 @@ h3 {
   color: var(--warning);
 }
 
+.status.waiting {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
 .status.error {
   border-color: rgba(255, 104, 120, 0.4);
   color: var(--danger);
+}
+
+.job-result {
+  min-width: 15rem;
+}
+
+.result-reason {
+  margin-top: 0.35rem;
+  color: var(--warning);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .flash {

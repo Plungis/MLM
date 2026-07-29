@@ -65,6 +65,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return {
             "request": request,
             "counts": counts,
+            "pipeline": repository.selected_pipeline_status(),
             "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
             "version": __version__,

@@ -25,6 +25,32 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
+    def selected_pipeline_status(self) -> dict[str, int]:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                """SELECT
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN 1 ELSE 0 END),
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NOT NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN 1 ELSE 0 END),
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NOT NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN COALESCE(
+                         CAST(json_extract(payload_json, '$.meta.size') AS INTEGER), 0
+                       ) ELSE 0 END)
+                   FROM selected_torrents"""
+            ).fetchone()
+        return {
+            "awaiting": int(row[0] or 0),
+            "downloading": int(row[1] or 0),
+            "downloading_bytes": int(row[2] or 0),
+        }
+
     def config_value(self, key: str) -> str | None:
         with connect(self.path) as connection:
             row = connection.execute(

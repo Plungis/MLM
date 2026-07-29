@@ -22,13 +22,17 @@
 <section class="metric-grid" aria-label="Library metrics">
   {% for key,label,help in [
     ("torrents","Library","organized titles"),
-    ("selected_torrents","Queue","awaiting download"),
+    ("selected_torrents","Pipeline","selected and downloading"),
     ("duplicate_torrents","Duplicates","replacement candidates"),
     ("errored_torrents","Errors","need attention")] %}
   <a class="metric" href="/records/{{ key }}">
     <span class="metric-label">{{ label }}</span>
     <strong class="metric-value">{{ counts.get(key, 0) }}</strong>
+    {% if key == "selected_torrents" %}
+    <span class="metric-help">{{ pipeline.awaiting }} awaiting · {{ pipeline.downloading }} in qBittorrent →</span>
+    {% else %}
     <span class="metric-help">{{ help }} →</span>
+    {% endif %}
   </a>
   {% endfor %}
 </section>
@@ -70,7 +74,7 @@
     {% if jobs %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Job</th><th>Status</th><th>Last run</th></tr></thead>
+        <thead><tr><th>Job</th><th>Status</th><th>Last result</th><th>Last run</th></tr></thead>
         <tbody>
         {% for name,status in jobs.items() %}
         <tr>
@@ -85,6 +89,23 @@
               <span class="status error">Error</span>
             {% else %}
               <span class="status ok">Idle</span>
+            {% endif %}
+          </td>
+          <td class="job-result">
+            {% if status.last_result is mapping and status.last_result.get("downloaded") is not none %}
+              <strong>{{ status.last_result.get("downloaded", 0) }} downloaded</strong>
+              <span class="muted"> · {{ status.last_result.get("failed", 0) }} failed · {{ status.last_result.get("skipped", 0) }} deferred</span>
+              {% set reasons = status.last_result.get("skip_reasons") or {} %}
+              {% if reasons.get("unsat_slots") %}
+                <div class="result-reason">{{ reasons.get("unsat_slots") }} waiting for an available MaM unsatisfied slot</div>
+              {% endif %}
+              {% if reasons.get("ratio_buffer") %}
+                <div class="result-reason">{{ reasons.get("ratio_buffer") }} held by the configured ratio reserve</div>
+              {% endif %}
+            {% elif status.last_result is not none %}
+              {{ status.last_result }}
+            {% else %}
+              <span class="muted">No run yet</span>
             {% endif %}
           </td>
           <td class="muted">
