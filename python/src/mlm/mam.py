@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from typing import Any, Self
@@ -74,13 +75,35 @@ class MamClient:
     async def check_mam_id(self) -> None:
         response = await self.client.get("/json/checkCookie.php")
         self._raise_for_status(response)
+        text = response.text.lstrip("\ufeff")
+        result: dict[str, Any] | None = None
         try:
-            result = response.json()
-        except ValueError as error:
-            raise MamError("session check returned invalid JSON") from error
-        if not isinstance(result, dict) or result.get("Success") is not True:
-            detail = result.get("Error") or result.get("Message") or result
-            raise MamError(f"session check rejected the mam_id cookie: {detail}")
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                result = parsed
+        except ValueError:
+            pass
+        success = result is not None and result.get("Success") is True
+        if not success:
+            success = (
+                re.search(
+                    r"""["']?Success["']?\s*:\s*true\b""",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                is not None
+            )
+        if not success:
+            detail = None
+            if result is not None:
+                detail = result.get("Error") or result.get("Message")
+            if detail:
+                raise MamError(f"session check rejected the mam_id cookie: {detail}")
+            content_type = response.headers.get("content-type", "unknown")
+            raise MamError(
+                "session check did not report success "
+                f"(content-type={content_type}, response-bytes={len(response.content)})"
+            )
         self._remember_cookie()
 
     async def user_info(self) -> dict[str, Any]:

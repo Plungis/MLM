@@ -50,11 +50,32 @@ def test_rejected_cookie_is_not_persisted() -> None:
             ),
         ) as http:
             mam = MamClient("rejected", client=http, cookie_store=stored.append)
-            with pytest.raises(MamError, match="rejected"):
+            with pytest.raises(MamError, match="did not report success"):
                 await mam.check_mam_id()
 
     asyncio.run(exercise())
     assert stored == []
+
+
+def test_non_json_success_response_is_accepted() -> None:
+    stored: list[str] = []
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://www.myanonamouse.net",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    text='PHP notice\n{"Success" : true}',
+                    headers={"content-type": "text/html"},
+                )
+            ),
+        ) as http:
+            mam = MamClient("accepted", client=http, cookie_store=stored.append)
+            await mam.check_mam_id()
+
+    asyncio.run(exercise())
+    assert stored == ["accepted"]
 
 
 def test_authentication_falls_back_to_config_cookie(
