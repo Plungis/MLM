@@ -83,8 +83,11 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ConfigError(f"could not read config {path}: {error}") from error
     for old, new in _ALIASES.items():
-        if old in raw and new not in raw:
-            raw[new] = raw.pop(old)
+        if old not in raw:
+            continue
+        legacy_value = raw.pop(old)
+        if new not in raw:
+            raw[new] = legacy_value
     raw.update(
         _environment_overrides(os.environ if environment is None else environment)
     )
@@ -149,6 +152,12 @@ def save_root_config_values(path: Path, values: Mapping[str, object | None]) -> 
     position = table.start() if table else len(text)
     root = text[:position]
     suffix = text[position:]
+    for legacy, canonical in _ALIASES.items():
+        if canonical in values:
+            legacy_pattern = re.compile(
+                rf"(?m)^[ \t]*{re.escape(legacy)}[ \t]*=.*(?:\r?\n|$)"
+            )
+            root = legacy_pattern.sub("", root)
     missing: list[str] = []
     for key, value in values.items():
         pattern = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=.*(?:\r?\n|$)")

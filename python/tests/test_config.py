@@ -38,6 +38,24 @@ def test_repository_example_config_is_valid() -> None:
     assert len(config.libraries) == 2
 
 
+def test_canonical_interval_wins_when_legacy_name_is_also_present(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+mam_id = "secret"
+goodreads_interval = 1
+import_interval = 60
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.import_interval == 60
+
+
 def test_saves_editable_root_values_without_touching_nested_secrets(
     tmp_path: Path,
 ) -> None:
@@ -46,6 +64,7 @@ def test_saves_editable_root_values_without_touching_nested_secrets(
         """
 mam_id = "keep-this-secret"
 min_ratio = 2 # preserve the rest of the document
+goodreads_interval = 1
 
 [[qbittorrent]]
 url = "http://localhost:8080"
@@ -65,6 +84,7 @@ wedge_buffer = 99
             "max_unsat_slots": 140,
             "wedge_buffer": 4,
             "prefer_wedges": True,
+            "import_interval": 45,
         },
     )
 
@@ -73,7 +93,10 @@ wedge_buffer = 99
     assert config.max_unsat_slots == 140
     assert config.wedge_buffer == 4
     assert config.prefer_wedges is True
+    assert config.import_interval == 45
     assert 'mam_id = "keep-this-secret"' in text
     assert 'password = "also-keep-this"' in text
     assert "wedge_buffer = 99" in text
+    assert "goodreads_interval" not in text
+    assert "import_interval = 45" in text
     assert text.index("max_unsat_slots") < text.index("[[qbittorrent]]")
