@@ -51,3 +51,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert events.status_code == 200
     assert "Raw record" in events.text
     assert client.get("/config").status_code == 200
+    diagnostics = client.get("/diagnostics?live=0")
+    assert diagnostics.status_code == 200
+    assert "Activity console" in diagnostics.text
+    assert "Auto-refresh paused" in diagnostics.text

@@ -42,6 +42,12 @@ async def grab_selected_torrents(
 ) -> DownloadRun:
     downloaded = failed = skipped = 0
     skip_reasons = {"unsat_slots": 0, "ratio_buffer": 0}
+    pending = repository.pending_selected()
+    repository.log_activity(
+        "downloader",
+        "Evaluating selected torrents",
+        context={"pending": len(pending)},
+    )
     user = await mam.user_info()
     unsat = user.get("unsat", {})
     available_slots = max(0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0)))
@@ -52,7 +58,7 @@ async def grab_selected_torrents(
         - downloading_size
     ) / config.min_ratio
     starting_ratio_buffer = max(0, int(remaining_buffer))
-    for selected in repository.pending_selected():
+    for selected in pending:
         try:
             torrent_id = int(selected["mam_id"])
             slot_buffer = int(
@@ -64,10 +70,30 @@ async def grab_selected_torrents(
             if available_slots - downloaded <= slot_buffer:
                 skipped += 1
                 skip_reasons["unsat_slots"] += 1
+                repository.log_activity(
+                    "downloader",
+                    f"Deferred MaM #{torrent_id}: no unsatisfied slot available",
+                    level="warning",
+                    context={
+                        "mam_id": torrent_id,
+                        "available_slots": available_slots,
+                        "slot_buffer": slot_buffer,
+                    },
+                )
                 continue
             if remaining_buffer - size <= 0:
                 skipped += 1
                 skip_reasons["ratio_buffer"] += 1
+                repository.log_activity(
+                    "downloader",
+                    f"Deferred MaM #{torrent_id}: ratio reserve",
+                    level="warning",
+                    context={
+                        "mam_id": torrent_id,
+                        "torrent_bytes": size,
+                        "ratio_buffer_bytes": max(0, int(remaining_buffer)),
+                    },
+                )
                 continue
             torrent_file = await _torrent_file_with_backoff(
                 mam, selected["dl_link"], torrent_id
@@ -115,11 +141,31 @@ async def grab_selected_torrents(
             repository.record_started(selected, torrent_hash, wedged=wedged)
             downloaded += 1
             remaining_buffer -= size
+            repository.log_activity(
+                "downloader",
+                f"Added MaM #{torrent_id} to qBittorrent",
+                level="success",
+                context={
+                    "mam_id": torrent_id,
+                    "torrent_hash": torrent_hash,
+                    "wedged": wedged,
+                    "already_present": bool(existing),
+                },
+            )
         except Exception as error:  # noqa: BLE001 - isolate failures per torrent
             repository.record_grab_error(selected, error)
             failed += 1
+            repository.log_activity(
+                "downloader",
+                f"Failed MaM #{selected.get('mam_id')}",
+                level="error",
+                context={
+                    "mam_id": selected.get("mam_id"),
+                    "error": f"{type(error).__name__}: {error}",
+                },
+            )
         await asyncio.sleep(1)
-    return DownloadRun(
+    result = DownloadRun(
         downloaded=downloaded,
         failed=failed,
         skipped=skipped,
@@ -127,3 +173,15 @@ async def grab_selected_torrents(
         available_slots=available_slots,
         ratio_buffer_bytes=starting_ratio_buffer,
     )
+    repository.log_activity(
+        "downloader",
+        "Download evaluation complete",
+        level="success" if not failed else "warning",
+        context={
+            "downloaded": result.downloaded,
+            "failed": result.failed,
+            "skipped": result.skipped,
+            "skip_reasons": result.skip_reasons,
+        },
+    )
+    return result

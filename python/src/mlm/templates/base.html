@@ -45,6 +45,9 @@
 
       <div class="nav-group">
         <p class="nav-label">Activity</p>
+        <a class="nav-link{% if path == '/diagnostics' %} active{% endif %}" href="/diagnostics">
+          <span>Diagnostics</span>
+        </a>
         {% for key,label in [
           ("events","Events"),("errored_torrents","Errors"),
           ("lists","Lists"),("list_items","List Items")] %}

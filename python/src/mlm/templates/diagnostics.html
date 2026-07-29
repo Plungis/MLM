@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Live trace</p>
+    <h1>Diagnostics</h1>
+    <p class="subtitle">A five-second live view of source refreshes, matching decisions, queue checks, downloads, and scheduled jobs.</p>
+  </div>
+  <div class="page-meta">
+    {% if live %}
+    <span class="chip"><span class="status-dot"></span> Auto-refresh on</span>
+    <a class="button" href="/diagnostics?live=0{% if component %}&component={{ component }}{% endif %}">Pause</a>
+    {% else %}
+    <span class="chip">Auto-refresh paused</span>
+    <a class="button" href="/diagnostics{% if component %}?component={{ component }}{% endif %}">Resume</a>
+    {% endif %}
+    <a class="button" href="/diagnostics">Clear filter</a>
+  </div>
+</header>
+
+<section class="debug-grid">
+  <article class="debug-window">
+    <header><span>PIPELINE_STATE</span><span class="window-light"></span></header>
+    <div class="debug-facts">
+      <div><strong>{{ pipeline.awaiting }}</strong><span>awaiting checks</span></div>
+      <div><strong>{{ pipeline.downloading }}</strong><span>in qBittorrent</span></div>
+    </div>
+  </article>
+
+  <article class="debug-window">
+    <header><span>LIST_MEMORY</span><span class="window-light"></span></header>
+    <div class="debug-facts">
+      <div><strong>{{ list_tracking.get("selected", 0) + list_tracking.get("already_grabbed", 0) }}</strong><span>grabbed</span></div>
+      <div><strong>{{ list_tracking.get("no_match", 0) }}</strong><span>no match</span></div>
+      <div><strong>{{ list_tracking.get("legacy", 0) }}</strong><span>awaiting refresh</span></div>
+    </div>
+  </article>
+
+  <article class="debug-window wide">
+    <header><span>SCHEDULER_JOBS</span><span class="window-light"></span></header>
+    <div class="job-strip">
+      {% for name,status in jobs.items() %}
+      <div>
+        <code>{{ name }}</code>
+        {% if status.running %}
+        <span class="status running">running</span>
+        {% elif status.last_error %}
+        <span class="status error">error</span>
+        {% else %}
+        <span class="status ok">idle</span>
+        {% endif %}
+        <small>{% if status.last_run %}<span data-local-time="{{ status.last_run }}">{{ status.last_run }}</span>{% else %}never run{% endif %}</small>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Activity console</h2>
+      <p>{{ activity | length }} most recent trace messages{% if component %} for {{ component }}{% endif %}.</p>
+    </div>
+    <div class="console-filters">
+      {% for value,label in [("","All"),("scheduler","Scheduler"),("downloader","Downloader"),("lists","Lists")] %}
+      <a class="chip{% if component == value %} active{% endif %}" href="/diagnostics{% if value %}?component={{ value }}{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </header>
+  <div class="activity-console"{% if live %} data-live-diagnostics{% endif %}>
+    {% for entry in activity %}
+    <article class="activity-line {{ entry.level }}">
+      <time data-local-time="{{ entry.created_at }}">{{ entry.created_at }}</time>
+      <a href="/diagnostics?component={{ entry.component }}">[{{ entry.component }}]</a>
+      <strong>{{ entry.message }}</strong>
+      {% if entry.context %}<details><summary>context</summary><pre>{{ entry.context | tojson(indent=2) }}</pre></details>{% endif %}
+    </article>
+    {% else %}
+    <div class="empty-state"><div><strong>No trace messages yet</strong><p>Run Refresh lists or Process queue to populate this console.</p></div></div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

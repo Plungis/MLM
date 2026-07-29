@@ -6,6 +6,8 @@
     <h1>{{ title }}</h1>
     {% if table == "selected_torrents" %}
     <p class="subtitle">These releases are in the download pipeline. “Awaiting checks” items still need downloader approval; “In qBittorrent” items are waiting for completion and organization.</p>
+    {% elif table == "list_items" %}
+    <p class="subtitle">Persistent source memory. Every refresh updates these entries and skips anything already grabbed in an earlier run.</p>
     {% else %}
     <p class="subtitle">Review {{ rows | length }} stored {{ "record" if rows | length == 1 else "records" }}. Raw details stay collapsed until you need them.</p>
     {% endif %}
@@ -14,6 +16,9 @@
     {% if table == "selected_torrents" %}
     <span class="chip">{{ pipeline.awaiting }} awaiting checks</span>
     <span class="chip">{{ pipeline.downloading }} in qBittorrent</span>
+    {% elif table == "list_items" %}
+    <span class="chip">{{ list_tracking.get("selected", 0) + list_tracking.get("already_grabbed", 0) }} grabbed</span>
+    <span class="chip">{{ list_tracking.get("no_match", 0) }} no match</span>
     {% else %}
     <span class="chip">{{ rows | length }} records</span>
     {% endif %}
@@ -36,6 +41,9 @@
             {% if row.get("id") %} · ID {{ row.get("id") }}{% endif %}
             {% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}
           </span>
+          {% if table in ["lists", "list_items"] and row.get("last_result") %}
+          <span class="record-note">{{ row.get("last_result") }}</span>
+          {% endif %}
         </div>
         <div class="record-actions">
           {% if table == "selected_torrents" %}
@@ -48,6 +56,12 @@
           <span class="status running">In qBittorrent</span>
           {% elif table == "selected_torrents" %}
           <span class="status waiting">Awaiting checks</span>
+          {% elif table == "list_items" and row.get("source_status") == "removed" %}
+          <span class="status error">Removed from source</span>
+          {% elif table == "list_items" and row.get("status") in ["selected", "already_grabbed"] %}
+          <span class="status ok">{{ row.get("status") | replace("_", " ") }}</span>
+          {% elif table == "list_items" and row.get("status") == "no_match" %}
+          <span class="status waiting">No match</span>
           {% else %}
           <span class="status ok">Stored</span>
           {% endif %}

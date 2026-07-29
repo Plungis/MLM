@@ -48,7 +48,8 @@
     </header>
     <div class="panel-body quick-actions">
       {% for name,label,description in [
-        ("autograb","Find releases","Run configured MaM searches and list imports."),
+        ("autograb","Find releases","Run the configured MaM autograb searches."),
+        ("lists","Refresh lists","Reload Goodreads and Notion, then process only new items."),
         ("downloader","Process queue","Send selected torrents to qBittorrent."),
         ("organizer","Organize files","Link completed downloads into libraries."),
         ("cleaner","Clean duplicates","Apply replacement and cleanup rules.")] %}
@@ -102,6 +103,12 @@
               {% if reasons.get("ratio_buffer") %}
                 <div class="result-reason">{{ reasons.get("ratio_buffer") }} held by the configured ratio reserve</div>
               {% endif %}
+            {% elif status.last_result is mapping and status.last_result.get("refreshed") is not none %}
+              <strong>{{ status.last_result.get("refreshed", 0) }} refreshed</strong>
+              <span class="muted"> · {{ status.last_result.get("selected", 0) }} selected
+                {% if status.last_result.get("already_grabbed") is not none %} · {{ status.last_result.get("already_grabbed", 0) }} remembered{% endif %}
+                {% if status.last_result.get("failed") is not none %} · {{ status.last_result.get("failed", 0) }} failed{% endif %}
+              </span>
             {% elif status.last_result is not none %}
               {{ status.last_result }}
             {% else %}

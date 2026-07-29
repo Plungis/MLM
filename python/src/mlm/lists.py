@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -20,6 +21,15 @@ BOOK_LINK = re.compile(
     r'href=["\']((?:https://www\.goodreads\.com)?/book/show/[^"\']+)'
 )
 COVER_LINK = re.compile(r'<img[^>]+src=["\']([^"\']+)')
+
+
+@dataclass(frozen=True)
+class ListImportRun:
+    refreshed: int = 0
+    selected: int = 0
+    already_grabbed: int = 0
+    no_match: int = 0
+    removed: int = 0
 
 
 def _text(element: ET.Element, name: str) -> str | None:
@@ -52,7 +62,7 @@ async def run_goodreads_import(
     definition: dict[str, Any],
     *,
     client: httpx.AsyncClient | None = None,
-) -> int:
+) -> ListImportRun:
     owns_client = client is None
     http = client or httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 MLM-Python"}, timeout=30
@@ -71,11 +81,20 @@ async def run_goodreads_import(
     title = _text(channel, "title") or definition.get("name") or "Goodreads"
     list_id = goodreads_list_id(definition["url"])
     now = datetime.now(UTC).isoformat()
-    if not definition.get("dry_run", False):
+    dry_run = definition.get("dry_run", False)
+    component = "lists"
+    if not dry_run:
+        repository.log_activity(
+            component,
+            "Refreshing Goodreads source",
+            context={"list_id": list_id, "title": title},
+        )
+    if not dry_run:
         repository.upsert_list(
             {"id": list_id, "title": title, "updated_at": now, "build_date": now}
         )
-    selected = 0
+    selected = already_grabbed = no_match = 0
+    seen_guids: set[str] = set()
     for xml_item in [item for item in channel if item.tag.rsplit("}", 1)[-1] == "item"]:
         guid_value = _text(xml_item, "guid") or _text(xml_item, "book_id")
         item_title = html.unescape(_text(xml_item, "title") or "")
@@ -93,6 +112,7 @@ async def run_goodreads_import(
         book_id_text = _text(xml_item, "book_id")
         book_id = int(book_id_text) if book_id_text and book_id_text.isdigit() else None
         guid = [list_id, guid_value]
+        seen_guids.add(guid_value)
         list_item = repository.list_item(guid) or {
             "guid": guid,
             "list_id": list_id,
@@ -100,6 +120,8 @@ async def run_goodreads_import(
             "audio_torrent": None,
             "ebook_torrent": None,
             "marked_done_at": None,
+            "selected_mam_ids": [],
+            "check_count": 0,
         }
         list_item.update(
             {
@@ -117,13 +139,52 @@ async def run_goodreads_import(
                 "prefer_format": definition.get("prefer_format"),
                 "allow_audio": _allow_media(definition.get("grab", []), "audio"),
                 "allow_ebook": _allow_media(definition.get("grab", []), "ebook"),
+                "last_seen_at": now,
+                "source_status": "present",
             }
         )
-        if not definition.get("dry_run", False):
+        previously_grabbed = bool(
+            list_item.get("marked_done_at")
+            or list_item.get("selected_mam_ids")
+            or list_item.get("audio_torrent")
+            or list_item.get("ebook_torrent")
+            or (book_id is not None and repository.has_goodreads_id(book_id))
+        )
+        if previously_grabbed:
+            already_grabbed += 1
+            list_item["status"] = "already_grabbed"
+            list_item["last_result"] = "Skipped: already selected in an earlier run"
+            if not dry_run:
+                repository.upsert_list_item(list_item)
+                repository.log_activity(
+                    component,
+                    f"Already grabbed: {item_title}",
+                    level="debug",
+                    context={"guid": guid_value, "book_id": book_id},
+                )
+            continue
+
+        list_item["last_checked_at"] = now
+        list_item["check_count"] = int(list_item.get("check_count", 0)) + 1
+        if not dry_run:
             repository.upsert_list_item(list_item)
         query = " ".join(
             filter(None, [f'"{item_title}"', f'"{author}"' if author else ""])
         )
+        if not dry_run:
+            repository.log_activity(
+                component,
+                f"Searching MaM: {item_title}",
+                level="debug",
+                context={
+                    "guid": guid_value,
+                    "book_id": book_id,
+                    "query": query,
+                    "rules": len(definition.get("grab", [])),
+                },
+            )
+        matched_torrent_id: int | None = None
+        candidate_count = 0
         for grab in definition.get("grab", []):
             rule = {
                 **grab,
@@ -137,15 +198,104 @@ async def run_goodreads_import(
                 "name": definition.get("name", title),
             }
             async for row in search_pages(mam, rule):
+                candidate_count += 1
                 if await select_row(
                     config, repository, row, rule, goodreads_id=book_id
                 ):
                     selected += 1
+                    matched_torrent_id = int(row["id"])
                     break
             else:
                 continue
             break
-    return selected
+        if matched_torrent_id is not None:
+            list_item["status"] = "selected"
+            list_item["marked_done_at"] = now
+            list_item["selected_mam_ids"] = list(
+                dict.fromkeys(
+                    [
+                        *list_item.get("selected_mam_ids", []),
+                        matched_torrent_id,
+                    ]
+                )
+            )
+            list_item["last_result"] = f"Selected MaM torrent {matched_torrent_id}"
+            message = f"Selected: {item_title}"
+            activity_level = "success"
+        else:
+            no_match += 1
+            list_item["status"] = "no_match"
+            list_item["last_result"] = "No configured release matched"
+            message = f"No match: {item_title}"
+            activity_level = "warning"
+        if not dry_run:
+            repository.upsert_list_item(list_item)
+            repository.log_activity(
+                component,
+                message,
+                level=activity_level,
+                context={
+                    "guid": guid_value,
+                    "book_id": book_id,
+                    "mam_id": matched_torrent_id,
+                    "query": query,
+                    "candidates_evaluated": candidate_count,
+                },
+            )
+
+    removed = 0
+    for previous in repository.list_items_for_list(list_id) if not dry_run else []:
+        previous_guid = previous.get("guid", [None, None])
+        guid_value = str(previous_guid[1]) if len(previous_guid) > 1 else ""
+        if guid_value in seen_guids or previous.get("source_status") == "removed":
+            continue
+        previous["source_status"] = "removed"
+        previous["removed_from_source_at"] = now
+        repository.upsert_list_item(previous)
+        removed += 1
+        repository.log_activity(
+            component,
+            f"Removed from source: {previous.get('title', guid_value)}",
+            level="warning",
+            context={"guid": guid_value},
+        )
+
+    result = ListImportRun(
+        refreshed=len(seen_guids),
+        selected=selected,
+        already_grabbed=already_grabbed,
+        no_match=no_match,
+        removed=removed,
+    )
+    if not dry_run:
+        repository.upsert_list(
+            {
+                "id": list_id,
+                "title": title,
+                "updated_at": now,
+                "build_date": now,
+                "last_result": {
+                    "refreshed": result.refreshed,
+                    "selected": result.selected,
+                    "already_grabbed": result.already_grabbed,
+                    "no_match": result.no_match,
+                    "removed": result.removed,
+                },
+            }
+        )
+        repository.log_activity(
+            component,
+            "Goodreads refresh complete",
+            level="success",
+            context={
+                "refreshed": result.refreshed,
+                "selected": result.selected,
+                "already_grabbed": result.already_grabbed,
+                "no_match": result.no_match,
+                "removed": result.removed,
+            },
+        )
+    return result
 
 
 async def run_notion_import(

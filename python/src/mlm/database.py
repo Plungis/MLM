@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -74,6 +74,17 @@ CREATE TABLE list_items (
 );
 
 CREATE INDEX list_items_list_id_idx ON list_items(list_id);
+
+CREATE TABLE activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    level TEXT NOT NULL,
+    component TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context_json TEXT NOT NULL
+);
+
+CREATE INDEX activity_log_created_at_idx ON activity_log(created_at DESC);
 """
 
 DATA_TABLES = (
@@ -101,15 +112,37 @@ def initialize(connection: sqlite3.Connection) -> None:
 
 def ensure_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return
     connection = connect(path)
     try:
-        initialize(connection)
-        connection.executemany(
-            "INSERT INTO migration_meta(key, value) VALUES (?, ?)",
-            [("schema_version", str(SCHEMA_VERSION)), ("created_fresh", "true")],
-        )
+        if not path.exists() or not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_meta'"
+        ).fetchone():
+            initialize(connection)
+            connection.executemany(
+                "INSERT INTO migration_meta(key, value) VALUES (?, ?)",
+                [("schema_version", str(SCHEMA_VERSION)), ("created_fresh", "true")],
+            )
+        else:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS activity_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    component TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    context_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS activity_log_created_at_idx
+                    ON activity_log(created_at DESC);
+                """
+            )
+            connection.execute(
+                """INSERT INTO migration_meta(key, value)
+                   VALUES ('schema_version', ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (str(SCHEMA_VERSION),),
+            )
         connection.commit()
     finally:
         connection.close()

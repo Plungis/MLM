@@ -66,6 +66,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "request": request,
             "counts": counts,
             "pipeline": repository.selected_pipeline_status(),
+            "list_tracking": repository.list_tracking_counts(),
             "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
             "version": __version__,
@@ -104,6 +105,23 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             request,
             "config.html",
             context(request, title="Configuration", config=_redacted_config(config)),
+        )
+
+    @app.get("/diagnostics", response_class=HTMLResponse)
+    async def diagnostics(request: Request, component: str = "") -> HTMLResponse:
+        activity = repository.recent_activity(
+            limit=300, component=component or None
+        )
+        return templates.TemplateResponse(
+            request,
+            "diagnostics.html",
+            context(
+                request,
+                title="Diagnostics",
+                activity=activity,
+                component=component,
+                live=request.query_params.get("live", "1") != "0",
+            ),
         )
 
     @app.get("/search", response_class=HTMLResponse)
@@ -149,7 +167,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.post("/actions/{name}")
     async def action(name: str) -> RedirectResponse:
-        if name not in {"autograb", "downloader", "organizer", "cleaner"}:
+        if name not in {"autograb", "lists", "downloader", "organizer", "cleaner"}:
             raise HTTPException(404, f"unknown job: {name}")
         asyncio.create_task(app.state.services.trigger(name))
         return RedirectResponse(f"/?triggered={name}", status_code=303)

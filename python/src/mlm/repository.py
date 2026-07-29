@@ -68,6 +68,59 @@ class Repository:
                 (key, value, canonical_json(payload)),
             )
 
+    def log_activity(
+        self,
+        component: str,
+        message: str,
+        *,
+        level: str = "info",
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                """INSERT INTO activity_log
+                   (created_at, level, component, message, context_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    datetime.now(UTC).isoformat(),
+                    level,
+                    component,
+                    message,
+                    canonical_json(context or {}),
+                ),
+            )
+            connection.execute(
+                """DELETE FROM activity_log WHERE id NOT IN (
+                     SELECT id FROM activity_log ORDER BY id DESC LIMIT 2000
+                   )"""
+            )
+
+    def recent_activity(
+        self, *, limit: int = 200, component: str | None = None
+    ) -> list[dict[str, Any]]:
+        query = """SELECT id, created_at, level, component, message, context_json
+                   FROM activity_log"""
+        parameters: tuple[Any, ...]
+        if component:
+            query += " WHERE component = ?"
+            parameters = (component, limit)
+        else:
+            parameters = (limit,)
+        query += " ORDER BY id DESC LIMIT ?"
+        with connect(self.path) as connection:
+            rows = connection.execute(query, parameters)
+            return [
+                {
+                    "id": row["id"],
+                    "created_at": row["created_at"],
+                    "level": row["level"],
+                    "component": row["component"],
+                    "message": row["message"],
+                    "context": json.loads(row["context_json"]),
+                }
+                for row in rows
+            ]
+
     def has_mam_id(self, mam_id: int) -> bool:
         with connect(self.path) as connection:
             selected = connection.execute(
@@ -77,6 +130,19 @@ class Repository:
                 "SELECT 1 FROM torrents WHERE mam_id = ?", (mam_id,)
             ).fetchone()
             return selected is not None or library is not None
+
+    def has_goodreads_id(self, goodreads_id: int) -> bool:
+        with connect(self.path) as connection:
+            for table in ("selected_torrents", "torrents"):
+                if connection.execute(
+                    f"""SELECT 1 FROM {table}
+                        WHERE CAST(json_extract(payload_json, '$.goodreads_id')
+                                   AS INTEGER) = ?
+                        LIMIT 1""",
+                    (goodreads_id,),
+                ).fetchone():
+                    return True
+        return False
 
     def records_with_title(self, title_search: str) -> list[dict[str, Any]]:
         with connect(self.path) as connection:
@@ -258,6 +324,14 @@ class Repository:
             ).fetchone()
             return json.loads(row[0]) if row else None
 
+    def list_items_for_list(self, list_id: str) -> list[dict[str, Any]]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM list_items WHERE list_id = ?",
+                (list_id,),
+            )
+            return [json.loads(row[0]) for row in rows]
+
     def upsert_list_item(self, row: dict[str, Any]) -> None:
         with connect(self.path) as connection:
             connection.execute(
@@ -274,6 +348,15 @@ class Repository:
                     canonical_json(row),
                 ),
             )
+
+    def list_tracking_counts(self) -> dict[str, int]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                """SELECT COALESCE(json_extract(payload_json, '$.status'), 'legacy'),
+                          COUNT(*)
+                   FROM list_items GROUP BY 1"""
+            )
+            return {str(row[0]): int(row[1]) for row in rows}
 
     def table_rows(self, table: str, *, limit: int = 500) -> list[dict[str, Any]]:
         allowed = {

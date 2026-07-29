@@ -44,13 +44,28 @@ class ServiceState:
         status.last_run = datetime.now(UTC).isoformat()
         status.last_error = None
         status.last_result = None
+        self.repository.log_activity(
+            "scheduler", f"Started job: {name}", context={"job": name}
+        )
         try:
             result = await job()
             status.last_result = asdict(result) if is_dataclass(result) else result
+            self.repository.log_activity(
+                "scheduler",
+                f"Completed job: {name}",
+                level="success",
+                context={"job": name, "result": status.last_result},
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
             status.last_error = f"{type(error).__name__}: {error}"
+            self.repository.log_activity(
+                "scheduler",
+                f"Job failed: {name}",
+                level="error",
+                context={"job": name, "error": status.last_error},
+            )
         finally:
             status.running = False
 
@@ -121,6 +136,39 @@ class ServiceState:
             await match_torrents_to_audiobookshelf(self.repository, client)
         finally:
             await client.close()
+
+    async def refresh_lists(self) -> dict[str, int]:
+        refreshed = selected = failed = 0
+        for definition in self.config.goodreads_lists:
+            try:
+                result = await run_goodreads_import(
+                    self.config, self.repository, self.mam, definition
+                )
+                refreshed += result.refreshed
+                selected += result.selected
+            except Exception as error:  # noqa: BLE001 - continue with other lists
+                failed += 1
+                self.repository.log_activity(
+                    "lists",
+                    "Goodreads refresh failed",
+                    level="error",
+                    context={"error": f"{type(error).__name__}: {error}"},
+                )
+        for definition in self.config.notion_lists:
+            try:
+                selected += await run_notion_import(
+                    self.config, self.repository, self.mam, definition
+                )
+                refreshed += 1
+            except Exception as error:  # noqa: BLE001 - continue with other lists
+                failed += 1
+                self.repository.log_activity(
+                    "lists",
+                    "Notion refresh failed",
+                    level="error",
+                    context={"error": f"{type(error).__name__}: {error}"},
+                )
+        return {"refreshed": refreshed, "selected": selected, "failed": failed}
 
     def start(self) -> None:
         for index, rule in enumerate(self.config.autograbs):
@@ -252,5 +300,7 @@ class ServiceState:
                         index=index,
                     ),
                 )
+        elif name == "lists":
+            await self.run_job("lists:manual", self.refresh_lists)
         else:
             raise ValueError(f"unknown job: {name}")
