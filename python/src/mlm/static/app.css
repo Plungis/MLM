@@ -622,7 +622,8 @@ tbody tr:last-child td {
 }
 
 input[type="text"],
-input[type="search"] {
+input[type="search"],
+input[type="number"] {
   width: 100%;
   min-height: 44px;
   border: 1px dashed var(--dim);
@@ -635,6 +636,67 @@ input[type="search"] {
 
 input::placeholder {
   color: var(--dim);
+}
+
+.capacity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.capacity-card {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 15px 17px;
+}
+
+.capacity-card header,
+.capacity-split {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.capacity-card header span {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.capacity-card header strong {
+  color: var(--text-strong);
+}
+
+.capacity-card p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.capacity-track {
+  height: 8px;
+  overflow: hidden;
+  margin-top: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.capacity-track span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--warning));
+  box-shadow: 0 0 12px var(--shadow);
+}
+
+.capacity-split {
+  margin-top: 12px;
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 10px;
+  color: var(--accent);
+  font-size: 11px;
 }
 
 .result-title {
@@ -723,6 +785,103 @@ pre {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 18px;
+}
+
+.config-editor {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.setting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.setting-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.setting-field {
+  display: grid;
+  gap: 7px;
+}
+
+.setting-field > span {
+  color: var(--text-strong);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setting-field small,
+.setting-toggle small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.setting-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--surface);
+  padding: 13px;
+  cursor: pointer;
+}
+
+.setting-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.setting-toggle strong,
+.setting-toggle small {
+  display: block;
+}
+
+.setting-toggle strong {
+  color: var(--text-strong);
+}
+
+.setting-toggle small {
+  margin-top: 5px;
+}
+
+.config-savebar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(3, 14, 7, 0.97);
+  box-shadow: 0 0 28px rgba(0, 0, 0, 0.55);
+  padding: 12px 14px;
+}
+
+.config-savebar strong,
+.config-savebar span {
+  display: block;
+}
+
+.config-savebar span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.error-flash {
+  border-color: var(--danger);
+  background: rgba(255, 104, 120, 0.08);
+  color: #ffb7bf;
 }
 
 .config-fact {
@@ -930,7 +1089,8 @@ pre {
 
 @media (max-width: 1100px) {
   .metric-grid,
-  .config-summary {
+  .config-summary,
+  .capacity-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1005,8 +1165,17 @@ pre {
   .metric-grid,
   .config-summary,
   .quick-actions,
-  .debug-grid {
+  .debug-grid,
+  .capacity-grid,
+  .setting-grid,
+  .setting-grid.three {
     grid-template-columns: 1fr;
+  }
+
+  .config-savebar {
+    position: static;
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .debug-window.wide {

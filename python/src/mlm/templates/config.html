@@ -2,33 +2,108 @@
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Runtime settings</p>
+    <p class="eyebrow">Live runtime settings</p>
     <h1>Configuration</h1>
-    <p class="subtitle">A read-only, redacted view of the configuration currently loaded by HeavyMLM.</p>
+    <p class="subtitle">Change download policy and scheduler settings without restarting HeavyMLM. Saves are validated before your TOML file is replaced.</p>
   </div>
-  <div class="page-meta"><span class="status ok">Secrets redacted</span></div>
+  <div class="page-meta">
+    <span class="status ok">Secrets protected</span>
+    <span class="chip">Local changes only</span>
+  </div>
 </header>
 
+{% if saved %}
+<div class="flash" role="status"><span>Configuration saved and applied to the running service.</span><span class="status ok">Applied</span></div>
+{% endif %}
+{% if error %}
+<div class="flash error-flash" role="alert"><span>{{ error }}</span><span class="status error">Not saved</span></div>
+{% endif %}
+
 <section class="config-summary">
-  <div class="config-fact"><span>qBittorrent</span><strong>{{ config.qbittorrent | length }} client(s)</strong></div>
-  <div class="config-fact"><span>Autograbbers</span><strong>{{ config.autograbs | length }}</strong></div>
-  <div class="config-fact"><span>Libraries</span><strong>{{ config.libraries | length }}</strong></div>
-  <div class="config-fact"><span>Web endpoint</span><strong>{{ config.web_host }}:{{ config.web_port }}</strong></div>
+  <div class="config-fact"><span>Slots used</span><strong>{% if mam_stats %}{{ mam_stats.slots_used }} / {{ mam_stats.slots_total }}{% else %}Syncing…{% endif %}</strong></div>
+  <div class="config-fact"><span>Configured ceiling</span><strong>{{ config.max_unsat_slots if config.max_unsat_slots is not none else "Site limit" }}</strong></div>
+  <div class="config-fact"><span>Wedges available</span><strong>{{ mam_stats.wedges if mam_stats else "Syncing…" }}</strong></div>
+  <div class="config-fact"><span>Wedges reserved</span><strong>{{ config.wedge_buffer }}</strong></div>
 </section>
+
+<form action="/config" method="post" class="config-editor">
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h2>Download policy</h2>
+        <p>These safeguards are consulted before HeavyMLM hands anything to qBittorrent.</p>
+      </div>
+      <span class="chip">Applies immediately</span>
+    </header>
+    <div class="panel-body setting-grid">
+      <label class="setting-field">
+        <span>Minimum ratio</span>
+        <input type="number" name="min_ratio" min="0.01" step="0.01" required value="{{ config.min_ratio }}">
+        <small>Ratio reserve used for downloads that are not freeleech.</small>
+      </label>
+      <label class="setting-field">
+        <span>Maximum filled slots</span>
+        <input type="number" name="max_unsat_slots" min="0" step="1" placeholder="Use site limit" value="{% if config.max_unsat_slots is not none %}{{ config.max_unsat_slots }}{% endif %}">
+        <small>For a 150-slot account, enter 140 to permanently keep at least 10 slots open.</small>
+      </label>
+      <label class="setting-field">
+        <span>Minimum open slots</span>
+        <input type="number" name="unsat_buffer" min="0" step="1" required value="{{ config.unsat_buffer }}">
+        <small>Existing buffer safeguard. HeavyMLM always obeys whichever slot rule is stricter.</small>
+      </label>
+      <label class="setting-field">
+        <span>Freeleech wedges to reserve</span>
+        <input type="number" name="wedge_buffer" min="0" step="1" required value="{{ config.wedge_buffer }}">
+        <small>Wedge-first mode stops spending when this many wedges remain.</small>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="prefer_wedges" value="true"{% if config.prefer_wedges %} checked{% endif %}>
+        <span><strong>Prefer freeleech wedges</strong><small>Wedge non-free torrents first, then fall back to their normal cost rule after the reserve is reached.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="add_torrents_stopped" value="true"{% if config.add_torrents_stopped %} checked{% endif %}>
+        <span><strong>Add torrents paused</strong><small>Send new torrents to qBittorrent without starting them automatically.</small></span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div><h2>Scheduler timing</h2><p>Saving restarts the in-process scheduler so new intervals take effect immediately.</p></div>
+    </header>
+    <div class="panel-body setting-grid three">
+      <label class="setting-field">
+        <span>Search interval</span>
+        <input type="number" name="search_interval" min="1" step="1" required value="{{ config.search_interval }}">
+        <small>Minutes between autograb searches.</small>
+      </label>
+      <label class="setting-field">
+        <span>List refresh interval</span>
+        <input type="number" name="import_interval" min="1" step="1" required value="{{ config.import_interval }}">
+        <small>Minutes between Goodreads and Notion refreshes.</small>
+      </label>
+      <label class="setting-field">
+        <span>Organizer interval</span>
+        <input type="number" name="link_interval" min="1" step="1" required value="{{ config.link_interval }}">
+        <small>Minutes between library organization passes.</small>
+      </label>
+    </div>
+  </section>
+
+  <div class="config-savebar">
+    <div><strong>Safe save</strong><span>Nested connections, credentials, lists, tags, and library definitions remain untouched.</span></div>
+    <button class="primary" type="submit">Save and apply</button>
+  </div>
+</form>
 
 <section class="panel">
   <header class="panel-header">
-    <div><h2>Loaded configuration</h2><p>Edit the TOML file and restart HeavyMLM to apply changes.</p></div>
+    <div><h2>Protected configuration</h2><p>Review the rest of the loaded configuration without exposing credentials.</p></div>
     <span class="chip">Read only</span>
   </header>
   <div class="panel-body">
-    <div class="security-note">
-      <strong>Security:</strong> MaM, qBittorrent, Notion, and Audiobookshelf credentials are hidden in this view.
-    </div>
+    <div class="security-note"><strong>Security:</strong> MaM, qBittorrent, Notion, and Audiobookshelf credentials remain redacted and cannot be changed through the browser.</div>
   </div>
-  <details>
-    <summary>Show redacted configuration</summary>
-    <pre>{{ config | tojson(indent=2) }}</pre>
-  </details>
+  <details><summary>Show redacted configuration</summary><pre>{{ config | tojson(indent=2) }}</pre></details>
 </section>
 {% endblock %}

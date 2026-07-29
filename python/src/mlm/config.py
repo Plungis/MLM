@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -29,7 +30,9 @@ class Config:
     web_port: int = 3157
     min_ratio: float = 2.0
     unsat_buffer: int = 10
+    max_unsat_slots: int | None = None
     wedge_buffer: int = 0
+    prefer_wedges: bool = False
     add_torrents_stopped: bool = False
     exclude_narrator_in_library_dir: bool = False
     search_interval: int = 30
@@ -111,6 +114,64 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
         }
         for name in tuple_fields & raw.keys():
             raw[name] = tuple(raw[name])
-        return Config(qbittorrent=qbit, **raw)
+        config = Config(qbittorrent=qbit, **raw)
+        if config.min_ratio <= 0:
+            raise ConfigError("min_ratio must be greater than zero")
+        if config.unsat_buffer < 0:
+            raise ConfigError("unsat_buffer cannot be negative")
+        if config.max_unsat_slots is not None and config.max_unsat_slots < 0:
+            raise ConfigError("max_unsat_slots cannot be negative")
+        if config.wedge_buffer < 0:
+            raise ConfigError("wedge_buffer cannot be negative")
+        for name in ("search_interval", "link_interval", "import_interval"):
+            if int(getattr(config, name)) < 1:
+                raise ConfigError(f"{name} must be at least 1 minute")
+        return config
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid configuration: {error}") from error
+
+
+def _toml_scalar(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    raise ConfigError(f"unsupported editable value: {value!r}")
+
+
+def save_root_config_values(path: Path, values: Mapping[str, object | None]) -> Config:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ConfigError(f"could not read config {path}: {error}") from error
+
+    table = re.search(r"(?m)^[ \t]*\[", text)
+    position = table.start() if table else len(text)
+    root = text[:position]
+    suffix = text[position:]
+    missing: list[str] = []
+    for key, value in values.items():
+        pattern = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=.*(?:\r?\n|$)")
+        if value is None:
+            root = pattern.sub("", root)
+            continue
+        replacement = f"{key} = {_toml_scalar(value)}\n"
+        root, count = pattern.subn(replacement, root, count=1)
+        if count == 0:
+            missing.append(replacement)
+
+    if missing:
+        root = root.rstrip() + "\n" + "".join(missing) + "\n"
+    text = root + suffix.lstrip("\r\n")
+
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        load_config(temporary, environment={})
+        os.replace(temporary, path)
+    except (OSError, ConfigError) as error:
+        temporary.unlink(missing_ok=True)
+        if isinstance(error, ConfigError):
+            raise
+        raise ConfigError(f"could not save config {path}: {error}") from error
+    return load_config(path)

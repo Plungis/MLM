@@ -4,9 +4,26 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from mlm.config import load_config
 from mlm.database import connect, ensure_database
 from mlm.migration import canonical_json
 from mlm.web import create_app
+
+
+class FakeServices:
+    def __init__(self, config) -> None:
+        self.config = config
+        self.jobs = {}
+        self.mam_stats = {
+            "slots_used": 100,
+            "slots_total": 150,
+            "slot_cap": 140,
+            "wedges": 8,
+            "wedge_buffer": 3,
+        }
+
+    async def reconfigure(self, config) -> None:
+        self.config = config
 
 
 def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
@@ -55,3 +72,24 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert diagnostics.status_code == 200
     assert "Activity console" in diagnostics.text
     assert "Auto-refresh paused" in diagnostics.text
+
+    app.state.services = FakeServices(load_config(config))
+    saved = client.post(
+        "/config",
+        data={
+            "min_ratio": "2.5",
+            "unsat_buffer": "10",
+            "max_unsat_slots": "140",
+            "wedge_buffer": "3",
+            "prefer_wedges": "true",
+            "search_interval": "20",
+            "import_interval": "60",
+            "link_interval": "5",
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    updated = load_config(config)
+    assert updated.max_unsat_slots == 140
+    assert updated.wedge_buffer == 3
+    assert updated.prefer_wedges is True

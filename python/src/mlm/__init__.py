@@ -1,3 +1,3 @@
 """Python implementation of Myanonamouse Library Manager."""
 
-__version__ = "0.5.0b8"
+__version__ = "0.5.0b9"

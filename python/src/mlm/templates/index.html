@@ -19,6 +19,23 @@
 </div>
 {% endif %}
 
+{% if mam_stats %}
+{% set slot_percent = (mam_stats.slots_used * 100 / mam_stats.slots_total) if mam_stats.slots_total else 0 %}
+{% set wedge_spendable = [mam_stats.wedges - mam_stats.wedge_buffer, 0] | max %}
+<section class="capacity-grid" aria-label="MaM capacity">
+  <article class="capacity-card">
+    <header><span>Unsatisfied slots</span><strong>{{ mam_stats.slots_used }} / {{ mam_stats.slots_total }}</strong></header>
+    <div class="capacity-track"><span style="width: {{ [slot_percent, 100] | min }}%"></span></div>
+    <p>Hard stop at <strong>{{ mam_stats.slot_cap }}</strong> filled · {{ [mam_stats.slot_cap - mam_stats.slots_used, 0] | max }} downloads available before the cap</p>
+  </article>
+  <article class="capacity-card">
+    <header><span>Freeleech wedges</span><strong>{{ mam_stats.wedges }}</strong></header>
+    <div class="capacity-split"><span>{{ wedge_spendable }} spendable</span><span>{{ mam_stats.wedge_buffer }} reserved</span></div>
+    <p>{% if mam_stats.wedges > mam_stats.wedge_buffer %}Wedge-first capacity is available.{% else %}Wedge reserve reached; normal cost rules apply.{% endif %}</p>
+  </article>
+</section>
+{% endif %}
+
 <section class="metric-grid" aria-label="Library metrics">
   {% for key,label,help in [
     ("torrents","Library","organized titles"),

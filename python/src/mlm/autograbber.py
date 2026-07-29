@@ -67,8 +67,13 @@ async def run_autograbber(
 ) -> int:
     user = await mam.user_info()
     unsat = user.get("unsat", {})
-    available = max(0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0)))
-    maximum = max(0, available - int(rule.get("unsat_buffer", config.unsat_buffer)))
+    site_limit = max(0, int(unsat.get("limit", 0)))
+    used = max(0, int(unsat.get("count", 0)))
+    slot_buffer = int(rule.get("unsat_buffer", config.unsat_buffer))
+    slot_cap = max(0, site_limit - slot_buffer)
+    if config.max_unsat_slots is not None:
+        slot_cap = min(slot_cap, config.max_unsat_slots)
+    maximum = max(0, slot_cap - used)
     if rule.get("max_active_downloads") is not None:
         active = sum(
             selected.get("grabber") == rule.get("name", str(index))

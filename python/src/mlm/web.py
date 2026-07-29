@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -13,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import __version__
 from .autograbber import select_row
-from .config import Config, load_config
+from .config import Config, ConfigError, load_config, save_root_config_values
 from .database import ensure_database
 from .mam import authenticated_mam_client
 from .repository import Repository
@@ -60,6 +61,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     app = FastAPI(title="Myanonamouse Library Manager", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
+    def active_config() -> Config:
+        if hasattr(app.state, "services"):
+            return app.state.services.config
+        return config
+
     def context(request: Request, **values: object) -> dict:
         counts = repository.counts()
         return {
@@ -69,6 +75,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "list_tracking": repository.list_tracking_counts(),
             "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
+            "mam_stats": (
+                app.state.services.mam_stats if hasattr(app.state, "services") else {}
+            ),
             "version": __version__,
             **values,
         }
@@ -104,8 +113,66 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "config.html",
-            context(request, title="Configuration", config=_redacted_config(config)),
+            context(
+                request,
+                title="Configuration",
+                config=_redacted_config(active_config()),
+                saved=request.query_params.get("saved") == "1",
+                error=None,
+            ),
         )
+
+    @app.post("/config", response_class=HTMLResponse)
+    async def save_config(
+        request: Request,
+        min_ratio: str = Form(...),
+        unsat_buffer: str = Form(...),
+        max_unsat_slots: str = Form(""),
+        wedge_buffer: str = Form(...),
+        prefer_wedges: str | None = Form(None),
+        add_torrents_stopped: str | None = Form(None),
+        search_interval: str = Form(...),
+        import_interval: str = Form(...),
+        link_interval: str = Form(...),
+    ) -> HTMLResponse:
+        client_host = request.client.host if request.client else ""
+        try:
+            if (
+                client_host != "testclient"
+                and not ipaddress.ip_address(client_host).is_loopback
+            ):
+                raise ConfigError(
+                    "configuration changes are only allowed from this computer"
+                )
+            values: dict[str, object | None] = {
+                "min_ratio": float(min_ratio),
+                "unsat_buffer": int(unsat_buffer),
+                "max_unsat_slots": (
+                    int(max_unsat_slots) if max_unsat_slots.strip() else None
+                ),
+                "wedge_buffer": int(wedge_buffer),
+                "prefer_wedges": prefer_wedges is not None,
+                "add_torrents_stopped": add_torrents_stopped is not None,
+                "search_interval": int(search_interval),
+                "import_interval": int(import_interval),
+                "link_interval": int(link_interval),
+            }
+            updated = save_root_config_values(config_path, values)
+            await app.state.services.reconfigure(updated)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "config.html",
+                context(
+                    request,
+                    title="Configuration",
+                    config=_redacted_config(active_config()),
+                    saved=False,
+                    error=str(error),
+                ),
+                status_code=400,
+            )
+        return RedirectResponse("/config?saved=1", status_code=303)
 
     @app.get("/diagnostics", response_class=HTMLResponse)
     async def diagnostics(request: Request, component: str = "") -> HTMLResponse:
@@ -152,7 +219,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if not row:
             raise HTTPException(404, f"MaM torrent {mam_id} was not found")
         selected = await select_row(
-            config,
+            app.state.services.config,
             repository,
             row,
             {"cost": "ratio", "name": "manual"},

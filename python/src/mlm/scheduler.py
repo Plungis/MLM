@@ -33,6 +33,7 @@ class ServiceState:
     repository: Repository
     mam: MamClient
     jobs: dict[str, JobStatus] = field(default_factory=dict)
+    mam_stats: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task] = field(default_factory=list)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -96,13 +97,21 @@ class ServiceState:
             for index in range(len(self.config.qbittorrent)):
                 qbit, _ = await self._qbit(index)
                 qbits.append(qbit)
-            return await grab_selected_torrents(
+            result = await grab_selected_torrents(
                 self.config,
                 self.repository,
                 self.mam,
                 qbits[0],
                 other_qbits=qbits[1:],
             )
+            self.mam_stats = {
+                "slots_used": result.slots_used,
+                "slots_total": result.slots_total,
+                "slot_cap": result.slot_cap,
+                "wedges": result.wedges_remaining,
+                "wedge_buffer": result.wedge_buffer,
+            }
+            return result
         finally:
             for qbit in qbits:
                 await qbit.close()
@@ -268,6 +277,29 @@ class ServiceState:
                 name="cleaner",
             )
         )
+
+    async def reconfigure(self, config: Config) -> None:
+        for task in self.tasks:
+            task.cancel()
+        for task in self.tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self.tasks.clear()
+        self.stop_event = asyncio.Event()
+        self.config = config
+        self.repository.log_activity(
+            "configuration",
+            "Applied configuration without restarting HeavyMLM",
+            level="success",
+            context={
+                "min_ratio": config.min_ratio,
+                "max_unsat_slots": config.max_unsat_slots,
+                "unsat_buffer": config.unsat_buffer,
+                "prefer_wedges": config.prefer_wedges,
+                "wedge_buffer": config.wedge_buffer,
+            },
+        )
+        self.start()
 
     async def close(self) -> None:
         self.stop_event.set()

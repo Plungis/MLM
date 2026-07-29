@@ -19,6 +19,11 @@ class DownloadRun:
     skip_reasons: dict[str, int] = field(default_factory=dict)
     available_slots: int = 0
     ratio_buffer_bytes: int = 0
+    slots_used: int = 0
+    slots_total: int = 0
+    slot_cap: int = 0
+    wedges_remaining: int = 0
+    wedge_buffer: int = 0
 
 
 async def _torrent_file_with_backoff(
@@ -50,7 +55,10 @@ async def grab_selected_torrents(
     )
     user = await mam.user_info()
     unsat = user.get("unsat", {})
-    available_slots = max(0, int(unsat.get("limit", 0)) - int(unsat.get("count", 0)))
+    slots_total = max(0, int(unsat.get("limit", 0)))
+    slots_used = max(0, int(unsat.get("count", 0)))
+    available_slots = max(0, slots_total - slots_used)
+    wedges_remaining = max(0, int(user.get("wedges", 0)))
     downloading_size = repository.selected_pipeline_status()["downloading_bytes"]
     remaining_buffer = (
         float(user.get("uploaded_bytes", 0))
@@ -66,8 +74,11 @@ async def grab_selected_torrents(
                 if selected.get("unsat_buffer") is not None
                 else config.unsat_buffer
             )
+            slot_cap = max(0, slots_total - slot_buffer)
+            if config.max_unsat_slots is not None:
+                slot_cap = min(slot_cap, config.max_unsat_slots)
             size = int(selected.get("meta", {}).get("size", 0))
-            if available_slots - downloaded <= slot_buffer:
+            if slots_used + downloaded >= slot_cap:
                 skipped += 1
                 skip_reasons["unsat_slots"] += 1
                 repository.log_activity(
@@ -76,22 +87,11 @@ async def grab_selected_torrents(
                     level="warning",
                     context={
                         "mam_id": torrent_id,
+                        "slots_used": slots_used + downloaded,
+                        "slots_total": slots_total,
+                        "slot_cap": slot_cap,
                         "available_slots": available_slots,
                         "slot_buffer": slot_buffer,
-                    },
-                )
-                continue
-            if remaining_buffer - size <= 0:
-                skipped += 1
-                skip_reasons["ratio_buffer"] += 1
-                repository.log_activity(
-                    "downloader",
-                    f"Deferred MaM #{torrent_id}: ratio reserve",
-                    level="warning",
-                    context={
-                        "mam_id": torrent_id,
-                        "torrent_bytes": size,
-                        "ratio_buffer_bytes": max(0, int(remaining_buffer)),
                     },
                 )
                 continue
@@ -107,30 +107,68 @@ async def grab_selected_torrents(
                         break
             wedged = False
             cost = selected.get("cost")
-            if not existing and cost in {"UseWedge", "TryWedge"}:
-                wedge_buffer = int(
-                    selected.get("wedge_buffer")
-                    if selected.get("wedge_buffer") is not None
-                    else config.wedge_buffer
-                )
-                if int(user.get("wedges", 0)) <= wedge_buffer:
-                    raise MamWedgeError(
-                        f"fewer wedges than configured wedge buffer ({wedge_buffer})"
+            wedge_buffer = int(
+                selected.get("wedge_buffer")
+                if selected.get("wedge_buffer") is not None
+                else config.wedge_buffer
+            )
+            current = None
+            currently_free = False
+            if not existing and (config.prefer_wedges or cost != "Ratio"):
+                current = await mam.get_torrent_info(torrent_hash)
+                currently_free = bool(
+                    current
+                    and any(
+                        current.get(field)
+                        for field in ("free", "personal_freeleech", "fl_vip", "vip")
                     )
+                )
+            wants_wedge = (
+                not existing
+                and not currently_free
+                and (config.prefer_wedges or cost in {"UseWedge", "TryWedge"})
+            )
+            if wants_wedge and wedges_remaining > wedge_buffer:
                 try:
                     await mam.wedge_torrent(torrent_id)
                     wedged = True
-                    user["wedges"] = max(0, int(user.get("wedges", 0)) - 1)
+                    wedges_remaining -= 1
+                    user["wedges"] = wedges_remaining
                 except MamWedgeError:
                     if cost == "UseWedge":
                         raise
-            elif not existing and cost != "Ratio":
-                current = await mam.get_torrent_info(torrent_hash)
-                if not current or not any(
-                    current.get(field)
-                    for field in ("free", "personal_freeleech", "fl_vip", "vip")
-                ):
-                    raise RuntimeError("torrent is no longer free")
+            elif wants_wedge and cost == "UseWedge":
+                raise MamWedgeError(
+                    f"wedge reserve reached ({wedges_remaining} available, "
+                    f"{wedge_buffer} reserved)"
+                )
+            if (
+                not existing
+                and not wedged
+                and cost not in {"Ratio", "TryWedge"}
+                and not currently_free
+            ):
+                raise RuntimeError("torrent is no longer free")
+            uses_ratio = (
+                not existing
+                and not wedged
+                and not currently_free
+                and cost in {"Ratio", "TryWedge"}
+            )
+            if uses_ratio and remaining_buffer - size <= 0:
+                skipped += 1
+                skip_reasons["ratio_buffer"] += 1
+                repository.log_activity(
+                    "downloader",
+                    f"Deferred MaM #{torrent_id}: ratio reserve",
+                    level="warning",
+                    context={
+                        "mam_id": torrent_id,
+                        "torrent_bytes": size,
+                        "ratio_buffer_bytes": max(0, int(remaining_buffer)),
+                    },
+                )
+                continue
             if not existing:
                 await qbit.add_torrent(
                     torrent_file,
@@ -140,7 +178,8 @@ async def grab_selected_torrents(
                 )
             repository.record_started(selected, torrent_hash, wedged=wedged)
             downloaded += 1
-            remaining_buffer -= size
+            if uses_ratio:
+                remaining_buffer -= size
             repository.log_activity(
                 "downloader",
                 f"Added MaM #{torrent_id} to qBittorrent",
@@ -172,6 +211,16 @@ async def grab_selected_torrents(
         skip_reasons={key: value for key, value in skip_reasons.items() if value},
         available_slots=available_slots,
         ratio_buffer_bytes=starting_ratio_buffer,
+        slots_used=min(slots_total, slots_used + downloaded),
+        slots_total=slots_total,
+        slot_cap=min(
+            max(0, slots_total - config.unsat_buffer),
+            config.max_unsat_slots
+            if config.max_unsat_slots is not None
+            else slots_total,
+        ),
+        wedges_remaining=wedges_remaining,
+        wedge_buffer=config.wedge_buffer,
     )
     repository.log_activity(
         "downloader",
@@ -182,6 +231,10 @@ async def grab_selected_torrents(
             "failed": result.failed,
             "skipped": result.skipped,
             "skip_reasons": result.skip_reasons,
+            "slots_used": result.slots_used,
+            "slot_cap": result.slot_cap,
+            "wedges_remaining": result.wedges_remaining,
+            "wedge_buffer": result.wedge_buffer,
         },
     )
     return result
