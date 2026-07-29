@@ -410,6 +410,135 @@ h3 {
   color: var(--warning);
 }
 
+.job-monitor {
+  margin-bottom: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(4, 20, 10, 0.97);
+  box-shadow: 0 0 28px rgba(43, 220, 88, 0.1);
+}
+
+.job-monitor[hidden] {
+  display: none;
+}
+
+.job-monitor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 17px 12px;
+}
+
+.job-monitor-header .eyebrow {
+  margin-bottom: 4px;
+}
+
+.job-monitor-header h2,
+.job-monitor-header p {
+  margin-bottom: 0;
+}
+
+.job-monitor-header p:last-child {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.job-progress-track {
+  height: 3px;
+  overflow: hidden;
+  background: rgba(43, 220, 88, 0.12);
+}
+
+.job-progress-track span {
+  display: block;
+  width: 8%;
+  height: 100%;
+  background: var(--line);
+  box-shadow: 0 0 10px var(--line);
+  transition: width 240ms ease;
+}
+
+.job-trace {
+  border-top: 1px dashed var(--line-soft);
+}
+
+.job-trace > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  padding: 10px 17px;
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.job-trace ol {
+  max-height: 360px;
+  margin: 0;
+  overflow-y: auto;
+  border-top: 1px dashed var(--line-soft);
+  padding: 8px 17px 12px 40px;
+}
+
+.job-trace li {
+  border-bottom: 1px dashed rgba(43, 220, 88, 0.1);
+  padding: 7px 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.job-trace li.warning {
+  color: var(--warning);
+}
+
+.job-trace li.error {
+  color: var(--danger);
+}
+
+.job-trace li.success {
+  color: var(--accent);
+}
+
+.job-trace li > div {
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) minmax(7rem, auto) 1fr;
+  gap: 10px;
+}
+
+.job-trace time,
+.job-trace code {
+  color: var(--dim);
+}
+
+.job-trace details {
+  margin: 5px 0 0;
+}
+
+.job-trace pre {
+  max-height: 180px;
+  margin: 5px 0 0;
+  overflow: auto;
+  color: var(--muted);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.button.disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

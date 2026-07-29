@@ -8,6 +8,12 @@ The auto downloader can both use configured searches similar to RSS, and Goodrea
 
 The library organizer will only link one audio file type and one ebook file type per torrent. So e.g. an audiobook torrent with both m4b and pdf files will have both linked, but an ebook torrent with both and epub and mobi will only have the epub linked.
 
+Organizer runs expose a live, expandable background trace on the dashboard,
+including completion checks, category routing, metadata lookups, source and
+destination paths, file placement, skips, and failures. Large file copies run
+outside the web request loop, SQLite permits concurrent UI reads, and record
+views are paginated to keep navigation responsive while background work runs.
+
 Limitations:
 
 - At the moment MLM only works with qbittorrent

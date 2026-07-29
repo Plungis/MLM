@@ -12,12 +12,33 @@
   </div>
 </header>
 
-{% if triggered %}
-<div class="flash" role="status">
-  <span>Job queued: <code>{{ triggered }}</code></span>
-  <span class="status running">Running</span>
-</div>
-{% endif %}
+<section
+  class="job-monitor"
+  data-job-monitor
+  data-focus-job="{{ triggered or '' }}"
+  {% if not triggered %}hidden{% endif %}
+  aria-live="polite"
+>
+  <header class="job-monitor-header">
+    <div>
+      <p class="eyebrow">Background trace</p>
+      <h2 data-job-title>
+        {% if triggered %}Job queued: {{ triggered }}{% else %}Background job{% endif %}
+      </h2>
+      <p data-job-summary>Waiting for the worker to report its first step.</p>
+    </div>
+    <span class="status running" data-job-state>Starting</span>
+  </header>
+  <div class="job-progress-track" aria-hidden="true">
+    <span data-job-progress-bar></span>
+  </div>
+  <details class="job-trace" open>
+    <summary><span>Show background activity</span><span data-job-event-count>0 events</span></summary>
+    <ol data-job-events>
+      <li class="info"><span>Waiting for live job data…</span></li>
+    </ol>
+  </details>
+</section>
 
 {% if mam_stats %}
 {% set slot_percent = (mam_stats.slots_used * 100 / mam_stats.slots_total) if mam_stats.slots_total else 0 %}

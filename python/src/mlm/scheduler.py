@@ -25,6 +25,7 @@ class JobStatus:
     last_error: str | None = None
     last_result: object | None = None
     running: bool = False
+    progress: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -37,6 +38,25 @@ class ServiceState:
     tasks: list[asyncio.Task] = field(default_factory=list)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
 
+    def report_progress(
+        self,
+        name: str,
+        message: str,
+        *,
+        level: str = "info",
+        context: dict[str, object] | None = None,
+    ) -> None:
+        status = self.jobs.setdefault(name, JobStatus())
+        status.progress.append(
+            {
+                "created_at": datetime.now(UTC).isoformat(),
+                "level": level,
+                "message": message,
+                "context": context or {},
+            }
+        )
+        del status.progress[:-150]
+
     async def run_job(self, name: str, job: Callable[[], Awaitable[object]]) -> None:
         status = self.jobs.setdefault(name, JobStatus())
         if status.running:
@@ -45,12 +65,20 @@ class ServiceState:
         status.last_run = datetime.now(UTC).isoformat()
         status.last_error = None
         status.last_result = None
+        status.progress.clear()
+        self.report_progress(name, "Job started", context={"job": name})
         self.repository.log_activity(
             "scheduler", f"Started job: {name}", context={"job": name}
         )
         try:
             result = await job()
             status.last_result = asdict(result) if is_dataclass(result) else result
+            self.report_progress(
+                name,
+                "Job completed",
+                level="success",
+                context={"result": status.last_result},
+            )
             self.repository.log_activity(
                 "scheduler",
                 f"Completed job: {name}",
@@ -61,6 +89,11 @@ class ServiceState:
             raise
         except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
             status.last_error = f"{type(error).__name__}: {error}"
+            self.report_progress(
+                name,
+                f"Job failed: {status.last_error}",
+                level="error",
+            )
             self.repository.log_activity(
                 "scheduler",
                 f"Job failed: {name}",
@@ -117,10 +150,20 @@ class ServiceState:
                 await qbit.close()
 
     async def organizer(self, index: int) -> object:
+        job_name = f"organizer:{index}"
         qbit, qbit_config = await self._qbit(index)
         try:
             return await organize_completed(
-                self.config, self.repository, qbit_config, qbit, self.mam
+                self.config,
+                self.repository,
+                qbit_config,
+                qbit,
+                self.mam,
+                progress=lambda message, level="info", context=None: (
+                    self.report_progress(
+                        job_name, message, level=level, context=context
+                    )
+                ),
             )
         finally:
             await qbit.close()

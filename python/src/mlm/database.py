@@ -100,9 +100,10 @@ DATA_TABLES = (
 
 
 def connect(path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, timeout=5)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     return connection
 
 
@@ -114,6 +115,8 @@ def ensure_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(path)
     try:
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
         if (
             not path.exists()
             or not connection.execute(

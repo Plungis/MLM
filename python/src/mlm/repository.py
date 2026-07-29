@@ -382,7 +382,9 @@ class Repository:
             )
             return {str(row[0]): int(row[1]) for row in rows}
 
-    def table_rows(self, table: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    def table_rows(
+        self, table: str, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
         allowed = {
             "torrents",
             "selected_torrents",
@@ -397,12 +399,12 @@ class Repository:
         order = "created_at_json DESC" if table != "lists" else "title"
         with connect(self.path) as connection:
             rows = connection.execute(
-                f"SELECT payload_json FROM {table} ORDER BY {order} LIMIT ?",
-                (limit,),
+                f"SELECT payload_json FROM {table} ORDER BY {order} LIMIT ? OFFSET ?",
+                (limit, offset),
             )
             return [json.loads(row[0]) for row in rows]
 
-    def counts(self) -> dict[str, int]:
+    def ui_snapshot(self) -> dict[str, Any]:
         tables = (
             "torrents",
             "selected_torrents",
@@ -413,10 +415,48 @@ class Repository:
             "list_items",
         )
         with connect(self.path) as connection:
-            return {
-                table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            counts = {
+                table: int(
+                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                )
                 for table in tables
             }
+            pipeline_row = connection.execute(
+                """SELECT
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN 1 ELSE 0 END),
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NOT NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN 1 ELSE 0 END),
+                     SUM(CASE
+                       WHEN json_extract(payload_json, '$.started_at') IS NOT NULL
+                        AND json_extract(payload_json, '$.removed_at') IS NULL
+                       THEN COALESCE(
+                         CAST(json_extract(payload_json, '$.meta.size') AS INTEGER), 0
+                       ) ELSE 0 END)
+                   FROM selected_torrents"""
+            ).fetchone()
+            tracking_rows = connection.execute(
+                """SELECT COALESCE(json_extract(payload_json, '$.status'), 'legacy'),
+                          COUNT(*)
+                   FROM list_items GROUP BY 1"""
+            )
+            tracking = {str(row[0]): int(row[1]) for row in tracking_rows}
+        return {
+            "counts": counts,
+            "pipeline": {
+                "awaiting": int(pipeline_row[0] or 0),
+                "downloading": int(pipeline_row[1] or 0),
+                "downloading_bytes": int(pipeline_row[2] or 0),
+            },
+            "list_tracking": tracking,
+        }
+
+    def counts(self) -> dict[str, int]:
+        return self.ui_snapshot()["counts"]
 
     def delete_selected(self, mam_id: int) -> None:
         with connect(self.path) as connection:

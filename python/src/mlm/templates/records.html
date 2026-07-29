@@ -9,7 +9,7 @@
     {% elif table == "list_items" %}
     <p class="subtitle">Persistent source memory. Every refresh updates these entries and skips anything already grabbed in an earlier run.</p>
     {% else %}
-    <p class="subtitle">Review {{ rows | length }} stored {{ "record" if rows | length == 1 else "records" }}. Raw details stay collapsed until you need them.</p>
+    <p class="subtitle">Review stored records in fast, 50-item pages. Raw details stay collapsed until you need them.</p>
     {% endif %}
   </div>
   <div class="page-meta">
@@ -20,7 +20,9 @@
     <span class="chip">{{ list_tracking.get("selected", 0) + list_tracking.get("already_grabbed", 0) }} grabbed</span>
     <span class="chip">{{ list_tracking.get("no_match", 0) }} no match</span>
     {% else %}
-    <span class="chip">{{ rows | length }} records</span>
+    <span class="chip">
+      {% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}
+    </span>
     {% endif %}
     {% if table == "selected_torrents" %}<a class="button primary" href="/search">Add release</a>{% endif %}
   </div>
@@ -86,4 +88,19 @@
   </div>
   {% endif %}
 </section>
+{% if page_count > 1 %}
+<nav class="pagination" aria-label="Record pages">
+  {% if page > 1 %}
+  <a class="button" href="/records/{{ table }}?page={{ page - 1 }}">Previous</a>
+  {% else %}
+  <span class="button disabled">Previous</span>
+  {% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}
+  <a class="button" href="/records/{{ table }}?page={{ page + 1 }}">Next</a>
+  {% else %}
+  <span class="button disabled">Next</span>
+  {% endif %}
+</nav>
+{% endif %}
 {% endblock %}

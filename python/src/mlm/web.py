@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -42,6 +44,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     ensure_database(database_path)
     config = load_config(config_path)
     repository = Repository(database_path)
+    snapshot_cache: dict[str, object] = {"expires": 0.0, "value": None}
+    snapshot_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -66,13 +70,28 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return app.state.services.config
         return config
 
-    def context(request: Request, **values: object) -> dict:
-        counts = repository.counts()
+    async def ui_snapshot() -> dict:
+        now = time.monotonic()
+        cached = snapshot_cache["value"]
+        if cached is not None and now < float(snapshot_cache["expires"]):
+            return cached  # type: ignore[return-value]
+        async with snapshot_lock:
+            now = time.monotonic()
+            cached = snapshot_cache["value"]
+            if cached is not None and now < float(snapshot_cache["expires"]):
+                return cached  # type: ignore[return-value]
+            snapshot = await asyncio.to_thread(repository.ui_snapshot)
+            snapshot_cache.update(value=snapshot, expires=now + 0.75)
+            return snapshot
+
+    async def context(request: Request, **values: object) -> dict:
+        snapshot = await ui_snapshot()
+        counts = snapshot["counts"]
         return {
             "request": request,
             "counts": counts,
-            "pipeline": repository.selected_pipeline_status(),
-            "list_tracking": repository.list_tracking_counts(),
+            "pipeline": snapshot["pipeline"],
+            "list_tracking": snapshot["list_tracking"],
             "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
             "mam_stats": (
@@ -87,7 +106,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "index.html",
-            context(
+            await context(
                 request,
                 title="Dashboard",
                 triggered=request.query_params.get("triggered"),
@@ -95,16 +114,38 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         )
 
     @app.get("/records/{table}", response_class=HTMLResponse)
-    async def records(request: Request, table: str) -> HTMLResponse:
+    async def records(request: Request, table: str, page: int = 1) -> HTMLResponse:
+        page = max(1, page)
+        page_size = 50
         try:
-            rows = repository.table_rows(table)
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
         except ValueError as error:
             raise HTTPException(404, str(error)) from error
+        snapshot = await ui_snapshot()
+        total = int(snapshot["counts"].get(table, 0))
+        page_count = max(1, math.ceil(total / page_size))
+        if page > page_count:
+            return RedirectResponse(
+                f"/records/{table}?page={page_count}", status_code=307
+            )
         return templates.TemplateResponse(
             request,
             "records.html",
-            context(
-                request, title=table.replace("_", " ").title(), table=table, rows=rows
+            await context(
+                request,
+                title=table.replace("_", " ").title(),
+                table=table,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
             ),
         )
 
@@ -113,7 +154,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "config.html",
-            context(
+            await context(
                 request,
                 title="Configuration",
                 config=_redacted_config(active_config()),
@@ -165,7 +206,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "config.html",
-                context(
+                await context(
                     request,
                     title="Configuration",
                     config=_redacted_config(active_config()),
@@ -178,11 +219,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.get("/diagnostics", response_class=HTMLResponse)
     async def diagnostics(request: Request, component: str = "") -> HTMLResponse:
-        activity = repository.recent_activity(limit=300, component=component or None)
+        activity = await asyncio.to_thread(
+            repository.recent_activity, limit=300, component=component or None
+        )
         return templates.TemplateResponse(
             request,
             "diagnostics.html",
-            context(
+            await context(
                 request,
                 title="Diagnostics",
                 activity=activity,
@@ -212,7 +255,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "search.html",
-            context(request, title="Search MaM", query=q, rows=rows, error=error),
+            await context(request, title="Search MaM", query=q, rows=rows, error=error),
         )
 
     @app.post("/search/select")
@@ -246,6 +289,18 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "counts": repository.counts()}
+        snapshot = await ui_snapshot()
+        return {"status": "ok", "counts": snapshot["counts"]}
+
+    @app.get("/api/jobs")
+    async def jobs() -> dict:
+        services = getattr(app.state, "services", None)
+        return {
+            "jobs": (
+                {name: asdict(status) for name, status in services.jobs.items()}
+                if services
+                else {}
+            )
+        }
 
     return app
