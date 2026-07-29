@@ -79,11 +79,17 @@ class QbitClient:
         )
         self._check(response)
 
-    async def torrents(self, *, hashes: Iterable[str] = ()) -> list[dict]:
+    async def torrents(
+        self, *, hashes: Iterable[str] = (), category: str | None = None
+    ) -> list[dict]:
         hashes_value = "|".join(hashes)
-        params = {"hashes": hashes_value} if hashes_value else None
+        params = {}
+        if hashes_value:
+            params["hashes"] = hashes_value
+        if category is not None:
+            params["category"] = category
         response = self._check(
-            await self.client.get("/api/v2/torrents/info", params=params)
+            await self.client.get("/api/v2/torrents/info", params=params or None)
         )
         return response.json()
 

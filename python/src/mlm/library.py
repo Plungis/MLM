@@ -211,6 +211,54 @@ def _progress(
         callback(message, level, context)
 
 
+async def _library_scope_torrents(
+    config: Config,
+    qbit: QbitClient,
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], dict[str, object]]:
+    categories = list(
+        dict.fromkeys(
+            str(library["category"]).strip()
+            for library in config.libraries
+            if str(library.get("category", "")).strip()
+        )
+    )
+    uses_directory_rules = any(
+        str(library.get("download_dir", "")).strip() for library in config.libraries
+    )
+    if uses_directory_rules:
+        candidates = await qbit.torrents()
+        query_mode = "all_for_directory_rules"
+    elif categories:
+        category_results = await asyncio.gather(
+            *(qbit.torrents(category=category) for category in categories)
+        )
+        candidates = [
+            torrent for category_rows in category_results for torrent in category_rows
+        ]
+        query_mode = "configured_categories"
+    else:
+        candidates = []
+        query_mode = "no_library_scope"
+
+    unique: dict[str, dict[str, Any]] = {}
+    for torrent in candidates:
+        torrent_hash = str(torrent.get("hash", ""))
+        if torrent_hash:
+            unique[torrent_hash] = torrent
+    scoped = [
+        (torrent, library)
+        for torrent in unique.values()
+        if (library := find_library(config, torrent)) is not None
+    ]
+    return scoped, {
+        "categories": categories,
+        "directory_rules": uses_directory_rules,
+        "query_mode": query_mode,
+        "returned_by_qbittorrent": len(candidates),
+        "eligible": len(scoped),
+    }
+
+
 async def _organize_torrent(
     config: Config,
     repository: Repository,
@@ -435,13 +483,21 @@ async def organize_completed(
     progress: ProgressCallback | None = None,
 ) -> OrganizerRun:
     result = OrganizerRun()
-    qbit_torrents = await qbit.torrents()
+    scoped_torrents, scope = await _library_scope_torrents(config, qbit)
     _progress(
         progress,
-        f"Loaded {len(qbit_torrents)} torrents from qBittorrent",
-        context={"total": len(qbit_torrents)},
+        (
+            f"Organizer scope: {len(scoped_torrents)} eligible torrents in "
+            f"{', '.join(scope['categories']) or 'configured library paths'}"
+        ),
+        context=scope,
     )
-    for index, qbit_torrent in enumerate(qbit_torrents, start=1):
+    repository.log_activity(
+        "organizer",
+        "Loaded qBittorrent organizer scope",
+        context=scope,
+    )
+    for index, (qbit_torrent, library) in enumerate(scoped_torrents, start=1):
         result.scanned += 1
         torrent_name = str(qbit_torrent.get("name") or qbit_torrent.get("hash"))
         context = {
@@ -450,12 +506,12 @@ async def organize_completed(
             "category": qbit_torrent.get("category"),
             "save_path": qbit_torrent.get("save_path"),
             "current": index,
-            "total": len(qbit_torrents),
+            "total": len(scoped_torrents),
         }
         completion = float(qbit_torrent.get("progress", 0))
         _progress(
             progress,
-            f"[{index}/{len(qbit_torrents)}] Checking {torrent_name}",
+            f"[{index}/{len(scoped_torrents)}] Checking {torrent_name}",
             context={**context, "completion_percent": round(completion * 100, 1)},
         )
         if completion < 1:
@@ -464,31 +520,6 @@ async def organize_completed(
                 progress,
                 f"Waiting for download: {torrent_name} ({completion:.0%})",
                 level="debug",
-                context=context,
-            )
-            continue
-        library = find_library(config, qbit_torrent)
-        if library is None:
-            result.skip("no_matching_library")
-            repository.log_activity(
-                "organizer",
-                f"Skipped {torrent_name}: no configured library matches "
-                "its category or path",
-                level="warning",
-                context={
-                    **context,
-                    "configured_categories": [
-                        row.get("category")
-                        for row in config.libraries
-                        if row.get("category")
-                    ],
-                },
-            )
-            _progress(
-                progress,
-                f"Skipped {torrent_name}: no library matches category "
-                f"{qbit_torrent.get('category') or '(none)'}",
-                level="warning",
                 context=context,
             )
             continue

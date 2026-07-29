@@ -13,6 +13,10 @@ including completion checks, category routing, metadata lookups, source and
 destination paths, file placement, skips, and failures. Large file copies run
 outside the web request loop, SQLite permits concurrent UI reads, and record
 views are paginated to keep navigation responsive while background work runs.
+The organizer asks qBittorrent only for categories explicitly named by
+`[[library]]` rules; unrelated categories never enter the scan. A full
+inventory query is used only when a library intentionally matches by
+`download_dir` instead of category.
 
 Limitations:
 
