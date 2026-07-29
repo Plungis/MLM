@@ -116,10 +116,10 @@ class ServiceState:
             for qbit in qbits:
                 await qbit.close()
 
-    async def organizer(self, index: int) -> None:
+    async def organizer(self, index: int) -> object:
         qbit, qbit_config = await self._qbit(index)
         try:
-            await organize_completed(
+            return await organize_completed(
                 self.config, self.repository, qbit_config, qbit, self.mam
             )
         finally:
@@ -297,6 +297,7 @@ class ServiceState:
                 "unsat_buffer": config.unsat_buffer,
                 "prefer_wedges": config.prefer_wedges,
                 "wedge_buffer": config.wedge_buffer,
+                "grab_both_formats": config.grab_both_formats,
             },
         )
         self.start()

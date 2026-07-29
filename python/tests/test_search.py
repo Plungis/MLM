@@ -47,6 +47,7 @@ def test_filter_size_flags_dates_and_peers() -> None:
         },
     )
     assert parse_size("1.5 GiB") == int(1.5 * (1 << 30))
+    assert parse_size("1,018.3 KiB") == int(1018.3 * (1 << 10))
 
 
 def test_normalize_title_matches_legacy_intent() -> None:

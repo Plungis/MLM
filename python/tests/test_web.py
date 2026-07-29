@@ -82,6 +82,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "max_unsat_slots": "140",
             "wedge_buffer": "3",
             "prefer_wedges": "true",
+            "grab_both_formats": "true",
             "search_interval": "20",
             "import_interval": "60",
             "link_interval": "5",
@@ -93,3 +94,4 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.max_unsat_slots == 140
     assert updated.wedge_buffer == 3
     assert updated.prefer_wedges is True
+    assert updated.grab_both_formats is True

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,18 @@ from .search import normalize_title, torrent_meta
 
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 DISC_PATTERN = re.compile(r"(?:CD|Disc|Disk)\s*(\d+)", re.IGNORECASE)
+
+
+@dataclass
+class OrganizerRun:
+    scanned: int = 0
+    linked: int = 0
+    incomplete: int = 0
+    failed: int = 0
+    skip_reasons: dict[str, int] = field(default_factory=dict)
+
+    def skip(self, reason: str) -> None:
+        self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
 
 
 def sanitize_filename(value: str) -> str:
@@ -42,11 +55,15 @@ def map_path(path_mapping: dict[str, str], save_path: str) -> Path:
 
 def find_library(config: Config, torrent: dict[str, Any]) -> dict[str, Any] | None:
     torrent_tags = {
-        tag.strip() for tag in str(torrent.get("tags", "")).split(",") if tag.strip()
+        tag.strip().casefold()
+        for tag in str(torrent.get("tags", "")).split(",")
+        if tag.strip()
     }
+    torrent_category = str(torrent.get("category", "")).strip().casefold()
     for library in config.libraries:
         by_category = (
-            "category" in library and torrent.get("category") == library["category"]
+            "category" in library
+            and torrent_category == str(library["category"]).strip().casefold()
         )
         by_directory = "download_dir" in library and (
             Path(torrent.get("save_path", "")) == Path(library["download_dir"])
@@ -55,9 +72,10 @@ def find_library(config: Config, torrent: dict[str, Any]) -> dict[str, Any] | No
         )
         if not (by_category or by_directory):
             continue
-        if torrent_tags.intersection(library.get("deny_tags", [])):
+        denied = {str(tag).strip().casefold() for tag in library.get("deny_tags", [])}
+        if torrent_tags.intersection(denied):
             continue
-        allowed = set(library.get("allow_tags", []))
+        allowed = {str(tag).strip().casefold() for tag in library.get("allow_tags", [])}
         if allowed and not torrent_tags.intersection(allowed):
             continue
         return library
@@ -143,7 +161,14 @@ def _place_file(source: Path, destination: Path, method: str) -> None:
             return
         raise FileExistsError(f"library file already exists: {destination}")
     if method == "hardlink":
-        os.link(source, destination)
+        try:
+            os.link(source, destination)
+        except OSError as error:
+            raise OSError(
+                f"could not hardlink {source} to {destination}; if the download and "
+                "library are on different drives, set method = "
+                '"hardlink_or_copy" in that [[library]] section'
+            ) from error
     elif method == "hardlink_or_copy":
         try:
             os.link(source, destination)
@@ -168,13 +193,37 @@ async def organize_completed(
     qbit_config: QbitConfig,
     qbit: QbitClient,
     mam: MamClient,
-) -> int:
-    linked = 0
+) -> OrganizerRun:
+    result = OrganizerRun()
     for qbit_torrent in await qbit.torrents():
+        result.scanned += 1
+        torrent_name = str(qbit_torrent.get("name") or qbit_torrent.get("hash"))
+        context = {
+            "torrent": torrent_name,
+            "hash": qbit_torrent.get("hash"),
+            "category": qbit_torrent.get("category"),
+            "save_path": qbit_torrent.get("save_path"),
+        }
         if float(qbit_torrent.get("progress", 0)) < 1:
+            result.incomplete += 1
             continue
         library = find_library(config, qbit_torrent)
         if library is None:
+            result.skip("no_matching_library")
+            repository.log_activity(
+                "organizer",
+                f"Skipped {torrent_name}: no configured library matches "
+                "its category or path",
+                level="warning",
+                context={
+                    **context,
+                    "configured_categories": [
+                        row.get("category")
+                        for row in config.libraries
+                        if row.get("category")
+                    ],
+                },
+            )
             continue
         torrent_hash = str(qbit_torrent["hash"])
         existing = repository.torrent(torrent_hash)
@@ -186,14 +235,34 @@ async def organize_completed(
             ):
                 repository.mark_removed_from_mam(existing)
         if existing and existing.get("library_path"):
+            result.skip("already_organized")
             continue
         files = await qbit.files(torrent_hash)
         audio = select_format(library.get("audio_types"), config.audio_types, files)
         ebook = select_format(library.get("ebook_types"), config.ebook_types, files)
         if not audio and not ebook:
+            result.skip("no_preferred_files")
+            repository.log_activity(
+                "organizer",
+                f"Skipped {torrent_name}: no preferred audio or ebook file was found",
+                level="warning",
+                context={
+                    **context,
+                    "files": [row.get("name") for row in files],
+                    "audio_types": list(config.audio_types),
+                    "ebook_types": list(config.ebook_types),
+                },
+            )
             continue
         mam_row = await mam.get_torrent_info(torrent_hash)
         if not mam_row:
+            result.skip("missing_mam_metadata")
+            repository.log_activity(
+                "organizer",
+                f"Skipped {torrent_name}: MaM metadata lookup returned no torrent",
+                level="warning",
+                context=context,
+            )
             continue
         meta = torrent_meta(mam_row)
         method = str(library.get("method", "hardlink"))
@@ -205,6 +274,13 @@ async def organize_completed(
             )
         )
         if method != "no_link" and target_dir is None:
+            result.skip("missing_author")
+            repository.log_activity(
+                "organizer",
+                f"Skipped {torrent_name}: metadata has no author for the library path",
+                level="warning",
+                context=context,
+            )
             continue
         library_files: list[str] = []
         if target_dir is not None:
@@ -223,7 +299,13 @@ async def organize_completed(
                 relative = _destination_relative(torrent_path)
                 destination = target_dir / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                _place_file(download_root / torrent_path, destination, method)
+                source = download_root / torrent_path
+                if not source.exists():
+                    raise FileNotFoundError(
+                        f"qBittorrent file was not found at {source}; check the "
+                        "client's save_path and path_mapping configuration"
+                    )
+                _place_file(source, destination, method)
                 library_files.append(str(relative))
             metadata = {"mam": mam_row, "meta": meta}
             (target_dir / "metadata.json").write_text(
@@ -252,5 +334,15 @@ async def organize_completed(
             "client_status": existing.get("client_status") if existing else None,
         }
         repository.record_linked(torrent, meta["mam_id"])
-        linked += 1
-    return linked
+        result.linked += 1
+        repository.log_activity(
+            "organizer",
+            f"Organized {torrent_name} into the library",
+            context={
+                **context,
+                "library_path": str(target_dir) if target_dir else None,
+                "files": sorted(library_files),
+                "method": method,
+            },
+        )
+    return result

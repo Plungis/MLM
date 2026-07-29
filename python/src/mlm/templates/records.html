@@ -60,6 +60,8 @@
           <span class="status error">Removed from source</span>
           {% elif table == "list_items" and row.get("status") in ["selected", "already_grabbed"] %}
           <span class="status ok">{{ row.get("status") | replace("_", " ") }}</span>
+          {% elif table == "list_items" and row.get("status") == "partial" %}
+          <span class="status running">Missing one format</span>
           {% elif table == "list_items" and row.get("status") == "no_match" %}
           <span class="status waiting">No match</span>
           {% else %}

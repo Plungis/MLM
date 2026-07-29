@@ -144,6 +144,30 @@ class Repository:
                     return True
         return False
 
+    def goodreads_formats(self, goodreads_id: int) -> set[str]:
+        formats: set[str] = set()
+        with connect(self.path) as connection:
+            for table in ("selected_torrents", "torrents"):
+                rows = connection.execute(
+                    f"""SELECT json_extract(payload_json, '$.meta.media_type')
+                        FROM {table}
+                        WHERE CAST(json_extract(payload_json, '$.goodreads_id')
+                                   AS INTEGER) = ?""",
+                    (goodreads_id,),
+                )
+                for row in rows:
+                    media_type = str(row[0] or "")
+                    if media_type in {"audiobook", "periodical_audiobook"}:
+                        formats.add("audio")
+                    elif media_type in {
+                        "ebook",
+                        "manga",
+                        "comic_book",
+                        "periodical_ebook",
+                    }:
+                        formats.add("ebook")
+        return formats
+
     def records_with_title(self, title_search: str) -> list[dict[str, Any]]:
         with connect(self.path) as connection:
             rows = connection.execute(

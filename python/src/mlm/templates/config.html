@@ -64,6 +64,10 @@
         <input type="checkbox" name="add_torrents_stopped" value="true"{% if config.add_torrents_stopped %} checked{% endif %}>
         <span><strong>Add torrents paused</strong><small>Send new torrents to qBittorrent without starting them automatically.</small></span>
       </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="grab_both_formats" value="true"{% if config.grab_both_formats %} checked{% endif %}>
+        <span><strong>Grab audiobook and ebook</strong><small>For list imports, track both formats independently and search again only for the version that is still missing.</small></span>
+      </label>
     </div>
   </section>
 

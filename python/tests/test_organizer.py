@@ -78,7 +78,7 @@ def test_organizer_hardlinks_completed_torrent(tmp_path: Path) -> None:
         ),
     )
 
-    linked = asyncio.run(
+    result = asyncio.run(
         organize_completed(
             config,
             repository,
@@ -89,7 +89,8 @@ def test_organizer_hardlinks_completed_torrent(tmp_path: Path) -> None:
     )
 
     destination = library_root / "An Author" / "Book {A Narrator}" / "book.m4b"
-    assert linked == 1
+    assert result.linked == 1
+    assert result.scanned == 1
     assert destination.read_bytes() == b"audio"
     assert os.path.samefile(source, destination)
     stored = repository.torrent("abc123")

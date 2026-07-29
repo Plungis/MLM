@@ -59,6 +59,42 @@ class FakeMam:
         }
 
 
+class BothFormatMam:
+    def __init__(self) -> None:
+        self.searches = 0
+
+    async def search(self, _: dict) -> dict:
+        self.searches += 1
+        common = {
+            "dl": "download-hash",
+            "language": 1,
+            "title": "Example Book",
+            "author_info": {"1": "Example Author"},
+            "size": 1024,
+        }
+        return {
+            "found": 2,
+            "data": [
+                {
+                    **common,
+                    "id": 987,
+                    "dl": "audio-hash",
+                    "mediatype": 1,
+                    "main_cat": 13,
+                    "filetype": "m4b",
+                },
+                {
+                    **common,
+                    "id": 988,
+                    "dl": "ebook-hash",
+                    "mediatype": 2,
+                    "main_cat": 14,
+                    "filetype": "epub",
+                },
+            ],
+        }
+
+
 def test_goodreads_refresh_remembers_previously_selected_items(
     tmp_path: Path,
 ) -> None:
@@ -102,3 +138,47 @@ def test_goodreads_refresh_remembers_previously_selected_items(
         entry["message"] == "Already grabbed: Example Book"
         for entry in repository.recent_activity()
     )
+
+
+def test_goodreads_can_track_and_select_audio_and_ebook_independently(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    mam = BothFormatMam()
+    definition = {
+        "url": "https://www.goodreads.com/review/list_rss/123?shelf=read",
+        "grab": [{"cost": "all"}],
+    }
+    config = Config(mam_id="cookie", grab_both_formats=True)
+
+    first = asyncio.run(
+        run_goodreads_import(
+            config,
+            repository,
+            mam,
+            definition,
+            client=FakeFeedClient(),
+        )
+    )
+    second = asyncio.run(
+        run_goodreads_import(
+            config,
+            repository,
+            mam,
+            definition,
+            client=FakeFeedClient(),
+        )
+    )
+
+    assert first.selected == 2
+    assert second.selected == 0
+    assert second.already_grabbed == 1
+    assert mam.searches == 2
+    item = repository.table_rows("list_items")[0]
+    assert item["selected_formats"] == ["audio", "ebook"]
+    assert item["selected_mam_ids"] == [987, 988]
+    assert item["audio_torrent"] == 987
+    assert item["ebook_torrent"] == 988
+    assert {row["mam_id"] for row in repository.pending_selected()} == {987, 988}

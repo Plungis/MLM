@@ -14,13 +14,17 @@ from .autograbber import select_row
 from .config import Config
 from .mam import MamClient
 from .repository import Repository
-from .search import search_pages
+from .search import search_pages, torrent_meta
 
 SERIES_PATTERN = re.compile(r"(.*?) \(([^)]*?),? #?(\d+(?:\.\d+)?)\)$")
 BOOK_LINK = re.compile(
     r'href=["\']((?:https://www\.goodreads\.com)?/book/show/[^"\']+)'
 )
 COVER_LINK = re.compile(r'<img[^>]+src=["\']([^"\']+)')
+FORMAT_MEDIA_TYPES = {
+    "audio": ["audiobook", "periodical_audiobook"],
+    "ebook": ["ebook", "manga", "comic_book", "periodical_ebook"],
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,7 @@ async def run_goodreads_import(
             "ebook_torrent": None,
             "marked_done_at": None,
             "selected_mam_ids": [],
+            "selected_formats": [],
             "check_count": 0,
         }
         list_item.update(
@@ -143,6 +148,14 @@ async def run_goodreads_import(
                 "source_status": "present",
             }
         )
+        grab_both = bool(definition.get("grab_both_formats", config.grab_both_formats))
+        known_formats = set(list_item.get("selected_formats", []))
+        if list_item.get("audio_torrent"):
+            known_formats.add("audio")
+        if list_item.get("ebook_torrent"):
+            known_formats.add("ebook")
+        if book_id is not None:
+            known_formats.update(repository.goodreads_formats(book_id))
         previously_grabbed = bool(
             list_item.get("marked_done_at")
             or list_item.get("selected_mam_ids")
@@ -150,20 +163,45 @@ async def run_goodreads_import(
             or list_item.get("ebook_torrent")
             or (book_id is not None and repository.has_goodreads_id(book_id))
         )
-        if previously_grabbed:
+        desired_formats = [
+            format_name
+            for format_name, allowed in (
+                ("audio", list_item["allow_audio"]),
+                ("ebook", list_item["allow_ebook"]),
+            )
+            if allowed
+        ]
+        missing_formats = [
+            format_name
+            for format_name in desired_formats
+            if format_name not in known_formats
+        ]
+        if (not grab_both and previously_grabbed) or (
+            grab_both and not missing_formats
+        ):
             already_grabbed += 1
             list_item["status"] = "already_grabbed"
-            list_item["last_result"] = "Skipped: already selected in an earlier run"
+            list_item["selected_formats"] = sorted(known_formats)
+            list_item["last_result"] = (
+                "Skipped: audiobook and ebook already selected"
+                if grab_both
+                else "Skipped: already selected in an earlier run"
+            )
             if not dry_run:
                 repository.upsert_list_item(list_item)
                 repository.log_activity(
                     component,
                     f"Already grabbed: {item_title}",
                     level="debug",
-                    context={"guid": guid_value, "book_id": book_id},
+                    context={
+                        "guid": guid_value,
+                        "book_id": book_id,
+                        "formats": sorted(known_formats),
+                    },
                 )
             continue
 
+        targets = missing_formats if grab_both else ["any"]
         list_item["last_checked_at"] = now
         list_item["check_count"] = int(list_item.get("check_count", 0)) + 1
         if not dry_run:
@@ -171,77 +209,108 @@ async def run_goodreads_import(
         query = " ".join(
             filter(None, [f'"{item_title}"', f'"{author}"' if author else ""])
         )
-        if not dry_run:
-            repository.log_activity(
-                component,
-                f"Searching MaM: {item_title}",
-                level="debug",
-                context={
-                    "guid": guid_value,
-                    "book_id": book_id,
-                    "query": query,
-                    "rules": len(definition.get("grab", [])),
-                },
-            )
-        matched_torrent_id: int | None = None
-        candidate_count = 0
-        for grab in definition.get("grab", []):
-            rule = {
-                **grab,
-                "type": "new",
-                "query": query,
-                "search_in": ["title", "author"],
-                "max_pages": 1,
-                "unsat_buffer": definition.get("unsat_buffer"),
-                "wedge_buffer": definition.get("wedge_buffer"),
-                "dry_run": definition.get("dry_run", False),
-                "name": definition.get("name", title),
-            }
-            async for row in search_pages(mam, rule):
-                candidate_count += 1
-                if await select_row(
-                    config, repository, row, rule, goodreads_id=book_id
-                ):
-                    selected += 1
-                    matched_torrent_id = int(row["id"])
-                    break
-            else:
-                continue
-            break
-        if matched_torrent_id is not None:
-            list_item["status"] = "selected"
-            list_item["marked_done_at"] = now
-            list_item["selected_mam_ids"] = list(
-                dict.fromkeys(
-                    [
-                        *list_item.get("selected_mam_ids", []),
-                        matched_torrent_id,
-                    ]
+        matched_ids: list[int] = []
+        failed_targets: list[str] = []
+        for target in targets:
+            if not dry_run:
+                repository.log_activity(
+                    component,
+                    f"Searching MaM for {target}: {item_title}",
+                    level="debug",
+                    context={
+                        "guid": guid_value,
+                        "book_id": book_id,
+                        "format": target,
+                        "query": query,
+                        "rules": len(definition.get("grab", [])),
+                    },
                 )
+            matched_torrent_id: int | None = None
+            matched_format: str | None = None
+            candidate_count = 0
+            for grab in definition.get("grab", []):
+                rule = {
+                    **grab,
+                    "type": "new",
+                    "query": query,
+                    "search_in": ["title", "author"],
+                    "max_pages": 1,
+                    "unsat_buffer": definition.get("unsat_buffer"),
+                    "wedge_buffer": definition.get("wedge_buffer"),
+                    "dry_run": definition.get("dry_run", False),
+                    "name": definition.get("name", title),
+                }
+                if target != "any":
+                    rule["media_type"] = FORMAT_MEDIA_TYPES[target]
+                async for row in search_pages(mam, rule):
+                    candidate_count += 1
+                    if await select_row(
+                        config, repository, row, rule, goodreads_id=book_id
+                    ):
+                        selected += 1
+                        matched_torrent_id = int(row["id"])
+                        media_type = torrent_meta(row)["media_type"]
+                        matched_format = (
+                            "audio"
+                            if media_type in FORMAT_MEDIA_TYPES["audio"]
+                            else "ebook"
+                        )
+                        break
+                else:
+                    continue
+                break
+            if matched_torrent_id is not None and matched_format is not None:
+                matched_ids.append(matched_torrent_id)
+                known_formats.add(matched_format)
+                list_item[f"{matched_format}_torrent"] = matched_torrent_id
+                message = f"Selected {matched_format}: {item_title}"
+                activity_level = "success"
+            else:
+                failed_targets.append(target)
+                message = f"No {target} match: {item_title}"
+                activity_level = "warning"
+            if not dry_run:
+                repository.log_activity(
+                    component,
+                    message,
+                    level=activity_level,
+                    context={
+                        "guid": guid_value,
+                        "book_id": book_id,
+                        "format": target,
+                        "mam_id": matched_torrent_id,
+                        "query": query,
+                        "candidates_evaluated": candidate_count,
+                    },
+                )
+
+        list_item["selected_mam_ids"] = list(
+            dict.fromkeys([*list_item.get("selected_mam_ids", []), *matched_ids])
+        )
+        list_item["selected_formats"] = sorted(known_formats)
+        all_formats_found = bool(desired_formats) and set(desired_formats).issubset(
+            known_formats
+        )
+        if matched_ids:
+            list_item["status"] = (
+                "selected" if not grab_both or all_formats_found else "partial"
             )
-            list_item["last_result"] = f"Selected MaM torrent {matched_torrent_id}"
-            message = f"Selected: {item_title}"
-            activity_level = "success"
+            if not grab_both or all_formats_found:
+                list_item["marked_done_at"] = now
+            formats_text = ", ".join(sorted(known_formats))
+            list_item["last_result"] = f"Selected formats: {formats_text}"
+        elif known_formats:
+            list_item["status"] = "partial"
+            missing_text = ", ".join(failed_targets)
+            list_item["last_result"] = f"Still missing: {missing_text}"
         else:
             no_match += 1
             list_item["status"] = "no_match"
-            list_item["last_result"] = "No configured release matched"
-            message = f"No match: {item_title}"
-            activity_level = "warning"
+            list_item["last_result"] = (
+                f"No configured {' or '.join(failed_targets)} release matched"
+            )
         if not dry_run:
             repository.upsert_list_item(list_item)
-            repository.log_activity(
-                component,
-                message,
-                level=activity_level,
-                context={
-                    "guid": guid_value,
-                    "book_id": book_id,
-                    "mam_id": matched_torrent_id,
-                    "query": query,
-                    "candidates_evaluated": candidate_count,
-                },
-            )
 
     removed = 0
     for previous in repository.list_items_for_list(list_id) if not dry_run else []:

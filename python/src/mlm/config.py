@@ -33,6 +33,7 @@ class Config:
     max_unsat_slots: int | None = None
     wedge_buffer: int = 0
     prefer_wedges: bool = False
+    grab_both_formats: bool = False
     add_torrents_stopped: bool = False
     exclude_narrator_in_library_dir: bool = False
     search_interval: int = 30

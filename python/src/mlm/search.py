@@ -128,7 +128,8 @@ def as_bool(value: Any) -> bool:
 def parse_size(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
-    match = re.fullmatch(r"\s*([\d.]+)\s*([kmgt]?i?b)?\s*", str(value), re.IGNORECASE)
+    normalized = str(value).replace(",", "")
+    match = re.fullmatch(r"\s*([\d.]+)\s*([kmgt]?i?b)?\s*", normalized, re.IGNORECASE)
     if not match:
         raise ValueError(f"invalid size: {value!r}")
     return int(

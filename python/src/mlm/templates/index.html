@@ -120,6 +120,18 @@
               {% if reasons.get("ratio_buffer") %}
                 <div class="result-reason">{{ reasons.get("ratio_buffer") }} held by the configured ratio reserve</div>
               {% endif %}
+            {% elif status.last_result is mapping and status.last_result.get("linked") is not none %}
+              <strong>{{ status.last_result.get("linked", 0) }} organized</strong>
+              <span class="muted"> · {{ status.last_result.get("incomplete", 0) }} still downloading
+                · {{ (status.last_result.get("skip_reasons") or {}).values() | sum }} skipped
+              </span>
+              {% set reasons = status.last_result.get("skip_reasons") or {} %}
+              {% if reasons.get("no_matching_library") %}
+                <div class="result-reason">{{ reasons.get("no_matching_library") }} had no matching library category or path</div>
+              {% endif %}
+              {% if reasons.get("no_preferred_files") %}
+                <div class="result-reason">{{ reasons.get("no_preferred_files") }} had no preferred audio or ebook file</div>
+              {% endif %}
             {% elif status.last_result is mapping and status.last_result.get("refreshed") is not none %}
               <strong>{{ status.last_result.get("refreshed", 0) }} refreshed</strong>
               <span class="muted"> · {{ status.last_result.get("selected", 0) }} selected
