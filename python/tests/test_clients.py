@@ -78,6 +78,27 @@ def test_non_json_success_response_is_accepted() -> None:
     assert stored == ["accepted"]
 
 
+def test_ip_locked_api_session_response_is_accepted() -> None:
+    stored: list[str] = []
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://www.myanonamouse.net",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    text="Session type - API session with IP locking",
+                    headers={"content-type": "text/html; charset=UTF-8"},
+                )
+            ),
+        ) as http:
+            mam = MamClient("accepted", client=http, cookie_store=stored.append)
+            await mam.check_mam_id()
+
+    asyncio.run(exercise())
+    assert stored == ["accepted"]
+
+
 def test_authentication_falls_back_to_config_cookie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

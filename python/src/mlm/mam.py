@@ -94,6 +94,8 @@ class MamClient:
                 is not None
             )
         if not success:
+            success = text.strip().casefold().startswith("session type - api session")
+        if not success:
             detail = None
             if result is not None:
                 detail = result.get("Error") or result.get("Message")
