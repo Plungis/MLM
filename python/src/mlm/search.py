@@ -162,7 +162,7 @@ def _nested_json(value: Any) -> Any:
         return value
 
 
-def _mapping_values(value: Any) -> list[str]:
+def decode_name_mapping(value: Any) -> list[str]:
     value = _nested_json(value)
     if isinstance(value, dict):
         items = sorted(
@@ -192,18 +192,33 @@ def _mapping_values(value: Any) -> list[str]:
     return []
 
 
+def decode_series_info(value: Any) -> list[dict[str, Any]]:
+    series = []
+    raw_series = _nested_json(value)
+    if not isinstance(raw_series, dict):
+        return series
+    for entry in raw_series.values():
+        if isinstance(entry, list) and entry:
+            series.append(
+                {
+                    "name": html.unescape(str(entry[0])).strip(),
+                    "entries": [
+                        html.unescape(str(item)).strip()
+                        for item in entry[1:2]
+                        if item is not None and str(item).strip()
+                    ],
+                }
+            )
+    return series
+
+
 def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
     media_id = as_int(row.get("mediatype"))
     main_id = as_int(row.get("main_cat"))
     media_type = MEDIA_TYPE_BY_ID.get(media_id) or MAIN_CATEGORY_BY_ID.get(
         main_id, "unknown"
     )
-    series = []
-    raw_series = _nested_json(row.get("series_info"))
-    if isinstance(raw_series, dict):
-        for value in raw_series.values():
-            if isinstance(value, list) and value:
-                series.append({"name": str(value[0]), "entries": value[1:2]})
+    series = decode_series_info(row.get("series_info"))
     filetypes = [part.lower() for part in str(row.get("filetype", "")).split() if part]
     raw_categories = _nested_json(row.get("categories", []))
     if not isinstance(raw_categories, list):
@@ -222,8 +237,8 @@ def torrent_meta(row: dict[str, Any]) -> dict[str, Any]:
         "size": parse_size(row.get("size", 0)),
         "title": html.unescape(str(row.get("title", ""))),
         "edition": None,
-        "authors": _mapping_values(row.get("author_info")),
-        "narrators": _mapping_values(row.get("narrator_info")),
+        "authors": decode_name_mapping(row.get("author_info")),
+        "narrators": decode_name_mapping(row.get("narrator_info")),
         "series": series,
         "source": "Mam",
         "uploaded_at": str(row.get("added", "")),

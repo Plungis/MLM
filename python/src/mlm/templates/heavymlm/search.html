@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / manual acquisition</p>
+    <h1>Search MaM</h1>
+    <p class="subtitle">Compare authors, editions, formats, and freeleech status before adding a release to the queue.</p>
+  </div>
+  {% if rows %}
+  <div class="page-meta">
+    <span class="chip">Showing {{ rows | length }}{% if found > rows | length %} of {{ found }}{% endif %} matches</span>
+  </div>
+  {% endif %}
+</header>
+
+<section class="panel search-panel">
+  <div class="panel-body">
+    <form class="search-form" method="get" role="search">
+      <input type="search" name="q" value="{{ query }}" placeholder="Title, author, narrator, ISBN…" autofocus>
+      <button class="primary" type="submit">Search</button>
+    </form>
+  </div>
+</section>
+
+{% if error %}
+<div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Failed</span></div>
+{% endif %}
+
+{% if rows %}
+<section class="hm-search-results" aria-label="MaM search results">
+  {% for row in rows %}
+  <article class="hm-release-card">
+    <header class="hm-release-header">
+      <div class="hm-availability">
+        {% for badge in row.availability %}<span class="availability-badge {{ badge.tone }}">{{ badge.label }}</span>{% endfor %}
+      </div>
+      <span class="hm-release-id">MaM #{{ row.id }}</span>
+    </header>
+
+    <div class="hm-release-main">
+      <div class="hm-release-copy">
+        <h2>{{ row.title }}</h2>
+        {% if row.authors %}
+        <p class="hm-authors"><span>by</span> {{ row.authors | join(", ") }}</p>
+        {% else %}
+        <p class="hm-authors muted">Author information unavailable</p>
+        {% endif %}
+
+        {% if row.series %}
+        <p class="hm-secondary"><strong>Series</strong>
+          {% for series in row.series %}{{ series.name }}{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
+        </p>
+        {% endif %}
+        {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
+      </div>
+
+      <form class="hm-add-form" action="/search/select" method="post">
+        <input type="hidden" name="mam_id" value="{{ row.id }}">
+        <button class="primary" type="submit">Add to queue</button>
+      </form>
+    </div>
+
+    <dl class="hm-release-facts">
+      <div><dt>Format</dt><dd>{% if row.filetypes %}{{ row.filetypes | join(" / ") }}{% else %}Unknown{% endif %}</dd></div>
+      <div><dt>Category</dt><dd>{{ row.category }}</dd></div>
+      <div><dt>Size</dt><dd>{{ row.size }}</dd></div>
+      <div><dt>Language</dt><dd>{{ row.language }}</dd></div>
+      <div><dt>Files</dt><dd>{{ row.num_files or "—" }}</dd></div>
+    </dl>
+
+    <footer class="hm-release-footer">
+      <div class="hm-peer-stats">
+        <span><strong>{{ row.seeders }}</strong> seeders</span>
+        <span><strong>{{ row.leechers }}</strong> leechers</span>
+        <span><strong>{{ row.snatched }}</strong> snatched</span>
+      </div>
+      {% if row.uploader or row.uploaded_at %}
+      <span class="hm-upload-meta">{% if row.uploader %}Uploaded by {{ row.uploader }}{% endif %}{% if row.uploader and row.uploaded_at %} · {% endif %}{{ row.uploaded_at }}</span>
+      {% endif %}
+    </footer>
+  </article>
+  {% endfor %}
+</section>
+{% elif query and not error %}
+<section class="panel empty-state">
+  <div><strong>No matching releases</strong><p>Try a shorter title, author name, or ISBN.</p></div>
+</section>
+{% else %}
+<section class="panel empty-state">
+  <div><strong>Ready to search</strong><p>Enter a title, author, narrator, or identifier above.</p></div>
+</section>
+{% endif %}
+{% endblock %}

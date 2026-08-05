@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mlm.modules.heavymlm.search import present_search_result
 from mlm.search import (
     build_search_query,
     matches_filter,
@@ -96,3 +97,49 @@ def test_torrent_meta_decodes_mam_nested_json_fields() -> None:
     assert meta["narrators"] == ["A Narrator & Reader"]
     assert meta["series"] == [{"name": "Example Series", "entries": ["2"]}]
     assert meta["categories"] == [4, 6]
+
+
+def test_heavymlm_search_card_decodes_metadata_and_availability() -> None:
+    result = present_search_result(
+        {
+            "id": "123",
+            "title": "Departure(s) &amp; Other Stories",
+            "author_info": '{"42":"Julian Barnes"}',
+            "narrator_info": '{"7":"A Narrator"}',
+            "series_info": '{"9":["Example Series","2"]}',
+            "filetype": "m4b mp3",
+            "size": "1,018.3 KiB",
+            "catname": "Audiobook",
+            "language": "1",
+            "numfiles": "2",
+            "seeders": "9",
+            "leechers": "1",
+            "times_completed": "27",
+            "owner_name": "Uploader",
+            "added": "2026-08-05 12:00:00",
+            "free": "1",
+            "fl_vip": "1",
+            "vip": "0",
+        }
+    )
+
+    assert result["title"] == "Departure(s) & Other Stories"
+    assert result["authors"] == ["Julian Barnes"]
+    assert result["narrators"] == ["A Narrator"]
+    assert result["series"] == [{"name": "Example Series", "entries": ["2"]}]
+    assert result["filetypes"] == ["m4b", "mp3"]
+    assert result["size"] == "1018.3 KiB"
+    assert result["language"] == "English"
+    assert result["availability"] == [
+        {"label": "Global freeleech", "tone": "free"},
+        {"label": "VIP freeleech", "tone": "vip"},
+    ]
+
+
+def test_heavymlm_search_card_falls_back_for_unknown_values() -> None:
+    result = present_search_result(
+        {"id": 1, "title": "Book", "size": "unknown", "free": "0"}
+    )
+
+    assert result["size"] == "unknown"
+    assert result["availability"] == [{"label": "Ratio download", "tone": "ratio"}]

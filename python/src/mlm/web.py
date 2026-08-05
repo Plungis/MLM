@@ -21,8 +21,10 @@ from .config import Config, ConfigError, load_config, save_root_config_values
 from .database import ensure_database
 from .error_guidance import error_guidance
 from .mam import authenticated_mam_client
+from .modules.heavymlm.search import present_search_result
 from .repository import Repository
 from .scheduler import ServiceState
+from .search import as_int
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
@@ -329,24 +331,38 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def search(request: Request, q: str = "") -> HTMLResponse:
         rows = []
         error = None
+        found = 0
         if q:
             try:
                 result = await app.state.services.mam.search(
                     {
                         "dlLink": True,
-                        "description": True,
+                        "mediaInfo": True,
                         "isbn": True,
                         "perpage": 100,
                         "tor": {"text": q},
                     }
                 )
-                rows = result.get("data", [])
+                raw_rows = result.get("data", [])
+                rows = [
+                    present_search_result(row)
+                    for row in raw_rows
+                    if isinstance(row, dict)
+                ]
+                found = max(len(rows), as_int(result.get("found"), len(rows)))
             except Exception as caught:  # noqa: BLE001 - display API failure in UI
                 error = str(caught)
         return templates.TemplateResponse(
             request,
-            "search.html",
-            await context(request, title="Search MaM", query=q, rows=rows, error=error),
+            "heavymlm/search.html",
+            await context(
+                request,
+                title="Search MaM",
+                query=q,
+                rows=rows,
+                found=found,
+                error=error,
+            ),
         )
 
     @app.post("/search/select")

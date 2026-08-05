@@ -4,6 +4,13 @@ MyAnonaSuite is a shared terminal-style home for MyAnonamouse and audiobook
 library tools. HeavyMLM is the first active module; reserved workspaces for the
 future ABSidekick and MAM-Spender ports are available from the suite switcher.
 
+The suite shell and the three tools stay separated at the code boundary. Shared
+code is limited to navigation, theming, and explicit cross-module interfaces.
+HeavyMLM-specific presentation code and templates live under dedicated
+`modules/heavymlm` and `templates/heavymlm` namespaces; ABSidekick and
+MAM-Spender will receive sibling namespaces rather than importing HeavyMLM
+internals.
+
 HeavyMLM is both an auto downloader and a library organizer. Both parts are optional so either can be replaced with e.g. RSS or [booktree](https://github.com/myxdvz/booktree) if you prefer. And even if you use both, you can still add torrents manually and have them organized, and/or use booktree for collections or files that are not from MaM.
 
 This allows you to automatically download for example bookmarks and have them hardlinked into an organized library folder for e.g. ABS. It also follows a list of preferred formats so that if you first download the mp3 version of a book and then later download an m4b, the mp3 will be automatically removed from your library and optionally moved to a different category or tagged in qBittorrent.

@@ -32,6 +32,38 @@ class FakeServices:
         self.triggered.append(name)
 
 
+class FakeSearchMam:
+    def __init__(self) -> None:
+        self.query = None
+
+    async def search(self, query: dict) -> dict:
+        self.query = query
+        return {
+            "found": "237",
+            "data": [
+                {
+                    "id": "321",
+                    "title": "The Search Result",
+                    "author_info": '{"1":"An Author"}',
+                    "narrator_info": '{"2":"A Narrator"}',
+                    "series_info": '{"3":["A Series","4"]}',
+                    "filetype": "m4b",
+                    "size": "734.5 MiB",
+                    "catname": "Audiobook",
+                    "language": "1",
+                    "numfiles": "1",
+                    "seeders": "12",
+                    "leechers": "2",
+                    "times_completed": "99",
+                    "owner_name": "BookSeeder",
+                    "added": "2026-08-05 12:00:00",
+                    "personal_freeleech": "1",
+                    "vip": "0",
+                }
+            ],
+        }
+
+
 def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
     config.write_text('mam_id = ""\n', encoding="utf-8")
@@ -208,6 +240,32 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     assert (
         client.post("/errors/dismiss", data={"error_id": "not-json"}).status_code == 400
     )
+
+
+def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    app = create_app(config_path, database)
+    services = FakeServices(load_config(config_path))
+    services.mam = FakeSearchMam()  # type: ignore[attr-defined]
+    app.state.services = services
+    client = TestClient(app)
+
+    response = client.get("/search?q=Search+Result")
+
+    assert response.status_code == 200
+    assert "Showing 1 of 237 matches" in response.text
+    assert "The Search Result" in response.text
+    assert "An Author" in response.text
+    assert "A Narrator" in response.text
+    assert "A Series" in response.text
+    assert "Personal freeleech" in response.text
+    assert "734.5 MiB" in response.text
+    assert "12</strong> seeders" in response.text
+    assert services.mam.query["mediaInfo"] is True  # type: ignore[attr-defined]
+    assert "description" not in services.mam.query  # type: ignore[operator]
 
 
 def test_record_pages_are_paginated(tmp_path: Path) -> None:
