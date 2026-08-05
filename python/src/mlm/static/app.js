@@ -86,7 +86,9 @@ if (jobMonitor) {
 
       jobMonitor.hidden = false;
       const running = matches.some(([, value]) => value.running);
-      const failed = matches.find(([, value]) => value.last_error);
+      const failed = matches.find(
+        ([, value]) => value.last_error || Number(value.last_result?.failed || 0) > 0,
+      );
       const events = matches
         .flatMap(([name, value]) =>
           (value.progress || []).map((event) => ({ name, event })),
@@ -105,8 +107,9 @@ if (jobMonitor) {
       state.textContent = failed ? "Error" : running ? "Running" : "Complete";
       state.className = `status ${failed ? "error" : running ? "running" : "ok"}`;
       const latest = events.at(-1)?.event;
+      const latestFailure = failed?.[1].last_result?.failures?.at(-1);
       summary.textContent = failed
-        ? failed[1].last_error
+        ? failed[1].last_error || latestFailure?.error || "Organizer failed; open Errors for details"
         : latest?.message || (running ? "Working…" : "Job complete");
 
       const progressEvent = [...events]

@@ -12,6 +12,25 @@
   </div>
 </header>
 
+{% for name,status in jobs.items() %}
+{% if name.startswith("organizer") and status.last_result is mapping and status.last_result.get("failed", 0) %}
+{% set failures = status.last_result.get("failures") or [] %}
+{% set failure = failures[-1] if failures else {} %}
+<section class="flash error-flash organizer-alert" role="alert">
+  <div>
+    <strong>Organizer could not publish {{ status.last_result.get("failed") }} library item(s)</strong>
+    <p>{{ failure.get("error") or "A file operation failed. Open Errors for the exact reason and paths." }}</p>
+    {% if failure.get("source") %}<code>Source: {{ failure.get("source") }}</code>{% endif %}
+    {% if failure.get("destination") %}<code>Destination: {{ failure.get("destination") }}</code>{% endif %}
+  </div>
+  <div class="record-actions">
+    <a class="button danger" href="/records/errored_torrents">Open errors</a>
+    <a class="button" href="/diagnostics?component=organizer">Organizer trace</a>
+  </div>
+</section>
+{% endif %}
+{% endfor %}
+
 <section
   class="job-monitor"
   data-job-monitor
@@ -143,9 +162,15 @@
               {% endif %}
             {% elif status.last_result is mapping and status.last_result.get("linked") is not none %}
               <strong>{{ status.last_result.get("linked", 0) }} organized</strong>
+              {% if status.last_result.get("failed", 0) %}<strong class="error-text">{{ status.last_result.get("failed") }} failed</strong>{% endif %}
               <span class="muted"> · {{ status.last_result.get("incomplete", 0) }} still downloading
                 · {{ (status.last_result.get("skip_reasons") or {}).values() | sum }} skipped
               </span>
+              {% set failures = status.last_result.get("failures") or [] %}
+              {% if failures %}
+                <div class="result-reason">{{ failures[-1].get("error") }}</div>
+                <a href="/records/errored_torrents">Open recovery</a>
+              {% endif %}
               {% set reasons = status.last_result.get("skip_reasons") or {} %}
               {% if reasons.get("no_matching_library") %}
                 <div class="result-reason">{{ reasons.get("no_matching_library") }} had no matching library category or path</div>

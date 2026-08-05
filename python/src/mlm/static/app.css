@@ -1312,6 +1312,26 @@ pre {
   color: #ffb7bf;
 }
 
+.organizer-alert > div:first-child {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.organizer-alert p {
+  margin: 0;
+}
+
+.organizer-alert code,
+.placement-paths code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.placement-paths {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .config-fact {
   border: 1px solid var(--line-soft);
   border-radius: 4px;

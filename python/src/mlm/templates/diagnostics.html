@@ -63,7 +63,7 @@
       <p>{{ activity | length }} most recent trace messages{% if component %} for {{ component }}{% endif %}.</p>
     </div>
     <div class="console-filters">
-      {% for value,label in [("","All"),("scheduler","Scheduler"),("downloader","Downloader"),("lists","Lists")] %}
+      {% for value,label in [("","All"),("scheduler","Scheduler"),("downloader","Downloader"),("organizer","Organizer"),("lists","Lists")] %}
       <a class="chip{% if component == value %} active{% endif %}" href="/diagnostics{% if value %}?component={{ value }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>

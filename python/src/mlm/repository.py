@@ -298,6 +298,10 @@ class Repository:
                     canonical_json(event),
                 ),
             )
+            connection.execute(
+                "DELETE FROM errored_torrents WHERE id_json = ?",
+                (canonical_json({"Organizer": torrent["id"]}),),
+            )
 
     def update_torrent(self, torrent: dict[str, Any]) -> None:
         with connect(self.path) as connection:
@@ -605,6 +609,32 @@ class Repository:
             "title": selected.get("meta", {}).get("title", selected["title_search"]),
             "error": str(error),
             "meta": selected.get("meta"),
+            "created_at": now,
+        }
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO errored_torrents
+                   (id_json, created_at_json, payload_json) VALUES (?, ?, ?)
+                   ON CONFLICT(id_json) DO UPDATE SET
+                     created_at_json=excluded.created_at_json,
+                     payload_json=excluded.payload_json""",
+                (canonical_json(identifier), canonical_json(now), canonical_json(row)),
+            )
+
+    def record_organizer_error(
+        self,
+        torrent_hash: str,
+        title: str,
+        error: str,
+        context: dict[str, Any],
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        identifier = {"Organizer": torrent_hash}
+        row = {
+            "id": identifier,
+            "title": title,
+            "error": error,
+            "context": context,
             "created_at": now,
         }
         with connect(self.path) as connection:

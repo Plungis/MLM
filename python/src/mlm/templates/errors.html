@@ -8,7 +8,7 @@
   </div>
   <div class="page-meta">
     <span class="chip">{{ total }} unresolved</span>
-    <a class="button" href="/diagnostics?component=downloader">Open diagnostics</a>
+    <a class="button" href="/diagnostics">Open diagnostics</a>
   </div>
 </header>
 
@@ -24,6 +24,7 @@
     {% for row in rows %}
     {% set guidance = row.get("_guidance") %}
     {% set meta = row.get("meta") or {} %}
+    {% set error_context = row.get("context") or {} %}
     <article class="error-card">
       <header class="error-card-header">
         <div>
@@ -57,6 +58,14 @@
           <span>Exact error</span>
           <code>{{ row.get("error") or "No technical message was recorded." }}</code>
         </div>
+        {% if error_context.get("source") or error_context.get("destination") %}
+        <div class="recovery-grid placement-paths">
+          <div><h3>Source</h3><code>{{ error_context.get("source") or "Not recorded" }}</code></div>
+          <div><h3>Destination</h3><code>{{ error_context.get("destination") or "Not recorded" }}</code></div>
+          {% if error_context.get("method") %}<div><h3>Method</h3><code>{{ error_context.get("method") }}</code></div>{% endif %}
+          {% if error_context.get("remediation") %}<div><h3>Recommended fix</h3><p>{{ error_context.get("remediation") }}</p></div>{% endif %}
+        </div>
+        {% endif %}
         <div class="recovery-grid">
           <div>
             <h3>What happened</h3>
@@ -85,7 +94,7 @@
   <div class="empty-state success-state">
     <div>
       <strong>No unresolved errors</strong>
-      <p>Downloader failures will appear here with their reason and recovery steps.</p>
+      <p>Downloader and organizer failures will appear here with their reason and recovery steps.</p>
     </div>
   </div>
   {% endif %}

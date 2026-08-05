@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .config import Config, QbitConfig
 from .mam import MamClient
@@ -32,9 +33,32 @@ class OrganizerRun:
     incomplete: int = 0
     failed: int = 0
     skip_reasons: dict[str, int] = field(default_factory=dict)
+    failures: list[dict[str, Any]] = field(default_factory=list)
 
     def skip(self, reason: str) -> None:
         self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
+
+
+class FilePlacementError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        source: Path | None = None,
+        destination: Path | None = None,
+        method: str | None = None,
+        remediation: str,
+    ) -> None:
+        super().__init__(message)
+        self.context: dict[str, object] = {
+            "remediation": remediation,
+        }
+        if source is not None:
+            self.context["source"] = str(source)
+        if destination is not None:
+            self.context["destination"] = str(destination)
+        if method is not None:
+            self.context["method"] = method
 
 
 def sanitize_filename(value: str) -> str:
@@ -191,6 +215,138 @@ def _place_file(source: Path, destination: Path, method: str) -> None:
         destination.symlink_to(source)
     elif method != "no_link":
         raise ValueError(f"unknown library method: {method}")
+
+
+def _source_size(source: Path, destination: Path, method: str) -> int:
+    try:
+        if not source.exists():
+            raise FileNotFoundError(source)
+        if not source.is_file():
+            raise IsADirectoryError(source)
+        size = source.stat().st_size
+    except OSError as error:
+        raise FilePlacementError(
+            f"source file is unavailable: {source} ({error})",
+            source=source,
+            destination=destination,
+            method=method,
+            remediation=(
+                "Check qBittorrent's save_path, the configured path_mapping, and "
+                "that the download drive is mounted and readable."
+            ),
+        ) from error
+    if size <= 0:
+        raise FilePlacementError(
+            f"source file is zero bytes: {source}",
+            source=source,
+            destination=destination,
+            method=method,
+            remediation=(
+                "Recheck or redownload this torrent in qBittorrent before running "
+                "the organizer again."
+            ),
+        )
+    return size
+
+
+def _validate_placed_file(
+    source: Path,
+    destination: Path,
+    method: str,
+    source_size: int,
+) -> None:
+    try:
+        if not destination.exists() or not destination.is_file():
+            raise FileNotFoundError(destination)
+        destination_size = destination.stat().st_size
+    except OSError as error:
+        raise FilePlacementError(
+            f"placed file could not be verified: {destination} ({error})",
+            source=source,
+            destination=destination,
+            method=method,
+            remediation=(
+                "Check the library drive and Windows permissions, then run the "
+                "organizer again."
+            ),
+        ) from error
+    if destination_size != source_size:
+        raise FilePlacementError(
+            "file placement size mismatch: "
+            f"source has {source_size} bytes but destination has "
+            f"{destination_size} bytes",
+            source=source,
+            destination=destination,
+            method=method,
+            remediation=(
+                "Check the library drive for free space or I/O errors, remove any "
+                "partial output, and run the organizer again."
+            ),
+        )
+
+
+def _prepare_staging_directory(target_dir: Path) -> Path:
+    try:
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            if not target_dir.is_dir():
+                raise FilePlacementError(
+                    f"library destination is not a directory: {target_dir}",
+                    destination=target_dir,
+                    remediation=(
+                        "Move or rename the existing item at this path, then run the "
+                        "organizer again."
+                    ),
+                )
+            if any(target_dir.iterdir()):
+                raise FilePlacementError(
+                    "library destination already exists and is not empty: "
+                    f"{target_dir}",
+                    destination=target_dir,
+                    remediation=(
+                        "Review the existing library folder. HeavyMLM will not "
+                        "overwrite it; merge or rename it before retrying."
+                    ),
+                )
+            target_dir.rmdir()
+        staging = target_dir.parent / (
+            f".{target_dir.name}.heavymlm-staging-{uuid4().hex}"
+        )
+        staging.mkdir()
+        return staging
+    except FilePlacementError:
+        raise
+    except OSError as error:
+        raise FilePlacementError(
+            f"could not prepare library staging folder: {error}",
+            destination=target_dir,
+            remediation=(
+                "Check that the library drive is mounted, has free space, and grants "
+                "HeavyMLM permission to create folders."
+            ),
+        ) from error
+
+
+def _publish_staging_directory(staging: Path, target_dir: Path) -> None:
+    if target_dir.exists():
+        raise FilePlacementError(
+            f"library destination appeared while files were being placed: {target_dir}",
+            destination=target_dir,
+            remediation=(
+                "Review the competing library process or existing folder, then run "
+                "the organizer again."
+            ),
+        )
+    try:
+        staging.replace(target_dir)
+    except OSError as error:
+        raise FilePlacementError(
+            f"could not publish completed library folder: {error}",
+            destination=target_dir,
+            remediation=(
+                "Check the library drive and permissions, then run the organizer again."
+            ),
+        ) from error
 
 
 def _write_metadata(path: Path, metadata: dict[str, Any]) -> None:
@@ -376,16 +532,10 @@ async def _organize_torrent(
 
     library_files: list[str] = []
     if target_dir is not None:
-        _progress(
-            progress,
-            f"Preparing library directory: {target_dir}",
-            context={**context, "method": method, "target": str(target_dir)},
-        )
-        await asyncio.to_thread(target_dir.mkdir, parents=True, exist_ok=True)
         download_root = map_path(
             qbit_config.path_mapping, str(qbit_torrent["save_path"])
         )
-        selected_files: list[tuple[Path, Path, Path]] = []
+        selected_files: list[tuple[Path, Path]] = []
         for content in files:
             torrent_path = safe_torrent_path(str(content["name"]))
             lower_name = torrent_path.name.lower()
@@ -395,16 +545,38 @@ async def _organize_torrent(
             ):
                 continue
             relative = _destination_relative(torrent_path)
-            selected_files.append(
-                (download_root / torrent_path, target_dir / relative, relative)
+            selected_files.append((download_root / torrent_path, relative))
+        if not selected_files:
+            raise FilePlacementError(
+                "no files remained after selecting the preferred format",
+                destination=target_dir,
+                method=method,
+                remediation=(
+                    "Review the preferred audio and ebook extensions for this "
+                    "library, then run the organizer again."
+                ),
             )
 
-        for file_index, (source, destination, relative) in enumerate(
-            selected_files, start=1
-        ):
+        planned: list[tuple[Path, Path, int]] = []
+        destinations: set[Path] = set()
+        for file_index, (source, relative) in enumerate(selected_files, start=1):
+            destination = target_dir / relative
+            if relative in destinations:
+                raise FilePlacementError(
+                    "multiple torrent files resolve to the same library path: "
+                    f"{relative}",
+                    source=source,
+                    destination=destination,
+                    method=method,
+                    remediation=(
+                        "Review the torrent's file layout and Disc folder names, then "
+                        "organize this release manually if needed."
+                    ),
+                )
+            destinations.add(relative)
             _progress(
                 progress,
-                f"Placing file {file_index}/{len(selected_files)}: {relative}",
+                f"Preflight file {file_index}/{len(selected_files)}: {relative}",
                 context={
                     **context,
                     "method": method,
@@ -412,27 +584,119 @@ async def _organize_torrent(
                     "destination": str(destination),
                 },
             )
-            if not await asyncio.to_thread(source.exists):
-                raise FileNotFoundError(
-                    f"qBittorrent file was not found at {source}; check the "
-                    "client's save_path and path_mapping configuration"
-                )
-            await asyncio.to_thread(
-                destination.parent.mkdir, parents=True, exist_ok=True
+            source_size = await asyncio.to_thread(
+                _source_size, source, destination, method
             )
-            await asyncio.to_thread(_place_file, source, destination, method)
-            library_files.append(str(relative))
+            planned.append((source, relative, source_size))
+
+        _progress(
+            progress,
+            f"Staging {len(planned)} file(s) for: {target_dir}",
+            context={
+                **context,
+                "method": method,
+                "target": str(target_dir),
+                "files": len(planned),
+            },
+        )
+        staging_dir: Path | None = None
+        try:
+            staging_dir = await asyncio.to_thread(
+                _prepare_staging_directory, target_dir
+            )
+            for file_index, (source, relative, source_size) in enumerate(
+                planned, start=1
+            ):
+                staging_destination = staging_dir / relative
+                final_destination = target_dir / relative
+                _progress(
+                    progress,
+                    f"Placing file {file_index}/{len(planned)}: {relative}",
+                    context={
+                        **context,
+                        "method": method,
+                        "source": str(source),
+                        "destination": str(final_destination),
+                        "source_bytes": source_size,
+                    },
+                )
+                await asyncio.to_thread(
+                    staging_destination.parent.mkdir, parents=True, exist_ok=True
+                )
+                try:
+                    await asyncio.to_thread(
+                        _place_file, source, staging_destination, method
+                    )
+                    await asyncio.to_thread(
+                        _validate_placed_file,
+                        source,
+                        staging_destination,
+                        method,
+                        source_size,
+                    )
+                except FilePlacementError:
+                    raise
+                except OSError as error:
+                    raise FilePlacementError(
+                        f"file placement failed: {error}",
+                        source=source,
+                        destination=final_destination,
+                        method=method,
+                        remediation=(
+                            "Check the library drive's free space and Windows "
+                            "permissions. For different drives, use method = "
+                            '"hardlink_or_copy" or "copy".'
+                        ),
+                    ) from error
+                library_files.append(str(relative))
+                _progress(
+                    progress,
+                    f"Verified: {relative} ({source_size} bytes)",
+                    level="success",
+                    context={
+                        **context,
+                        "source": str(source),
+                        "destination": str(final_destination),
+                        "bytes": source_size,
+                    },
+                )
+            try:
+                await asyncio.to_thread(
+                    _write_metadata,
+                    staging_dir / "metadata.json",
+                    {"mam": mam_row, "meta": meta},
+                )
+            except OSError as error:
+                raise FilePlacementError(
+                    f"could not write library metadata: {error}",
+                    destination=target_dir / "metadata.json",
+                    method=method,
+                    remediation=(
+                        "Check the library drive's free space and Windows write "
+                        "permissions, then run the organizer again."
+                    ),
+                ) from error
+            await asyncio.to_thread(_publish_staging_directory, staging_dir, target_dir)
+            staging_dir = None
             _progress(
                 progress,
-                f"Placed: {relative}",
+                f"Published complete library folder: {target_dir}",
                 level="success",
-                context={**context, "destination": str(destination)},
+                context={
+                    **context,
+                    "destination": str(target_dir),
+                    "files": len(library_files),
+                },
             )
-        await asyncio.to_thread(
-            _write_metadata,
-            target_dir / "metadata.json",
-            {"mam": mam_row, "meta": meta},
-        )
+        finally:
+            if staging_dir is not None:
+                await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+                _progress(
+                    progress,
+                    f"Rolled back incomplete library copy: {target_dir}",
+                    level="warning",
+                    context={**context, "target": str(target_dir)},
+                )
 
     now = datetime.now(UTC).isoformat()
     torrent = {
@@ -550,17 +814,31 @@ async def organize_completed(
         except Exception as error:  # noqa: BLE001 - isolate failures per torrent
             result.failed += 1
             error_text = f"{type(error).__name__}: {error}"
+            failure = {
+                **context,
+                "error": error_text,
+                "error_type": type(error).__name__,
+            }
+            if isinstance(error, FilePlacementError):
+                failure.update(error.context)
+            result.failures.append(failure)
+            repository.record_organizer_error(
+                str(qbit_torrent.get("hash", "")),
+                torrent_name,
+                error_text,
+                failure,
+            )
             repository.log_activity(
                 "organizer",
                 f"Failed to organize {torrent_name}",
                 level="error",
-                context={**context, "error": error_text},
+                context=failure,
             )
             _progress(
                 progress,
                 f"Failed {torrent_name}: {error_text}",
                 level="error",
-                context=context,
+                context=failure,
             )
     _progress(
         progress,
@@ -575,6 +853,7 @@ async def organize_completed(
             "incomplete": result.incomplete,
             "failed": result.failed,
             "skip_reasons": result.skip_reasons,
+            "failures": result.failures,
         },
     )
     return result

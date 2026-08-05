@@ -4,7 +4,7 @@ from typing import Any
 
 
 def error_guidance(message: str) -> dict[str, Any]:
-    """Turn a stored downloader exception into useful operator guidance."""
+    """Turn a stored pipeline exception into useful operator guidance."""
     normalized = message.casefold()
 
     if "wedge reserve reached" in normalized:
@@ -131,6 +131,34 @@ def error_guidance(message: str) -> dict[str, Any]:
                 "parser fix.",
             ],
             "component": "lists",
+        }
+
+    if any(
+        token in normalized
+        for token in (
+            "file placement",
+            "source file is",
+            "library destination",
+            "size mismatch",
+            "could not hardlink",
+            "placed file could not be verified",
+        )
+    ):
+        return {
+            "title": "Library file placement failed",
+            "reason": (
+                "HeavyMLM could not safely place and verify every media file. The "
+                "incomplete staging copy was removed, so Audiobookshelf will not see "
+                "an empty book folder."
+            ),
+            "steps": [
+                "Compare the recorded source and destination paths below.",
+                "Confirm the source drive is mounted and the library drive has free "
+                "space and write permission.",
+                "Correct path_mapping or the library method if needed, then run "
+                "Organize files again.",
+            ],
+            "component": "organizer",
         }
 
     return {

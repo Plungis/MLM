@@ -242,6 +242,59 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     )
 
 
+def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    source = "D:\\Downloads\\Book\\book.m4b"
+    destination = "E:\\MLM Audio\\Writer\\Book\\book.m4b"
+    failure = {
+        "torrent": "Book",
+        "hash": "abc123",
+        "error": "FilePlacementError: file placement failed: disk is full",
+        "error_type": "FilePlacementError",
+        "source": source,
+        "destination": destination,
+        "method": "copy",
+        "remediation": "Free space on the library drive and run the organizer again.",
+    }
+    repository.record_organizer_error("abc123", "Book", failure["error"], failure)
+    app = create_app(config_path, database)
+    services = FakeServices(load_config(config_path))
+    services.jobs["organizer:0"] = JobStatus(
+        last_result={
+            "scanned": 1,
+            "linked": 0,
+            "incomplete": 0,
+            "failed": 1,
+            "skip_reasons": {},
+            "failures": [failure],
+        }
+    )
+    app.state.services = services
+    client = TestClient(app)
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert "Organizer could not publish 1 library item(s)" in dashboard.text
+    assert "disk is full" in dashboard.text
+    assert source in dashboard.text
+    assert destination in dashboard.text
+    assert "/records/errored_torrents" in dashboard.text
+
+    errors = client.get("/records/errored_torrents")
+    assert errors.status_code == 200
+    assert "Library file placement failed" in errors.text
+    assert source in errors.text
+    assert destination in errors.text
+    assert "Free space on the library drive" in errors.text
+    assert "/diagnostics?component=organizer" in errors.text
+
+
 def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text('mam_id = ""\n', encoding="utf-8")

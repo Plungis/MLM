@@ -4,6 +4,8 @@ import asyncio
 import os
 from pathlib import Path
 
+import pytest
+
 from mlm.config import Config, QbitConfig
 from mlm.database import ensure_database
 from mlm.library import organize_completed
@@ -228,6 +230,114 @@ def test_organizer_continues_after_one_torrent_fails(tmp_path: Path) -> None:
     assert qbit.requested_categories == ["Audiobooks"]
     assert repository.torrent("abc123") is not None
     assert any(message.startswith("Failed Missing Book") for message, _, _ in progress)
+    failures = repository.table_rows("errored_torrents")
+    assert len(failures) == 1
+    assert failures[0]["id"] == {"Organizer": "missing123"}
+    assert Path(failures[0]["context"]["source"]).parts[-2:] == (
+        "missing",
+        "book.m4b",
+    )
+    assert failures[0]["context"]["destination"].endswith("book.m4b")
+    assert failures[0]["context"]["method"] == "copy"
+    assert result.failures[0]["remediation"]
+    assert not list((tmp_path / "library").rglob("*.heavymlm-staging-*"))
+
+
+def test_organizer_rolls_back_partial_copy_and_records_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"complete audio")
+    library_root = tmp_path / "library"
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(library_root),
+                "method": "copy",
+            },
+        ),
+    )
+
+    def fail_after_partial_copy(_: Path, destination: Path) -> None:
+        destination.write_bytes(b"partial")
+        raise OSError("simulated disk write failure")
+
+    monkeypatch.setattr("mlm.library.shutil.copy2", fail_after_partial_copy)
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            FakeQbit(downloads),
+            FakeMam(),
+        )
+    )
+
+    target = library_root / "An Author" / "Book {A Narrator}"
+    assert result.failed == 1
+    assert result.linked == 0
+    assert not target.exists()
+    assert not list(library_root.rglob("*.heavymlm-staging-*"))
+    assert repository.torrent("abc123") is None
+    failure = repository.table_rows("errored_torrents")[0]
+    assert "simulated disk write failure" in failure["error"]
+    assert failure["context"]["source"] == str(source)
+    assert failure["context"]["destination"] == str(target / "book.m4b")
+    assert failure["context"]["method"] == "copy"
+
+
+def test_organizer_replaces_empty_ghost_folder_and_clears_old_error(
+    tmp_path: Path,
+) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"audio")
+    library_root = tmp_path / "library"
+    target = library_root / "An Author" / "Book {A Narrator}"
+    target.mkdir(parents=True)
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    repository.record_organizer_error(
+        "abc123",
+        "Book",
+        "old copy failure",
+        {"destination": str(target)},
+    )
+    config = Config(
+        mam_id="cookie",
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(library_root),
+                "method": "copy",
+            },
+        ),
+    )
+
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            FakeQbit(downloads),
+            FakeMam(),
+        )
+    )
+
+    assert result.linked == 1
+    assert (target / "book.m4b").read_bytes() == b"audio"
+    assert repository.table_rows("errored_torrents") == []
 
 
 def test_organizer_accepts_live_mam_nested_json_metadata(tmp_path: Path) -> None:
