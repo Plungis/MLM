@@ -22,6 +22,10 @@ MaM search metadata uses nested JSON strings for fields such as authors,
 narrators, series, and categories. The Python runtime decodes both those live
 API values and already-decoded structures, matching the legacy Rust client.
 
+Freeleech state fields are normalized from MaM's string booleans before wedge
+decisions. Downloader diagnostics record the raw flags, normalized decision,
+and a distinct successful wedge-application event for verification.
+
 Limitations:
 
 - At the moment MLM only works with qbittorrent

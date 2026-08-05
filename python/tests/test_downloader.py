@@ -48,6 +48,20 @@ class FakeQbit:
         self.added.append(torrent_file)
 
 
+class StringFlagMam(FakeMam):
+    def __init__(self, flag: str) -> None:
+        super().__init__()
+        self.flag = flag
+
+    async def get_torrent_info(self, _: str) -> dict:
+        return {
+            "free": self.flag,
+            "personal_freeleech": "0",
+            "fl_vip": "0",
+            "vip": "0",
+        }
+
+
 def add_selected(repository: Repository, *, size: int = 12) -> None:
     repository.add_selected(
         {
@@ -232,4 +246,60 @@ def test_wedge_first_falls_back_to_ratio_at_reserve(tmp_path: Path) -> None:
 
     assert result.downloaded == 1
     assert result.wedges_remaining == 1
+    assert mam.wedged == []
+
+
+def test_wedge_first_treats_mam_string_zero_flags_as_false(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
+    mam = StringFlagMam("0")
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(
+                mam_id="cookie",
+                unsat_buffer=0,
+                prefer_wedges=True,
+                wedge_buffer=1,
+            ),
+            repository,
+            mam,
+            FakeQbit(),
+        )
+    )
+
+    assert result.downloaded == 1
+    assert result.wedges_remaining == 1
+    assert mam.wedged == [42]
+    activity = repository.recent_activity(component="downloader")
+    assert any(
+        entry["message"] == "Applied freeleech wedge to MaM #42" for entry in activity
+    )
+
+
+def test_wedge_first_does_not_spend_on_string_one_freeleech(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
+    mam = StringFlagMam("1")
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(
+                mam_id="cookie",
+                unsat_buffer=0,
+                prefer_wedges=True,
+                wedge_buffer=1,
+            ),
+            repository,
+            mam,
+            FakeQbit(),
+        )
+    )
+
+    assert result.downloaded == 1
+    assert result.wedges_remaining == 2
     assert mam.wedged == []

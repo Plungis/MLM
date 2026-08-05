@@ -8,6 +8,7 @@ from .config import Config
 from .mam import MamClient, MamRateLimitError, MamWedgeError
 from .qbittorrent import QbitClient
 from .repository import Repository
+from .search import as_bool
 from .torrent import info_hash
 
 
@@ -119,7 +120,7 @@ async def grab_selected_torrents(
                 currently_free = bool(
                     current
                     and any(
-                        current.get(field)
+                        as_bool(current.get(field))
                         for field in ("free", "personal_freeleech", "fl_vip", "vip")
                     )
                 )
@@ -128,12 +129,40 @@ async def grab_selected_torrents(
                 and not currently_free
                 and (config.prefer_wedges or cost in {"UseWedge", "TryWedge"})
             )
+            repository.log_activity(
+                "downloader",
+                f"Evaluated freeleech state for MaM #{torrent_id}",
+                level="debug",
+                context={
+                    "mam_id": torrent_id,
+                    "cost": cost,
+                    "prefer_wedges": config.prefer_wedges,
+                    "currently_free": currently_free,
+                    "wants_wedge": wants_wedge,
+                    "wedges_remaining": wedges_remaining,
+                    "wedge_buffer": wedge_buffer,
+                    "raw_freeleech_flags": {
+                        field: current.get(field) if current else None
+                        for field in ("free", "personal_freeleech", "fl_vip", "vip")
+                    },
+                },
+            )
             if wants_wedge and wedges_remaining > wedge_buffer:
                 try:
                     await mam.wedge_torrent(torrent_id)
                     wedged = True
                     wedges_remaining -= 1
                     user["wedges"] = wedges_remaining
+                    repository.log_activity(
+                        "downloader",
+                        f"Applied freeleech wedge to MaM #{torrent_id}",
+                        level="success",
+                        context={
+                            "mam_id": torrent_id,
+                            "wedges_remaining": wedges_remaining,
+                            "wedge_buffer": wedge_buffer,
+                        },
+                    )
                 except MamWedgeError:
                     if cost == "UseWedge":
                         raise
