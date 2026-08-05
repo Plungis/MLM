@@ -11,7 +11,7 @@ from mlm.repository import Repository
 
 
 class FakeMam:
-    requested: list[tuple[str, int]]
+    requested: list[tuple[int, bool]]
 
     def __init__(self) -> None:
         self.requested = []
@@ -25,34 +25,35 @@ class FakeMam:
             "unsat": {"limit": 10, "count": 0},
         }
 
-    async def get_torrent_file(self, download_hash: str, torrent_id: int) -> bytes:
-        self.requested.append((download_hash, torrent_id))
+    async def get_torrent_file(
+        self, torrent_id: int, *, use_wedge: bool = False
+    ) -> bytes:
+        self.requested.append((torrent_id, use_wedge))
+        if use_wedge:
+            self.wedged.append(torrent_id)
         return b"d4:infod6:lengthi12e4:name4:bookee"
 
     async def get_torrent_info(self, _: str) -> dict:
         return {"free": False}
-
-    async def wedge_torrent(self, torrent_id: int) -> dict:
-        self.wedged.append(torrent_id)
-        return {"tracker_response": {"success": True}}
 
     async def get_torrent_info_by_id(self, torrent_id: int) -> dict:
         return {"personal_freeleech": torrent_id in self.wedged}
 
 
 class RejectedWedgeMam(FakeMam):
-    async def wedge_torrent(self, torrent_id: int) -> dict:
-        self.wedged.append(torrent_id)
+    async def get_torrent_file(
+        self, torrent_id: int, *, use_wedge: bool = False
+    ) -> bytes:
+        if not use_wedge:
+            return await super().get_torrent_file(torrent_id)
+        self.requested.append((torrent_id, True))
         raise MamWedgeError(
-            "tracker rejected the test wedge",
-            reason="rejected",
+            "MaM did not return a torrent file after the wedge request",
+            reason="download_rejected",
             context={
-                "stage": "wedge_response",
+                "stage": "wedge_download_response",
                 "http_status": 200,
-                "tracker_response": {
-                    "success": False,
-                    "error": "tracker rejected the test wedge",
-                },
+                "response_preview": "API session cannot use this request",
             },
         )
 
@@ -124,7 +125,7 @@ def test_download_job_moves_selected_record_into_library_catalog(
     )
 
     assert result.downloaded == 1
-    assert mam.requested == [("secret-hash", 42)]
+    assert mam.requested == [(42, False)]
     assert len(qbit.added) == 1
     assert repository.pending_selected() == []
     assert repository.selected_pipeline_status() == {
@@ -241,6 +242,7 @@ def test_wedge_first_spends_only_above_reserve_and_bypasses_ratio(
     assert result.wedges_remaining == 1
     assert result.wedge_buffer == 1
     assert mam.wedged == [42]
+    assert mam.requested == [(42, False), (42, True)]
 
 
 def test_wedge_first_falls_back_to_ratio_at_reserve(tmp_path: Path) -> None:
@@ -364,8 +366,83 @@ def test_prefer_wedges_does_not_silently_fall_back_after_rejection(
     assert error["context"]["wedges_before"] == 2
     assert error["context"]["wedge_buffer"] == 1
     assert error["context"]["http_status"] == 200
-    assert error["context"]["tracker_response"]["success"] is False
+    assert error["context"]["response_preview"] == (
+        "API session cannot use this request"
+    )
     activity = repository.recent_activity(component="downloader")
     assert any(
         entry["message"] == "Freeleech wedge failed for MaM #42" for entry in activity
     )
+
+
+def test_wedge_failure_can_fall_back_to_ratio_when_enabled(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
+    mam = RejectedWedgeMam()
+    qbit = FakeQbit()
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(
+                mam_id="cookie",
+                unsat_buffer=0,
+                prefer_wedges=True,
+                download_on_wedge_failure=True,
+                wedge_buffer=1,
+            ),
+            repository,
+            mam,
+            qbit,
+        )
+    )
+
+    assert result.downloaded == 1
+    assert result.failed == 0
+    assert len(qbit.added) == 1
+    assert repository.pending_selected() == []
+    assert repository.table_rows("errored_torrents") == []
+    activity = repository.recent_activity(component="downloader")
+    fallback = next(
+        entry for entry in activity if "downloading normally" in entry["message"]
+    )
+    assert fallback["context"]["fallback_used"] is True
+    added = next(
+        entry
+        for entry in activity
+        if entry["message"] == "Added MaM #42 to qBittorrent"
+    )
+    assert added["context"]["wedged"] is False
+    assert added["context"]["wedge_fallback_used"] is True
+
+
+def test_wedge_failure_fallback_still_obeys_ratio_reserve(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository, size=6_000)
+    qbit = FakeQbit()
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(
+                mam_id="cookie",
+                min_ratio=2,
+                unsat_buffer=0,
+                prefer_wedges=True,
+                download_on_wedge_failure=True,
+                wedge_buffer=1,
+            ),
+            repository,
+            RejectedWedgeMam(),
+            qbit,
+        )
+    )
+
+    assert result.downloaded == 0
+    assert result.failed == 0
+    assert result.skipped == 1
+    assert result.skip_reasons == {"ratio_buffer": 1}
+    assert qbit.added == []
+    assert repository.pending_selected()[0]["mam_id"] == 42

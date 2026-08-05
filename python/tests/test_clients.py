@@ -24,7 +24,7 @@ def test_torrent_download_always_includes_tid() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed.append(request)
-        return httpx.Response(200, content=b"torrent bytes")
+        return httpx.Response(200, content=b"d4:infode")
 
     async def exercise() -> bytes:
         async with httpx.AsyncClient(
@@ -32,10 +32,10 @@ def test_torrent_download_always_includes_tid() -> None:
             transport=httpx.MockTransport(handler),
         ) as http:
             mam = MamClient("cookie", client=http)
-            return await mam.get_torrent_file("download-hash", 123456)
+            return await mam.get_torrent_file(123456)
 
-    assert asyncio.run(exercise()) == b"torrent bytes"
-    assert observed[0].url.path == "/tor/download.php/download-hash"
+    assert asyncio.run(exercise()) == b"d4:infode"
+    assert observed[0].url.path == "/tor/download.php"
     assert observed[0].url.params["tid"] == "123456"
 
 

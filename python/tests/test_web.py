@@ -115,6 +115,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     config_page = client.get("/config")
     assert config_page.status_code == 200
     assert "Complete configuration" in config_page.text
+    assert "Download if wedge fails" in config_page.text
     assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
@@ -156,6 +157,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "max_unsat_slots": "140",
             "wedge_buffer": "3",
             "prefer_wedges": "true",
+            "download_on_wedge_failure": "true",
             "grab_both_formats": "true",
             "search_interval": "20",
             "import_interval": "60",
@@ -168,6 +170,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.max_unsat_slots == 140
     assert updated.wedge_buffer == 3
     assert updated.prefer_wedges is True
+    assert updated.download_on_wedge_failure is True
     assert updated.grab_both_formats is True
 
     full_saved = client.post(
@@ -176,6 +179,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "config_toml": r"""
 mam_id = "replacement-secret"
 prefer_wedges = true
+download_on_wedge_failure = true
 wedge_buffer = 100
 audio_types = ["m4b"]
 
@@ -195,6 +199,7 @@ method = "copy"
     fully_updated = load_config(config)
     assert fully_updated.mam_id == "replacement-secret"
     assert fully_updated.wedge_buffer == 100
+    assert fully_updated.download_on_wedge_failure is True
     assert fully_updated.qbittorrent[0].password == "replacement-password"
     assert app.state.services.config.wedge_buffer == 100
 
@@ -291,10 +296,12 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
             "wedges_before": 250,
             "wedges_after": 250,
             "wedge_buffer": 100,
+            "download_on_wedge_failure": False,
             "stage": "wedge_response",
             "wedge_reason": "rejected",
             "http_status": 200,
             "content_type": "application/json",
+            "endpoint": "/tor/download.php?tid=42&fl",
             "tracker_response": {"success": False, "error": "test rejection"},
         },
     )
@@ -303,6 +310,8 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     assert "250 before" in wedge_page.text
     assert "100 reserved" in wedge_page.text
     assert "wedge_response / rejected" in wedge_page.text
+    assert "Disabled (strict)" in wedge_page.text
+    assert "/tor/download.php?tid=42&amp;fl" in wedge_page.text
     assert "test rejection" in wedge_page.text
 
 

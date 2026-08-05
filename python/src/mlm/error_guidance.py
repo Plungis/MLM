@@ -35,6 +35,8 @@ def error_guidance(message: str) -> dict[str, Any]:
                 "Open Downloader diagnostics and inspect the wedge response.",
                 "Confirm the account has an available wedge above the configured "
                 "reserve.",
+                "If ratio fallback is acceptable, enable Download if wedge fails "
+                "in Configuration and retry.",
                 "Retry once the tracker account and wedge balance are ready.",
             ],
             "component": "downloader",

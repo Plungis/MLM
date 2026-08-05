@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 from collections.abc import Callable
 from typing import Any, Self
 
@@ -168,92 +167,79 @@ class MamClient:
         rows = result.get("data", [])
         return rows[-1] if rows else None
 
-    async def get_torrent_file(self, download_hash: str, torrent_id: int) -> bytes:
-        """Download a .torrent; MaM requires the numeric tid query argument."""
-        response = await self.client.get(
-            f"/tor/download.php/{download_hash}",
-            params={"tid": torrent_id},
-        )
-        self._raise_for_status(response)
-        self._remember_cookie()
-        return response.content
-
-    async def wedge_torrent(self, torrent_id: int) -> dict[str, Any]:
-        timestamp = int(time.time() * 1000)
-        endpoint = f"/json/bonusBuy.php/{timestamp}"
-        params = {
-            "spendtype": "personalFL",
-            "torrentid": torrent_id,
-            "timestamp": timestamp,
-        }
+    async def get_torrent_file(
+        self,
+        torrent_id: int,
+        *,
+        use_wedge: bool = False,
+    ) -> bytes:
+        """Download a torrent through MaM's documented automation endpoint."""
+        endpoint = f"/tor/download.php?tid={torrent_id}"
+        if use_wedge:
+            # MaM documents `fl` as an empty GET argument. Keep it bare instead of
+            # using an unrelated bonus-purchase API that rejects API sessions.
+            endpoint += "&fl"
         try:
-            response = await self.client.get(endpoint, params=params)
+            response = await self.client.get(endpoint)
         except Exception as error:
-            raise MamWedgeError(
-                f"wedge request could not reach MaM: {error}",
-                reason="request_failed",
-                context={
-                    "stage": "wedge_request",
-                    "endpoint": endpoint,
-                    "torrent_id": torrent_id,
-                },
-            ) from error
+            if use_wedge:
+                raise MamWedgeError(
+                    f"wedge download could not reach MaM: {error}",
+                    reason="request_failed",
+                    context={
+                        "stage": "wedge_download_request",
+                        "endpoint": endpoint,
+                        "torrent_id": torrent_id,
+                    },
+                ) from error
+            raise
         try:
             self._raise_for_status(response)
+        except MamRateLimitError:
+            raise
         except Exception as error:
-            raise MamWedgeError(
-                f"MaM wedge endpoint returned HTTP {response.status_code}: {error}",
-                reason="http_error",
-                context={
-                    "stage": "wedge_http_response",
-                    "endpoint": endpoint,
-                    "torrent_id": torrent_id,
-                    "http_status": response.status_code,
-                    "content_type": response.headers.get("content-type"),
-                    "response_preview": response.text[:500],
-                },
-            ) from error
+            if use_wedge:
+                raise MamWedgeError(
+                    (
+                        "MaM wedge download returned HTTP "
+                        f"{response.status_code}: {error}"
+                    ),
+                    reason="http_error",
+                    context={
+                        "stage": "wedge_download_http_response",
+                        "endpoint": endpoint,
+                        "torrent_id": torrent_id,
+                        "http_status": response.status_code,
+                        "content_type": response.headers.get("content-type"),
+                        "response_preview": response.text[:500],
+                    },
+                ) from error
+            raise
         self._remember_cookie()
-        response_context: dict[str, Any] = {
-            "stage": "wedge_response",
-            "endpoint": endpoint,
-            "torrent_id": torrent_id,
-            "http_status": response.status_code,
-            "content_type": response.headers.get("content-type"),
-        }
-        try:
-            result = response.json()
-        except ValueError as error:
-            response_context["response_preview"] = response.text[:500]
-            raise MamWedgeError(
-                "MaM wedge endpoint returned invalid JSON",
-                reason="invalid_response",
-                context=response_context,
-            ) from error
-        response_context["tracker_response"] = result
-        if not isinstance(result, dict):
-            raise MamWedgeError(
-                "MaM wedge endpoint returned an unexpected response",
-                reason="invalid_response",
-                context=response_context,
-            )
-        success = result.get("success")
-        if isinstance(success, str):
-            success = success.strip().casefold() in {"1", "true", "yes"}
-        if success is not True:
-            message = str(result.get("error") or "unknown wedge error")
-            normalized = message.casefold()
-            known_reasons = {
-                "this torrent is vip": "already_vip",
-                "cannot spend fl wedges on freeleech picks": "already_global_freeleech",
-                "this is already a personal freeleech": "already_personal_freeleech",
+        if not response.content.startswith(b"d"):
+            context = {
+                "stage": (
+                    "wedge_download_response"
+                    if use_wedge
+                    else "torrent_download_response"
+                ),
+                "endpoint": endpoint,
+                "torrent_id": torrent_id,
+                "http_status": response.status_code,
+                "content_type": response.headers.get("content-type"),
+                "response_preview": response.text[:500],
             }
+            if not use_wedge:
+                raise MamError(
+                    "MaM torrent download did not return a torrent file "
+                    f"(content-type={context['content_type']})"
+                )
             raise MamWedgeError(
-                message,
-                reason=known_reasons.get(normalized, "rejected"),
-                context=response_context,
+                "MaM did not return a torrent file after the wedge request",
+                reason="download_rejected",
+                context=context,
             )
-        return response_context
+        return response.content
 
     async def snatchlist(
         self, kind: str, page: int, cache_timestamp: int

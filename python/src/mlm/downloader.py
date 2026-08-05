@@ -28,13 +28,6 @@ class DownloadRun:
     failures: list[dict[str, object]] = field(default_factory=list)
 
 
-ALREADY_FREE_WEDGE_REASONS = {
-    "already_vip",
-    "already_global_freeleech",
-    "already_personal_freeleech",
-}
-
-
 async def _confirm_wedge(
     mam: MamClient,
     torrent_id: int,
@@ -70,12 +63,15 @@ async def _confirm_wedge(
 
 
 async def _torrent_file_with_backoff(
-    mam: MamClient, download_hash: str, torrent_id: int
+    mam: MamClient,
+    torrent_id: int,
+    *,
+    use_wedge: bool = False,
 ) -> bytes:
     delay = 30
     while True:
         try:
-            return await mam.get_torrent_file(download_hash, torrent_id)
+            return await mam.get_torrent_file(torrent_id, use_wedge=use_wedge)
         except MamRateLimitError:
             await asyncio.sleep(delay)
             delay = min(delay * 2, 300)
@@ -143,9 +139,7 @@ async def grab_selected_torrents(
                     },
                 )
                 continue
-            torrent_file = await _torrent_file_with_backoff(
-                mam, selected["dl_link"], torrent_id
-            )
+            torrent_file = await _torrent_file_with_backoff(mam, torrent_id)
             torrent_hash = info_hash(torrent_file)
             existing = await qbit.torrents(hashes=[torrent_hash])
             if not existing:
@@ -154,6 +148,7 @@ async def grab_selected_torrents(
                     if existing:
                         break
             wedged = False
+            wedge_failed_fallback = False
             cost = selected.get("cost")
             wedge_buffer = int(
                 selected.get("wedge_buffer")
@@ -182,6 +177,7 @@ async def grab_selected_torrents(
                 "mam_id": torrent_id,
                 "cost": cost,
                 "prefer_wedges": config.prefer_wedges,
+                "download_on_wedge_failure": config.download_on_wedge_failure,
                 "currently_free": currently_free,
                 "already_present": bool(existing),
                 "wants_wedge": wants_wedge,
@@ -208,13 +204,28 @@ async def grab_selected_torrents(
                     context=wedge_context,
                 )
                 try:
-                    receipt = await mam.wedge_torrent(torrent_id)
+                    wedged_torrent_file = await _torrent_file_with_backoff(
+                        mam,
+                        torrent_id,
+                        use_wedge=True,
+                    )
+                    wedged_torrent_hash = info_hash(wedged_torrent_file)
+                    if wedged_torrent_hash != torrent_hash:
+                        raise MamWedgeError(
+                            "MaM returned a different torrent after applying the wedge",
+                            reason="torrent_mismatch",
+                            context={
+                                **wedge_context,
+                                "expected_hash": torrent_hash,
+                                "received_hash": wedged_torrent_hash,
+                            },
+                        )
                     confirmation = await _confirm_wedge(
                         mam, torrent_id, wedges_remaining
                     )
                     wedge_context.update(
                         stage="wedge_confirmation",
-                        tracker_receipt=receipt,
+                        endpoint=f"/tor/download.php?tid={torrent_id}&fl",
                         **confirmation,
                     )
                     diagnostic_context.update(wedge_context)
@@ -225,6 +236,7 @@ async def grab_selected_torrents(
                             reason="unconfirmed",
                             context=wedge_context,
                         )
+                    torrent_file = wedged_torrent_file
                     wedged = True
                     confirmed_balance = confirmation.get("wedges_after")
                     wedges_remaining = (
@@ -244,25 +256,40 @@ async def grab_selected_torrents(
                         },
                     )
                 except MamWedgeError as error:
+                    confirmation = await _confirm_wedge(
+                        mam, torrent_id, wedges_remaining
+                    )
                     failure_context = {
                         **wedge_context,
                         **error.context,
+                        **confirmation,
                         "wedge_reason": error.reason,
                         "error": f"{type(error).__name__}: {error}",
                     }
                     diagnostic_context.update(failure_context)
-                    if error.reason in ALREADY_FREE_WEDGE_REASONS:
-                        currently_free = True
+                    if confirmation["verified"]:
+                        wedged = True
+                        confirmed_balance = confirmation.get("wedges_after")
+                        wedges_remaining = (
+                            int(confirmed_balance)
+                            if confirmed_balance is not None
+                            and int(confirmed_balance) < wedges_remaining
+                            else wedges_remaining - 1
+                        )
+                        user["wedges"] = wedges_remaining
                         repository.log_activity(
                             "downloader",
                             (
-                                f"No wedge consumed for MaM #{torrent_id}: "
-                                f"tracker reports it is already free"
+                                f"Confirmed freeleech wedge for MaM #{torrent_id} "
+                                "despite an unexpected download response"
                             ),
                             level="warning",
-                            context=failure_context,
+                            context={
+                                **failure_context,
+                                "wedges_remaining": wedges_remaining,
+                            },
                         )
-                    elif config.prefer_wedges or cost == "UseWedge":
+                    elif not (config.download_on_wedge_failure or cost == "TryWedge"):
                         repository.log_activity(
                             "downloader",
                             f"Freeleech wedge failed for MaM #{torrent_id}",
@@ -275,11 +302,14 @@ async def grab_selected_torrents(
                             context=failure_context,
                         ) from error
                     else:
+                        wedge_failed_fallback = True
+                        failure_context["fallback_used"] = True
+                        diagnostic_context.update(failure_context)
                         repository.log_activity(
                             "downloader",
                             (
-                                f"Optional wedge failed for MaM #{torrent_id}; "
-                                "continuing with its ratio policy"
+                                f"Wedge failed for MaM #{torrent_id}; downloading "
+                                "normally under ratio safeguards"
                             ),
                             level="warning",
                             context=failure_context,
@@ -292,6 +322,7 @@ async def grab_selected_torrents(
             if (
                 not existing
                 and not wedged
+                and not wedge_failed_fallback
                 and cost not in {"Ratio", "TryWedge"}
                 and not currently_free
             ):
@@ -300,7 +331,7 @@ async def grab_selected_torrents(
                 not existing
                 and not wedged
                 and not currently_free
-                and cost in {"Ratio", "TryWedge"}
+                and (cost in {"Ratio", "TryWedge"} or wedge_failed_fallback)
             )
             if uses_ratio and remaining_buffer - size <= 0:
                 skipped += 1
@@ -335,6 +366,7 @@ async def grab_selected_torrents(
                     "mam_id": torrent_id,
                     "torrent_hash": torrent_hash,
                     "wedged": wedged,
+                    "wedge_fallback_used": wedge_failed_fallback,
                     "already_present": bool(existing),
                 },
             )

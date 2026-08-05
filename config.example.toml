@@ -7,6 +7,7 @@ unsat_buffer = 10
 max_unsat_slots = 140 # optional direct ceiling; remove this line to use the site limit
 wedge_buffer = 0
 prefer_wedges = false # use wedges on non-free torrents before falling back to ratio
+download_on_wedge_failure = false # if a wedge request fails, allow a ratio-safe normal download
 grab_both_formats = false # for list imports, independently grab audiobook and ebook
 search_interval = 30
 link_interval = 10

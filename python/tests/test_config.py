@@ -32,6 +32,7 @@ dry_run = true
     config = load_config(path)
 
     assert config.import_interval == 90
+    assert config.download_on_wedge_failure is False
     assert config.web_port == 3157
     assert config.qbittorrent[0].url == "http://localhost:8080"
     assert config.autograbs[0]["dry_run"] is True
@@ -42,6 +43,7 @@ def test_repository_example_config_is_valid() -> None:
     config = load_config(example)
 
     assert config.autograbs[0]["type"] == "bookmarks"
+    assert config.download_on_wedge_failure is False
     assert len(config.libraries) == 2
 
 
@@ -91,6 +93,7 @@ wedge_buffer = 99
             "max_unsat_slots": 140,
             "wedge_buffer": 4,
             "prefer_wedges": True,
+            "download_on_wedge_failure": True,
             "import_interval": 45,
         },
     )
@@ -100,6 +103,7 @@ wedge_buffer = 99
     assert config.max_unsat_slots == 140
     assert config.wedge_buffer == 4
     assert config.prefer_wedges is True
+    assert config.download_on_wedge_failure is True
     assert config.import_interval == 45
     assert 'mam_id = "keep-this-secret"' in text
     assert 'password = "also-keep-this"' in text
@@ -117,6 +121,7 @@ def test_full_config_editor_validates_and_atomically_replaces_every_section(
     replacement = r"""
 mam_id = "new-secret"
 prefer_wedges = true
+download_on_wedge_failure = true
 wedge_buffer = 100
 audio_types = ["m4b"]
 
@@ -134,6 +139,7 @@ method = "copy"
 
     assert config.mam_id == "new-secret"
     assert config.prefer_wedges is True
+    assert config.download_on_wedge_failure is True
     assert config.wedge_buffer == 100
     assert config.audio_types == ("m4b",)
     assert config.qbittorrent[0].password == "new-password"

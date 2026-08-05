@@ -341,6 +341,7 @@ class ServiceState:
                 "max_unsat_slots": config.max_unsat_slots,
                 "unsat_buffer": config.unsat_buffer,
                 "prefer_wedges": config.prefer_wedges,
+                "download_on_wedge_failure": config.download_on_wedge_failure,
                 "wedge_buffer": config.wedge_buffer,
                 "grab_both_formats": config.grab_both_formats,
                 "qbittorrent_clients": len(config.qbittorrent),
