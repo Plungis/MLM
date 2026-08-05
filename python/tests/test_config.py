@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mlm.config import load_config, save_root_config_values
+import pytest
+
+from mlm.config import (
+    ConfigError,
+    load_config,
+    save_config_text,
+    save_root_config_values,
+)
 
 
 def test_loads_legacy_names_and_defaults(tmp_path: Path) -> None:
@@ -100,3 +107,38 @@ wedge_buffer = 99
     assert "goodreads_interval" not in text
     assert "import_interval = 45" in text
     assert text.index("max_unsat_slots") < text.index("[[qbittorrent]]")
+
+
+def test_full_config_editor_validates_and_atomically_replaces_every_section(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('mam_id = "old"\n', encoding="utf-8")
+    replacement = r"""
+mam_id = "new-secret"
+prefer_wedges = true
+wedge_buffer = 100
+audio_types = ["m4b"]
+
+[[qbittorrent]]
+url = "http://localhost:8090"
+password = "new-password"
+
+[[library]]
+category = "Audiobooks"
+library_dir = 'E:\MLM Audio'
+method = "copy"
+"""
+
+    config = save_config_text(path, replacement)
+
+    assert config.mam_id == "new-secret"
+    assert config.prefer_wedges is True
+    assert config.wedge_buffer == 100
+    assert config.audio_types == ("m4b",)
+    assert config.qbittorrent[0].password == "new-password"
+    assert config.libraries[0]["method"] == "copy"
+
+    with pytest.raises(ConfigError):
+        save_config_text(path, 'mam_id = "broken"\nnot_a_setting = true\n')
+    assert load_config(path).mam_id == "new-secret"

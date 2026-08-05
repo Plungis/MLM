@@ -7,8 +7,8 @@
     <p class="subtitle">Change HeavyMLM download policy and scheduler settings without restarting MyAnonaSuite. Saves are validated before your TOML file is replaced.</p>
   </div>
   <div class="page-meta">
-    <span class="status ok">Secrets protected</span>
-    <span class="chip">Local changes only</span>
+    <span class="status ok">Validated saves</span>
+    <span class="chip">Full editor is local only</span>
   </div>
 </header>
 
@@ -58,7 +58,7 @@
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="prefer_wedges" value="true"{% if config.prefer_wedges %} checked{% endif %}>
-        <span><strong>Prefer freeleech wedges</strong><small>Wedge non-free torrents first, then fall back to their normal cost rule after the reserve is reached.</small></span>
+        <span><strong>Prefer freeleech wedges</strong><small>Above the reserve, a non-free torrent must receive and confirm a wedge before it is sent to qBittorrent. At the reserve, its normal cost rule applies.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="add_torrents_stopped" value="true"{% if config.add_torrents_stopped %} checked{% endif %}>
@@ -95,19 +95,35 @@
   </section>
 
   <div class="config-savebar">
-    <div><strong>Safe save</strong><span>Nested connections, credentials, lists, tags, and library definitions remain untouched.</span></div>
+    <div><strong>Quick policy save</strong><span>Applies these common runtime controls immediately and leaves every nested section untouched.</span></div>
     <button class="primary" type="submit">Save and apply</button>
   </div>
 </form>
 
-<section class="panel">
+<section class="panel full-config-panel">
   <header class="panel-header">
-    <div><h2>Protected configuration</h2><p>Review the rest of the loaded configuration without exposing credentials.</p></div>
-    <span class="chip">Read only</span>
+    <div><h2>Complete configuration</h2><p>Edit every supported setting and nested section in the actual TOML document.</p></div>
+    <span class="chip">Full control</span>
   </header>
+  {% if config_toml is not none %}
+  <form action="/config/full" method="post">
   <div class="panel-body">
-    <div class="security-note"><strong>Security:</strong> MaM, qBittorrent, Notion, and Audiobookshelf credentials remain redacted and cannot be changed through the browser.</div>
+    <div class="security-note"><strong>Local only:</strong> This editor includes credentials because it is available only from the computer running MyAnonaSuite. The entire document is validated before replacement.</div>
+    <label class="full-config-editor">
+      <span>{{ config_path }}</span>
+      <textarea name="config_toml" rows="34" spellcheck="false" autocapitalize="off" autocomplete="off">{{ config_toml }}</textarea>
+    </label>
   </div>
-  <details><summary>Show redacted configuration</summary><pre>{{ config | tojson(indent=2) }}</pre></details>
+  <div class="config-savebar full-savebar">
+    <div><strong>Validate, save, and apply</strong><span>Schedulers, connections, and live policy reload immediately; existing queued items are re-evaluated under the new runtime policy on their next pass. Host and port changes take effect on the next launch because the current listener cannot move itself.</span></div>
+    <button class="primary" type="submit">Save complete config</button>
+  </div>
+  </form>
+  {% else %}
+  <div class="panel-body">
+    <div class="security-note"><strong>Protected:</strong> The complete editor is visible only on the computer running MyAnonaSuite. Open <code>http://127.0.0.1:3157/config</code> locally to use it.</div>
+    <details><summary>Show redacted configuration</summary><pre>{{ config | tojson(indent=2) }}</pre></details>
+  </div>
+  {% endif %}
 </section>
 {% endblock %}

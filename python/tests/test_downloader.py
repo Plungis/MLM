@@ -6,6 +6,7 @@ from pathlib import Path
 from mlm.config import Config
 from mlm.database import ensure_database
 from mlm.downloader import grab_selected_torrents
+from mlm.mam import MamWedgeError
 from mlm.repository import Repository
 
 
@@ -20,7 +21,7 @@ class FakeMam:
         return {
             "uploaded_bytes": 10_000,
             "downloaded_bytes": 0,
-            "wedges": 2,
+            "wedges": 2 - len(self.wedged),
             "unsat": {"limit": 10, "count": 0},
         }
 
@@ -31,8 +32,29 @@ class FakeMam:
     async def get_torrent_info(self, _: str) -> dict:
         return {"free": False}
 
-    async def wedge_torrent(self, torrent_id: int) -> None:
+    async def wedge_torrent(self, torrent_id: int) -> dict:
         self.wedged.append(torrent_id)
+        return {"tracker_response": {"success": True}}
+
+    async def get_torrent_info_by_id(self, torrent_id: int) -> dict:
+        return {"personal_freeleech": torrent_id in self.wedged}
+
+
+class RejectedWedgeMam(FakeMam):
+    async def wedge_torrent(self, torrent_id: int) -> dict:
+        self.wedged.append(torrent_id)
+        raise MamWedgeError(
+            "tracker rejected the test wedge",
+            reason="rejected",
+            context={
+                "stage": "wedge_response",
+                "http_status": 200,
+                "tracker_response": {
+                    "success": False,
+                    "error": "tracker rejected the test wedge",
+                },
+            },
+        )
 
 
 class FakeQbit:
@@ -307,3 +329,43 @@ def test_wedge_first_does_not_spend_on_string_one_freeleech(tmp_path: Path) -> N
     assert result.downloaded == 1
     assert result.wedges_remaining == 2
     assert mam.wedged == []
+
+
+def test_prefer_wedges_does_not_silently_fall_back_after_rejection(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository)
+    mam = RejectedWedgeMam()
+    qbit = FakeQbit()
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(
+                mam_id="cookie",
+                unsat_buffer=0,
+                prefer_wedges=True,
+                wedge_buffer=1,
+            ),
+            repository,
+            mam,
+            qbit,
+        )
+    )
+
+    assert result.downloaded == 0
+    assert result.failed == 1
+    assert qbit.added == []
+    assert repository.pending_selected()[0]["mam_id"] == 42
+    error = repository.table_rows("errored_torrents")[0]
+    assert error["context"]["wedge_attempted"] is True
+    assert error["context"]["wedges_before"] == 2
+    assert error["context"]["wedge_buffer"] == 1
+    assert error["context"]["http_status"] == 200
+    assert error["context"]["tracker_response"]["success"] is False
+    activity = repository.recent_activity(component="downloader")
+    assert any(
+        entry["message"] == "Freeleech wedge failed for MaM #42" for entry in activity
+    )

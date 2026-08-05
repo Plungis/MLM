@@ -8,16 +8,64 @@
   </div>
   {% if rows %}
   <div class="page-meta">
-    <span class="chip">Showing {{ rows | length }}{% if found > rows | length %} of {{ found }}{% endif %} matches</span>
+    <span class="chip">{{ rows | length }} filtered match{% if rows | length != 1 %}es{% endif %}</span>
+    <span class="chip">Scanned {{ scanned }}{% if found > scanned %} of {{ found }}{% endif %} MaM releases</span>
   </div>
   {% endif %}
 </header>
 
 <section class="panel search-panel">
   <div class="panel-body">
-    <form class="search-form" method="get" role="search">
-      <input type="search" name="q" value="{{ query }}" placeholder="Title, author, narrator, ISBN…" autofocus>
-      <button class="primary" type="submit">Search</button>
+    <form class="hm-filter-form" method="get" role="search">
+      <div class="hm-filter-lead">
+        <label>
+          <span>Any keywords</span>
+          <input type="search" name="q" value="{{ filters.q }}" placeholder="Title, author, narrator, ISBN…" autofocus>
+        </label>
+        <button class="primary" type="submit">Apply all filters</button>
+        <a class="button" href="/search">Clear</a>
+      </div>
+      <div class="hm-filter-grid">
+        <label><span>Title contains</span><input type="text" name="title" value="{{ filters.title }}" placeholder="The Eye of the Bedlam Bride"></label>
+        <label><span>Author contains</span><input type="text" name="author" value="{{ filters.author }}" placeholder="Matt Dinniman"></label>
+        <label><span>Series contains</span><input type="text" name="series" value="{{ filters.series }}" placeholder="Dungeon Crawler Carl"></label>
+        <label><span>Narrator contains</span><input type="text" name="narrator" value="{{ filters.narrator }}" placeholder="Jeff Hays"></label>
+        <label>
+          <span>File type</span>
+          <select name="filetype">
+            {% for value,label in [("","Any format"),("m4b","M4B"),("mp3","MP3"),("m4a","M4A"),("flac","FLAC"),("epub","EPUB"),("pdf","PDF"),("mobi","MOBI"),("azw3","AZW3"),("cbz","CBZ"),("cbr","CBR")] %}
+            <option value="{{ value }}"{% if filters.filetype == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Category</span>
+          <select name="category">
+            {% for value,label in [("","Any category"),("audiobook","Audiobook"),("ebook","Ebook"),("comic","Comic book"),("manga","Manga"),("musicology","Musicology"),("radio","Radio")] %}
+            <option value="{{ value }}"{% if filters.category == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label><span>Language</span><input type="text" name="language" value="{{ filters.language }}" placeholder="English"></label>
+        <label>
+          <span>Download cost</span>
+          <select name="availability">
+            {% for value,label in [("","Any cost"),("freeleech","Any freeleech"),("global","Global freeleech"),("personal","Personal freeleech"),("vip","VIP freeleech"),("ratio","Ratio download")] %}
+            <option value="{{ value }}"{% if filters.availability == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label><span>Minimum seeders</span><input type="number" name="min_seeders" min="0" value="{{ filters.min_seeders }}"></label>
+        <label>
+          <span>Sort results</span>
+          <select name="sort">
+            {% for value,label in [("relevance","MaM relevance"),("title","Title"),("author","Author"),("series","Series"),("filetype","File type"),("newest","Newest"),("seeders","Most seeders"),("size_asc","Smallest"),("size_desc","Largest")] %}
+            <option value="{{ value }}"{% if filters.sort == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <p class="hm-filter-hint"><strong>AND policy:</strong> every filled field must match. Example: Author = Matt Dinniman + Series = Dungeon Crawler Carl + File type = M4B.</p>
     </form>
   </div>
 </section>
@@ -81,9 +129,9 @@
   </article>
   {% endfor %}
 </section>
-{% elif query and not error %}
+{% elif searched and not error %}
 <section class="panel empty-state">
-  <div><strong>No matching releases</strong><p>Try a shorter title, author name, or ISBN.</p></div>
+  <div><strong>No releases passed every filter</strong><p>Broaden one field at a time. All filled filters use AND logic.</p></div>
 </section>
 {% else %}
 <section class="panel empty-state">

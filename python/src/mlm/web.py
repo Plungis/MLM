@@ -17,11 +17,21 @@ from fastapi.templating import Jinja2Templates
 
 from . import __version__
 from .autograbber import select_row
-from .config import Config, ConfigError, load_config, save_root_config_values
+from .config import (
+    Config,
+    ConfigError,
+    load_config,
+    save_config_text,
+    save_root_config_values,
+)
 from .database import ensure_database
 from .error_guidance import error_guidance
 from .mam import authenticated_mam_client
-from .modules.heavymlm.search import present_search_result
+from .modules.heavymlm.search import (
+    filter_search_results,
+    present_search_result,
+    search_seed,
+)
 from .repository import Repository
 from .scheduler import ServiceState
 from .search import as_int
@@ -94,6 +104,15 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if hasattr(app.state, "services"):
             return app.state.services.config
         return config
+
+    def local_request(request: Request) -> bool:
+        client_host = request.client.host if request.client else ""
+        if client_host == "testclient":
+            return True
+        try:
+            return ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            return False
 
     async def ui_snapshot() -> dict:
         now = time.monotonic()
@@ -244,6 +263,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.get("/config", response_class=HTMLResponse)
     async def show_config(request: Request) -> HTMLResponse:
+        editable = local_request(request)
         return templates.TemplateResponse(
             request,
             "config.html",
@@ -253,6 +273,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 config=_redacted_config(active_config()),
                 saved=request.query_params.get("saved") == "1",
                 error=None,
+                config_path=str(config_path),
+                config_toml=(
+                    config_path.read_text(encoding="utf-8") if editable else None
+                ),
             ),
         )
 
@@ -270,12 +294,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         import_interval: str = Form(...),
         link_interval: str = Form(...),
     ) -> HTMLResponse:
-        client_host = request.client.host if request.client else ""
         try:
-            if (
-                client_host != "testclient"
-                and not ipaddress.ip_address(client_host).is_loopback
-            ):
+            if not local_request(request):
                 raise ConfigError(
                     "configuration changes are only allowed from this computer"
                 )
@@ -305,6 +325,41 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     config=_redacted_config(active_config()),
                     saved=False,
                     error=str(error),
+                    config_path=str(config_path),
+                    config_toml=(
+                        config_path.read_text(encoding="utf-8")
+                        if local_request(request)
+                        else None
+                    ),
+                ),
+                status_code=400,
+            )
+        return RedirectResponse("/config?saved=1", status_code=303)
+
+    @app.post("/config/full", response_class=HTMLResponse)
+    async def save_full_config(
+        request: Request,
+        config_toml: str = Form(...),
+    ) -> HTMLResponse:
+        try:
+            if not local_request(request):
+                raise ConfigError(
+                    "configuration changes are only allowed from this computer"
+                )
+            updated = save_config_text(config_path, config_toml)
+            await app.state.services.reconfigure(updated)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "config.html",
+                await context(
+                    request,
+                    title="Configuration",
+                    config=_redacted_config(active_config()),
+                    saved=False,
+                    error=str(error),
+                    config_path=str(config_path),
+                    config_toml=config_toml,
                 ),
                 status_code=400,
             )
@@ -328,28 +383,80 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         )
 
     @app.get("/search", response_class=HTMLResponse)
-    async def search(request: Request, q: str = "") -> HTMLResponse:
+    async def search(
+        request: Request,
+        q: str = "",
+        title: str = "",
+        author: str = "",
+        series: str = "",
+        narrator: str = "",
+        filetype: str = "",
+        category: str = "",
+        language: str = "",
+        availability: str = "",
+        min_seeders: int = 0,
+        sort: str = "relevance",
+    ) -> HTMLResponse:
         rows = []
         error = None
         found = 0
-        if q:
+        scanned = 0
+        filters = {
+            "q": q,
+            "title": title,
+            "author": author,
+            "series": series,
+            "narrator": narrator,
+            "filetype": filetype,
+            "category": category,
+            "language": language,
+            "availability": availability,
+            "min_seeders": max(0, min_seeders),
+            "sort": sort,
+        }
+        searched = any(
+            value
+            for name, value in filters.items()
+            if name != "sort" and value not in {"", 0}
+        )
+        if searched:
             try:
-                result = await app.state.services.mam.search(
-                    {
-                        "dlLink": True,
-                        "mediaInfo": True,
-                        "isbn": True,
-                        "perpage": 100,
-                        "tor": {"text": q},
-                    }
-                )
-                raw_rows = result.get("data", [])
-                rows = [
+                seed, search_in = search_seed(filters)
+                raw_by_id: dict[int, dict] = {}
+                start = 0
+                for _ in range(5):
+                    tor: dict[str, object] = {"startNumber": start}
+                    if seed:
+                        tor["text"] = seed
+                    if search_in:
+                        tor["srchIn"] = search_in
+                    result = await app.state.services.mam.search(
+                        {
+                            "dlLink": True,
+                            "mediaInfo": True,
+                            "isbn": True,
+                            "perpage": 100,
+                            "tor": tor,
+                        }
+                    )
+                    raw_rows = [
+                        row for row in result.get("data", []) if isinstance(row, dict)
+                    ]
+                    found = max(found, as_int(result.get("found"), len(raw_rows)))
+                    before = len(raw_by_id)
+                    for row in raw_rows:
+                        raw_by_id[as_int(row.get("id"))] = row
+                    start += len(raw_rows)
+                    if not raw_rows or len(raw_by_id) == before or start >= found:
+                        break
+                scanned = len(raw_by_id)
+                presented = [
                     present_search_result(row)
-                    for row in raw_rows
-                    if isinstance(row, dict)
+                    for torrent_id, row in raw_by_id.items()
+                    if torrent_id
                 ]
-                found = max(len(rows), as_int(result.get("found"), len(rows)))
+                rows = filter_search_results(presented, filters)
+                found = max(found, scanned)
             except Exception as caught:  # noqa: BLE001 - display API failure in UI
                 error = str(caught)
         return templates.TemplateResponse(
@@ -359,8 +466,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 request,
                 title="Search MaM",
                 query=q,
+                filters=filters,
+                searched=searched,
                 rows=rows,
                 found=found,
+                scanned=scanned,
                 error=error,
             ),
         )

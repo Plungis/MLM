@@ -66,6 +66,19 @@
           {% if error_context.get("remediation") %}<div><h3>Recommended fix</h3><p>{{ error_context.get("remediation") }}</p></div>{% endif %}
         </div>
         {% endif %}
+        {% if error_context.get("wedge_attempted") %}
+        <section class="wedge-debug">
+          <header><h3>Wedge attempt debug</h3><span class="status error">Not applied</span></header>
+          <div class="recovery-grid placement-paths">
+            <div><h3>Policy</h3><code>{% if error_context.get("prefer_wedges") %}Prefer wedges{% else %}{{ error_context.get("cost") }}{% endif %}</code></div>
+            <div><h3>Balance</h3><code>{{ error_context.get("wedges_before", "?") }} before · {{ error_context.get("wedges_after", "not confirmed") }} after · {{ error_context.get("wedge_buffer", "?") }} reserved</code></div>
+            <div><h3>Failure stage</h3><code>{{ error_context.get("stage", "unknown") }}{% if error_context.get("wedge_reason") %} / {{ error_context.get("wedge_reason") }}{% endif %}</code></div>
+            <div><h3>HTTP response</h3><code>{{ error_context.get("http_status", "not received") }}{% if error_context.get("content_type") %} · {{ error_context.get("content_type") }}{% endif %}</code></div>
+          </div>
+          {% if error_context.get("tracker_response") %}<details open><summary>MaM wedge response</summary><pre>{{ error_context.get("tracker_response") | tojson(indent=2) }}</pre></details>{% endif %}
+          {% if error_context.get("response_preview") %}<details open><summary>Raw response preview</summary><pre>{{ error_context.get("response_preview") }}</pre></details>{% endif %}
+        </section>
+        {% endif %}
         <div class="recovery-grid">
           <div>
             <h3>What happened</h3>

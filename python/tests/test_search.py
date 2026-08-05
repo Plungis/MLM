@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from mlm.modules.heavymlm.search import present_search_result
+from mlm.modules.heavymlm.search import (
+    filter_search_results,
+    present_search_result,
+    search_seed,
+)
 from mlm.search import (
     build_search_query,
     matches_filter,
@@ -143,3 +147,48 @@ def test_heavymlm_search_card_falls_back_for_unknown_values() -> None:
 
     assert result["size"] == "unknown"
     assert result["availability"] == [{"label": "Ratio download", "tone": "ratio"}]
+
+
+def test_heavymlm_manual_filters_use_and_policy() -> None:
+    raw_rows = [
+        {
+            "id": 1,
+            "title": "Dungeon Crawler Carl",
+            "author_info": {"1": "Matt Dinniman"},
+            "series_info": {"1": ["Dungeon Crawler Carl", "1"]},
+            "filetype": "m4b",
+            "catname": "Audiobook",
+            "language": 1,
+            "size": "500 MiB",
+            "seeders": 10,
+        },
+        {
+            "id": 2,
+            "title": "Carl's Doomsday Scenario",
+            "author_info": {"1": "Matt Dinniman"},
+            "series_info": {"1": ["Dungeon Crawler Carl", "2"]},
+            "filetype": "mp3",
+            "catname": "Audiobook",
+            "language": 1,
+            "size": "600 MiB",
+            "seeders": 12,
+        },
+    ]
+    filters = {
+        "author": "Matt Dinniman",
+        "series": "Dungeon Crawler Carl",
+        "filetype": "m4b",
+        "category": "audiobook",
+        "language": "English",
+        "min_seeders": 5,
+        "sort": "series",
+    }
+
+    seed, fields = search_seed(filters)
+    results = filter_search_results(
+        [present_search_result(row) for row in raw_rows], filters
+    )
+
+    assert seed == "Matt Dinniman"
+    assert fields == ["author"]
+    assert [row["id"] for row in results] == [1]

@@ -38,6 +38,8 @@ class FakeSearchMam:
 
     async def search(self, query: dict) -> dict:
         self.query = query
+        if query.get("tor", {}).get("startNumber", 0):
+            return {"found": "237", "data": []}
         return {
             "found": "237",
             "data": [
@@ -110,7 +112,10 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     events = client.get("/records/events")
     assert events.status_code == 200
     assert "Raw record" in events.text
-    assert client.get("/config").status_code == 200
+    config_page = client.get("/config")
+    assert config_page.status_code == 200
+    assert "Complete configuration" in config_page.text
+    assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
     assert "Activity console" in diagnostics.text
@@ -164,6 +169,42 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.wedge_buffer == 3
     assert updated.prefer_wedges is True
     assert updated.grab_both_formats is True
+
+    full_saved = client.post(
+        "/config/full",
+        data={
+            "config_toml": r"""
+mam_id = "replacement-secret"
+prefer_wedges = true
+wedge_buffer = 100
+audio_types = ["m4b"]
+
+[[qbittorrent]]
+url = "http://localhost:8090"
+password = "replacement-password"
+
+[[library]]
+category = "Audiobooks"
+library_dir = 'E:\MLM Audio'
+method = "copy"
+"""
+        },
+        follow_redirects=False,
+    )
+    assert full_saved.status_code == 303
+    fully_updated = load_config(config)
+    assert fully_updated.mam_id == "replacement-secret"
+    assert fully_updated.wedge_buffer == 100
+    assert fully_updated.qbittorrent[0].password == "replacement-password"
+    assert app.state.services.config.wedge_buffer == 100
+
+    invalid_full_save = client.post(
+        "/config/full",
+        data={"config_toml": 'mam_id = "nope"\nunknown_setting = true\n'},
+    )
+    assert invalid_full_save.status_code == 400
+    assert "unknown configuration fields" in invalid_full_save.text
+    assert load_config(config).mam_id == "replacement-secret"
 
 
 def test_errors_explain_recovery_and_support_retry_and_dismiss(
@@ -241,6 +282,29 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
         client.post("/errors/dismiss", data={"error_id": "not-json"}).status_code == 400
     )
 
+    repository.record_grab_error(
+        selected,
+        RuntimeError("wedge rejected by tracker"),
+        context={
+            "wedge_attempted": True,
+            "prefer_wedges": True,
+            "wedges_before": 250,
+            "wedges_after": 250,
+            "wedge_buffer": 100,
+            "stage": "wedge_response",
+            "wedge_reason": "rejected",
+            "http_status": 200,
+            "content_type": "application/json",
+            "tracker_response": {"success": False, "error": "test rejection"},
+        },
+    )
+    wedge_page = client.get("/records/errored_torrents")
+    assert "Wedge attempt debug" in wedge_page.text
+    assert "250 before" in wedge_page.text
+    assert "100 reserved" in wedge_page.text
+    assert "wedge_response / rejected" in wedge_page.text
+    assert "test rejection" in wedge_page.text
+
 
 def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
     tmp_path: Path,
@@ -309,7 +373,8 @@ def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:
     response = client.get("/search?q=Search+Result")
 
     assert response.status_code == 200
-    assert "Showing 1 of 237 matches" in response.text
+    assert "1 filtered match" in response.text
+    assert "Scanned 1 of 237 MaM releases" in response.text
     assert "The Search Result" in response.text
     assert "An Author" in response.text
     assert "A Narrator" in response.text
@@ -319,6 +384,83 @@ def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:
     assert "12</strong> seeders" in response.text
     assert services.mam.query["mediaInfo"] is True  # type: ignore[attr-defined]
     assert "description" not in services.mam.query  # type: ignore[operator]
+
+
+def test_search_combines_author_series_and_filetype_filters(tmp_path: Path) -> None:
+    class FilterMam:
+        def __init__(self) -> None:
+            self.queries: list[dict] = []
+
+        async def search(self, query: dict) -> dict:
+            self.queries.append(query)
+            return {
+                "found": 3,
+                "data": [
+                    {
+                        "id": 1,
+                        "title": "Dungeon Crawler Carl",
+                        "author_info": '{"1":"Matt Dinniman"}',
+                        "series_info": '{"1":["Dungeon Crawler Carl","1"]}',
+                        "filetype": "m4b",
+                        "catname": "Audiobook",
+                        "language": 1,
+                        "size": "500 MiB",
+                        "seeders": 15,
+                    },
+                    {
+                        "id": 2,
+                        "title": "Carl's Doomsday Scenario",
+                        "author_info": '{"1":"Matt Dinniman"}',
+                        "series_info": '{"1":["Dungeon Crawler Carl","2"]}',
+                        "filetype": "mp3",
+                        "catname": "Audiobook",
+                        "language": 1,
+                        "size": "600 MiB",
+                        "seeders": 12,
+                    },
+                    {
+                        "id": 3,
+                        "title": "Dominion of Blades",
+                        "author_info": '{"1":"Matt Dinniman"}',
+                        "series_info": '{"2":["Dominion of Blades","1"]}',
+                        "filetype": "m4b",
+                        "catname": "Audiobook",
+                        "language": 1,
+                        "size": "700 MiB",
+                        "seeders": 8,
+                    },
+                ],
+            }
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    app = create_app(config_path, database)
+    services = FakeServices(load_config(config_path))
+    mam = FilterMam()
+    services.mam = mam  # type: ignore[attr-defined]
+    app.state.services = services
+    client = TestClient(app)
+
+    response = client.get(
+        "/search",
+        params={
+            "author": "Matt Dinniman",
+            "series": "Dungeon Crawler Carl",
+            "filetype": "m4b",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "1 filtered match" in response.text
+    assert "Dungeon Crawler Carl" in response.text
+    assert "Carl&#39;s Doomsday Scenario" not in response.text
+    assert "Dominion of Blades" not in response.text
+    assert mam.queries[0]["tor"]["text"] == "Matt Dinniman"
+    assert mam.queries[0]["tor"]["srchIn"] == ["author"]
+    assert 'name="series" value="Dungeon Crawler Carl"' in response.text
+    assert '<option value="m4b" selected>M4B</option>' in response.text
 
 
 def test_record_pages_are_paginated(tmp_path: Path) -> None:

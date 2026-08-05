@@ -21,7 +21,16 @@ class MamRateLimitError(MamError):
 
 
 class MamWedgeError(MamError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str = "unknown",
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.context = context or {}
 
 
 class MamClient:
@@ -54,6 +63,14 @@ class MamClient:
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
+
+    def set_mam_id(self, mam_id: str) -> None:
+        """Replace the live API-session cookie after an in-app config save."""
+        self.client.cookies.set(
+            "mam_id",
+            mam_id,
+            domain="www.myanonamouse.net",
+        )
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
@@ -161,21 +178,82 @@ class MamClient:
         self._remember_cookie()
         return response.content
 
-    async def wedge_torrent(self, torrent_id: int) -> None:
+    async def wedge_torrent(self, torrent_id: int) -> dict[str, Any]:
         timestamp = int(time.time() * 1000)
-        response = await self.client.get(
-            f"/json/bonusBuy.php/{timestamp}",
-            params={
-                "spendtype": "personalFL",
-                "torrentid": torrent_id,
-                "timestamp": timestamp,
-            },
-        )
-        self._raise_for_status(response)
+        endpoint = f"/json/bonusBuy.php/{timestamp}"
+        params = {
+            "spendtype": "personalFL",
+            "torrentid": torrent_id,
+            "timestamp": timestamp,
+        }
+        try:
+            response = await self.client.get(endpoint, params=params)
+        except Exception as error:
+            raise MamWedgeError(
+                f"wedge request could not reach MaM: {error}",
+                reason="request_failed",
+                context={
+                    "stage": "wedge_request",
+                    "endpoint": endpoint,
+                    "torrent_id": torrent_id,
+                },
+            ) from error
+        try:
+            self._raise_for_status(response)
+        except Exception as error:
+            raise MamWedgeError(
+                f"MaM wedge endpoint returned HTTP {response.status_code}: {error}",
+                reason="http_error",
+                context={
+                    "stage": "wedge_http_response",
+                    "endpoint": endpoint,
+                    "torrent_id": torrent_id,
+                    "http_status": response.status_code,
+                    "content_type": response.headers.get("content-type"),
+                    "response_preview": response.text[:500],
+                },
+            ) from error
         self._remember_cookie()
-        result = response.json()
-        if not result.get("success"):
-            raise MamWedgeError(str(result.get("error") or "unknown wedge error"))
+        response_context: dict[str, Any] = {
+            "stage": "wedge_response",
+            "endpoint": endpoint,
+            "torrent_id": torrent_id,
+            "http_status": response.status_code,
+            "content_type": response.headers.get("content-type"),
+        }
+        try:
+            result = response.json()
+        except ValueError as error:
+            response_context["response_preview"] = response.text[:500]
+            raise MamWedgeError(
+                "MaM wedge endpoint returned invalid JSON",
+                reason="invalid_response",
+                context=response_context,
+            ) from error
+        response_context["tracker_response"] = result
+        if not isinstance(result, dict):
+            raise MamWedgeError(
+                "MaM wedge endpoint returned an unexpected response",
+                reason="invalid_response",
+                context=response_context,
+            )
+        success = result.get("success")
+        if isinstance(success, str):
+            success = success.strip().casefold() in {"1", "true", "yes"}
+        if success is not True:
+            message = str(result.get("error") or "unknown wedge error")
+            normalized = message.casefold()
+            known_reasons = {
+                "this torrent is vip": "already_vip",
+                "cannot spend fl wedges on freeleech picks": "already_global_freeleech",
+                "this is already a personal freeleech": "already_personal_freeleech",
+            }
+            raise MamWedgeError(
+                message,
+                reason=known_reasons.get(normalized, "rejected"),
+                context=response_context,
+            )
+        return response_context
 
     async def snatchlist(
         self, kind: str, page: int, cache_timestamp: int

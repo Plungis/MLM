@@ -109,7 +109,7 @@ if (jobMonitor) {
       const latest = events.at(-1)?.event;
       const latestFailure = failed?.[1].last_result?.failures?.at(-1);
       summary.textContent = failed
-        ? failed[1].last_error || latestFailure?.error || "Organizer failed; open Errors for details"
+        ? failed[1].last_error || latestFailure?.error || "Job failed; open Errors for details"
         : latest?.message || (running ? "Working…" : "Job complete");
 
       const progressEvent = [...events]

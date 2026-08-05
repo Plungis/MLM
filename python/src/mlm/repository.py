@@ -601,7 +601,13 @@ class Repository:
                 (canonical_json({"Grabber": selected["mam_id"]}),),
             )
 
-    def record_grab_error(self, selected: dict[str, Any], error: Exception) -> None:
+    def record_grab_error(
+        self,
+        selected: dict[str, Any],
+        error: Exception,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         now = datetime.now(UTC).isoformat()
         identifier = {"Grabber": selected["mam_id"]}
         row = {
@@ -609,6 +615,7 @@ class Repository:
             "title": selected.get("meta", {}).get("title", selected["title_search"]),
             "error": str(error),
             "meta": selected.get("meta"),
+            "context": context or {},
             "created_at": now,
         }
         with connect(self.path) as connection:

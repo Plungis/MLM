@@ -329,6 +329,8 @@ class ServiceState:
                 await task
         self.tasks.clear()
         self.stop_event = asyncio.Event()
+        if config.mam_id != self.config.mam_id:
+            self.mam.set_mam_id(config.mam_id)
         self.config = config
         self.repository.log_activity(
             "configuration",
@@ -341,6 +343,11 @@ class ServiceState:
                 "prefer_wedges": config.prefer_wedges,
                 "wedge_buffer": config.wedge_buffer,
                 "grab_both_formats": config.grab_both_formats,
+                "qbittorrent_clients": len(config.qbittorrent),
+                "autograbs": len(config.autograbs),
+                "goodreads_lists": len(config.goodreads_lists),
+                "notion_lists": len(config.notion_lists),
+                "libraries": len(config.libraries),
             },
         )
         self.start()

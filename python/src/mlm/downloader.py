@@ -25,6 +25,48 @@ class DownloadRun:
     slot_cap: int = 0
     wedges_remaining: int = 0
     wedge_buffer: int = 0
+    failures: list[dict[str, object]] = field(default_factory=list)
+
+
+ALREADY_FREE_WEDGE_REASONS = {
+    "already_vip",
+    "already_global_freeleech",
+    "already_personal_freeleech",
+}
+
+
+async def _confirm_wedge(
+    mam: MamClient,
+    torrent_id: int,
+    wedges_before: int,
+) -> dict[str, object]:
+    confirmation: dict[str, object] = {
+        "torrent_id": torrent_id,
+        "wedges_before": wedges_before,
+        "verified": False,
+    }
+    try:
+        user = await mam.user_info()
+        wedges_after = max(0, int(user.get("wedges", 0)))
+        confirmation["wedges_after"] = wedges_after
+        if wedges_after < wedges_before:
+            confirmation.update(verified=True, verified_by="wedge_balance")
+            return confirmation
+    except Exception as error:  # noqa: BLE001 - retain confirmation diagnostics
+        confirmation["balance_check_error"] = f"{type(error).__name__}: {error}"
+
+    try:
+        current = await mam.get_torrent_info_by_id(torrent_id)
+        personal_freeleech = bool(
+            current and as_bool(current.get("personal_freeleech"))
+        )
+        confirmation["personal_freeleech"] = personal_freeleech
+        if personal_freeleech:
+            confirmation.update(verified=True, verified_by="personal_freeleech")
+            return confirmation
+    except Exception as error:  # noqa: BLE001 - retain confirmation diagnostics
+        confirmation["torrent_check_error"] = f"{type(error).__name__}: {error}"
+    return confirmation
 
 
 async def _torrent_file_with_backoff(
@@ -47,6 +89,7 @@ async def grab_selected_torrents(
     other_qbits: Iterable[QbitClient] = (),
 ) -> DownloadRun:
     downloaded = failed = skipped = 0
+    failures: list[dict[str, object]] = []
     skip_reasons = {"unsat_slots": 0, "ratio_buffer": 0}
     pending = repository.pending_selected()
     repository.log_activity(
@@ -68,6 +111,10 @@ async def grab_selected_torrents(
     ) / config.min_ratio
     starting_ratio_buffer = max(0, int(remaining_buffer))
     for selected in pending:
+        diagnostic_context: dict[str, object] = {
+            "mam_id": selected.get("mam_id"),
+            "title": selected.get("meta", {}).get("title"),
+        }
         try:
             torrent_id = int(selected["mam_id"])
             slot_buffer = int(
@@ -129,43 +176,114 @@ async def grab_selected_torrents(
                 and not currently_free
                 and (config.prefer_wedges or cost in {"UseWedge", "TryWedge"})
             )
+            wedge_context: dict[str, object] = {
+                "stage": "wedge_decision",
+                "wedge_attempted": False,
+                "mam_id": torrent_id,
+                "cost": cost,
+                "prefer_wedges": config.prefer_wedges,
+                "currently_free": currently_free,
+                "already_present": bool(existing),
+                "wants_wedge": wants_wedge,
+                "wedges_before": wedges_remaining,
+                "wedge_buffer": wedge_buffer,
+                "raw_freeleech_flags": {
+                    field: current.get(field) if current else None
+                    for field in ("free", "personal_freeleech", "fl_vip", "vip")
+                },
+            }
+            diagnostic_context.update(wedge_context)
             repository.log_activity(
                 "downloader",
                 f"Evaluated freeleech state for MaM #{torrent_id}",
                 level="debug",
-                context={
-                    "mam_id": torrent_id,
-                    "cost": cost,
-                    "prefer_wedges": config.prefer_wedges,
-                    "currently_free": currently_free,
-                    "wants_wedge": wants_wedge,
-                    "wedges_remaining": wedges_remaining,
-                    "wedge_buffer": wedge_buffer,
-                    "raw_freeleech_flags": {
-                        field: current.get(field) if current else None
-                        for field in ("free", "personal_freeleech", "fl_vip", "vip")
-                    },
-                },
+                context=wedge_context,
             )
             if wants_wedge and wedges_remaining > wedge_buffer:
+                wedge_context.update(stage="wedge_request", wedge_attempted=True)
+                diagnostic_context.update(wedge_context)
+                repository.log_activity(
+                    "downloader",
+                    f"Applying freeleech wedge to MaM #{torrent_id}",
+                    context=wedge_context,
+                )
                 try:
-                    await mam.wedge_torrent(torrent_id)
+                    receipt = await mam.wedge_torrent(torrent_id)
+                    confirmation = await _confirm_wedge(
+                        mam, torrent_id, wedges_remaining
+                    )
+                    wedge_context.update(
+                        stage="wedge_confirmation",
+                        tracker_receipt=receipt,
+                        **confirmation,
+                    )
+                    diagnostic_context.update(wedge_context)
+                    if not confirmation["verified"]:
+                        raise MamWedgeError(
+                            "MaM reported wedge success, but HeavyMLM could not "
+                            "confirm a reduced balance or personal freeleech status",
+                            reason="unconfirmed",
+                            context=wedge_context,
+                        )
                     wedged = True
-                    wedges_remaining -= 1
+                    confirmed_balance = confirmation.get("wedges_after")
+                    wedges_remaining = (
+                        int(confirmed_balance)
+                        if confirmed_balance is not None
+                        and int(confirmed_balance) < wedges_remaining
+                        else wedges_remaining - 1
+                    )
                     user["wedges"] = wedges_remaining
                     repository.log_activity(
                         "downloader",
                         f"Applied freeleech wedge to MaM #{torrent_id}",
                         level="success",
                         context={
-                            "mam_id": torrent_id,
+                            **wedge_context,
                             "wedges_remaining": wedges_remaining,
-                            "wedge_buffer": wedge_buffer,
                         },
                     )
-                except MamWedgeError:
-                    if cost == "UseWedge":
-                        raise
+                except MamWedgeError as error:
+                    failure_context = {
+                        **wedge_context,
+                        **error.context,
+                        "wedge_reason": error.reason,
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                    diagnostic_context.update(failure_context)
+                    if error.reason in ALREADY_FREE_WEDGE_REASONS:
+                        currently_free = True
+                        repository.log_activity(
+                            "downloader",
+                            (
+                                f"No wedge consumed for MaM #{torrent_id}: "
+                                f"tracker reports it is already free"
+                            ),
+                            level="warning",
+                            context=failure_context,
+                        )
+                    elif config.prefer_wedges or cost == "UseWedge":
+                        repository.log_activity(
+                            "downloader",
+                            f"Freeleech wedge failed for MaM #{torrent_id}",
+                            level="error",
+                            context=failure_context,
+                        )
+                        raise MamWedgeError(
+                            str(error),
+                            reason=error.reason,
+                            context=failure_context,
+                        ) from error
+                    else:
+                        repository.log_activity(
+                            "downloader",
+                            (
+                                f"Optional wedge failed for MaM #{torrent_id}; "
+                                "continuing with its ratio policy"
+                            ),
+                            level="warning",
+                            context=failure_context,
+                        )
             elif wants_wedge and cost == "UseWedge":
                 raise MamWedgeError(
                     f"wedge reserve reached ({wedges_remaining} available, "
@@ -221,16 +339,23 @@ async def grab_selected_torrents(
                 },
             )
         except Exception as error:  # noqa: BLE001 - isolate failures per torrent
-            repository.record_grab_error(selected, error)
+            error_context = dict(diagnostic_context)
+            if isinstance(error, MamWedgeError):
+                error_context.update(error.context)
+                error_context["wedge_reason"] = error.reason
+            error_context["error"] = f"{type(error).__name__}: {error}"
+            repository.record_grab_error(
+                selected,
+                error,
+                context=error_context,
+            )
+            failures.append(error_context)
             failed += 1
             repository.log_activity(
                 "downloader",
                 f"Failed MaM #{selected.get('mam_id')}",
                 level="error",
-                context={
-                    "mam_id": selected.get("mam_id"),
-                    "error": f"{type(error).__name__}: {error}",
-                },
+                context=error_context,
             )
         await asyncio.sleep(1)
     result = DownloadRun(
@@ -250,6 +375,7 @@ async def grab_selected_torrents(
         ),
         wedges_remaining=wedges_remaining,
         wedge_buffer=config.wedge_buffer,
+        failures=failures,
     )
     repository.log_activity(
         "downloader",
@@ -264,6 +390,7 @@ async def grab_selected_torrents(
             "slot_cap": result.slot_cap,
             "wedges_remaining": result.wedges_remaining,
             "wedge_buffer": result.wedge_buffer,
+            "failures": result.failures,
         },
     )
     return result

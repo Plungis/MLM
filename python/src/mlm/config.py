@@ -185,3 +185,22 @@ def save_root_config_values(path: Path, values: Mapping[str, object | None]) -> 
             raise
         raise ConfigError(f"could not save config {path}: {error}") from error
     return load_config(path)
+
+
+def save_config_text(path: Path, text: str) -> Config:
+    """Validate and atomically replace the complete editable TOML document."""
+    if not text.strip():
+        raise ConfigError("configuration cannot be empty")
+    if not text.endswith("\n"):
+        text += "\n"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        load_config(temporary, environment={})
+        os.replace(temporary, path)
+    except (OSError, ConfigError) as error:
+        temporary.unlink(missing_ok=True)
+        if isinstance(error, ConfigError):
+            raise
+        raise ConfigError(f"could not save config {path}: {error}") from error
+    return load_config(path)

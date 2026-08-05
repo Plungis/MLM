@@ -1049,6 +1049,60 @@ tbody tr:last-child td {
   gap: 10px;
 }
 
+.hm-filter-form {
+  display: grid;
+  gap: 15px;
+}
+
+.hm-filter-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.hm-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 10px;
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 14px;
+}
+
+.hm-filter-form label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.hm-filter-form label > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hm-filter-form select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed var(--dim);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-strong);
+  padding: 9px 12px;
+}
+
+.hm-filter-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.hm-filter-hint strong {
+  color: var(--accent);
+}
+
 input[type="text"],
 input[type="search"],
 input[type="number"] {
@@ -1301,6 +1355,43 @@ pre {
   display: block;
 }
 
+.full-config-panel {
+  margin-top: 18px;
+}
+
+.full-config-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.full-config-editor > span {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.full-config-editor textarea {
+  width: 100%;
+  min-height: 560px;
+  resize: vertical;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  background: #010502;
+  color: var(--text);
+  padding: 14px;
+  font: 12px/1.5 "Cascadia Mono", Consolas, monospace;
+  tab-size: 2;
+}
+
+.full-config-editor textarea:focus {
+  outline: 1px solid var(--accent);
+  box-shadow: 0 0 22px rgba(var(--accent-rgb), 0.12);
+}
+
+.full-savebar {
+  margin: 0 18px 18px;
+}
+
 .config-savebar span {
   color: var(--muted);
   font-size: 11px;
@@ -1330,6 +1421,30 @@ pre {
 
 .placement-paths {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.wedge-debug {
+  display: grid;
+  gap: 11px;
+  border: 1px dashed rgba(255, 104, 120, 0.35);
+  background: rgba(255, 104, 120, 0.035);
+  padding: 13px;
+}
+
+.wedge-debug > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wedge-debug h3 {
+  margin: 0;
+}
+
+.wedge-debug pre {
+  max-height: 240px;
+  margin: 8px 0 0;
 }
 
 .config-fact {
@@ -1709,6 +1824,10 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .hm-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .activity-line {
     grid-template-columns: 145px minmax(110px, 1fr);
   }
@@ -1807,6 +1926,8 @@ pre {
   }
 
   .search-form,
+  .hm-filter-lead,
+  .hm-filter-grid,
   .record-summary,
   .recovery-grid {
     grid-template-columns: 1fr;
