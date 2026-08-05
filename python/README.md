@@ -1,6 +1,8 @@
-# MLM Python
+# MyAnonaSuite Python Runtime
 
-This directory contains the compatibility-first Python migration of MLM.
+This directory contains the MyAnonaSuite runtime and its active HeavyMLM module.
+The `mlm-python` command and existing data paths remain unchanged for backward
+compatibility.
 
 The first implemented slice is a lossless database migration:
 

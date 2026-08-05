@@ -25,6 +25,17 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
+    def has_pending_mam_id(self, mam_id: int) -> bool:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                """SELECT 1 FROM selected_torrents
+                   WHERE mam_id = ?
+                     AND json_extract(payload_json, '$.started_at') IS NULL
+                     AND json_extract(payload_json, '$.removed_at') IS NULL""",
+                (mam_id,),
+            ).fetchone()
+            return row is not None
+
     def selected_pipeline_status(self) -> dict[str, int]:
         with connect(self.path) as connection:
             row = connection.execute(
@@ -580,6 +591,10 @@ class Repository:
                     canonical_json(now),
                     canonical_json(event),
                 ),
+            )
+            connection.execute(
+                "DELETE FROM errored_torrents WHERE id_json = ?",
+                (canonical_json({"Grabber": selected["mam_id"]}),),
             )
 
     def record_grab_error(self, selected: dict[str, Any], error: Exception) -> None:

@@ -1,6 +1,10 @@
-# MLM - Myanonamouse Library Manager
+# MyAnonaSuite
 
-MLM is both an auto downloader and a library organizer. Both parts are optional so either can be replaced with e.g. RSS or [booktree](https://github.com/myxdvz/booktree) if you prefer. And even if you use both, you can still add torrents manually and have them organized, and/or use booktree for collections or files that are not from MaM.
+MyAnonaSuite is a shared terminal-style home for MyAnonamouse and audiobook
+library tools. HeavyMLM is the first active module; reserved workspaces for the
+future ABSidekick and MAM-Spender ports are available from the suite switcher.
+
+HeavyMLM is both an auto downloader and a library organizer. Both parts are optional so either can be replaced with e.g. RSS or [booktree](https://github.com/myxdvz/booktree) if you prefer. And even if you use both, you can still add torrents manually and have them organized, and/or use booktree for collections or files that are not from MaM.
 
 This allows you to automatically download for example bookmarks and have them hardlinked into an organized library folder for e.g. ABS. It also follows a list of preferred formats so that if you first download the mp3 version of a book and then later download an m4b, the mp3 will be automatically removed from your library and optionally moved to a different category or tagged in qBittorrent.
 
@@ -26,11 +30,15 @@ Freeleech state fields are normalized from MaM's string booleans before wedge
 decisions. Downloader diagnostics record the raw flags, normalized decision,
 and a distinct successful wedge-application event for verification.
 
+Stored downloader failures have a dedicated recovery center that preserves the
+exact exception, explains the likely cause, provides concrete next steps, and
+offers retry, diagnostics, configuration, and dismiss actions.
+
 Limitations:
 
-- At the moment MLM only works with qbittorrent
-- MLM works with torrents, meaning collections (multiple books in a single torrents) will be treated as one book (however if you link these with [booktree](https://github.com/myxdvz/booktree), MLM will not touch those files)
-- MLM works with torrents from MaM, meaning files not via a torrent from here can not be handled (however if you link these with [booktree](https://github.com/myxdvz/booktree), MLM will not touch those files)
+- At the moment HeavyMLM only works with qbittorrent
+- HeavyMLM works with torrents, meaning collections (multiple books in a single torrents) will be treated as one book (however if you link these with [booktree](https://github.com/myxdvz/booktree), HeavyMLM will not touch those files)
+- HeavyMLM works with torrents from MaM, meaning files not via a torrent from here can not be handled (however if you link these with [booktree](https://github.com/myxdvz/booktree), HeavyMLM will not touch those files)
 
 The application runtime is now Python 3.11+ and is available as a Docker
 container or an installable Python package.

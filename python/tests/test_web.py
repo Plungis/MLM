@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from mlm.config import load_config
 from mlm.database import connect, ensure_database
 from mlm.migration import canonical_json
+from mlm.repository import Repository
 from mlm.scheduler import JobStatus
 from mlm.web import create_app
 
@@ -15,6 +16,7 @@ class FakeServices:
     def __init__(self, config) -> None:
         self.config = config
         self.jobs = {}
+        self.triggered: list[str] = []
         self.mam_stats = {
             "slots_used": 100,
             "slots_total": 150,
@@ -25,6 +27,9 @@ class FakeServices:
 
     async def reconfigure(self, config) -> None:
         self.config = config
+
+    async def trigger(self, name: str) -> None:
+        self.triggered.append(name)
 
 
 def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
@@ -62,7 +67,9 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
     assert dashboard.status_code == 200
+    assert "MyAnonaSuite" in dashboard.text
     assert "HeavyMLM" in dashboard.text
+    assert "Library Control" not in dashboard.text
     assert "Run pipeline" in dashboard.text
     assert 'class="nav-link active"' in dashboard.text
     assert "Show background activity" in triggered_dashboard.text
@@ -76,6 +83,14 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert diagnostics.status_code == 200
     assert "Activity console" in diagnostics.text
     assert "Auto-refresh paused" in diagnostics.text
+    absidekick = client.get("/suite/absidekick")
+    assert absidekick.status_code == 200
+    assert 'data-suite="absidekick"' in absidekick.text
+    assert "Shell ready. Integration has not started yet." in absidekick.text
+    spender = client.get("/suite/mam-spender")
+    assert spender.status_code == 200
+    assert 'data-suite="mam-spender"' in spender.text
+    assert client.get("/suite/not-real").status_code == 404
 
     app.state.services = FakeServices(load_config(config))
     app.state.services.jobs["organizer:0"] = JobStatus(
@@ -117,6 +132,82 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.wedge_buffer == 3
     assert updated.prefer_wedges is True
     assert updated.grab_both_formats is True
+
+
+def test_errors_explain_recovery_and_support_retry_and_dismiss(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    selected = {
+        "mam_id": 42,
+        "goodreads_id": None,
+        "hash": None,
+        "dl_link": "private-hash",
+        "unsat_buffer": 0,
+        "wedge_buffer": 3,
+        "cost": "UseWedge",
+        "category": "Audiobooks",
+        "tags": [],
+        "title_search": "example book",
+        "meta": {"mam_id": 42, "title": "Example Book", "authors": ["A. Writer"]},
+        "grabber": "test",
+        "created_at": "2025-01-01T00:00:00Z",
+        "started_at": None,
+        "removed_at": None,
+    }
+    repository.add_selected(selected)
+    repository.record_grab_error(
+        selected, RuntimeError("wedge reserve reached (3 available, 3 reserved)")
+    )
+
+    app = create_app(config_path, database)
+    services = FakeServices(load_config(config_path))
+    app.state.services = services
+    client = TestClient(app)
+
+    page = client.get("/records/errored_torrents")
+    assert page.status_code == 200
+    assert "Freeleech wedge reserve reached" in page.text
+    assert "wedge reserve reached (3 available, 3 reserved)" in page.text
+    assert "Path forward" in page.text
+    assert "lower the wedge buffer" in page.text
+    assert "Retry now" in page.text
+    assert "/diagnostics?component=downloader" in page.text
+
+    retried = client.post(
+        "/errors/retry",
+        data={"error_id": '{"Grabber":42}', "mam_id": "42"},
+        follow_redirects=False,
+    )
+    assert retried.status_code == 303
+    assert repository.table_rows("errored_torrents") == []
+    assert services.triggered == ["downloader"]
+
+    repository.record_grab_error(selected, RuntimeError("temporary failure"))
+    repository.delete_selected(42)
+    stale_page = client.get("/records/errored_torrents")
+    assert "No longer queued" in stale_page.text
+    assert "Retry now" not in stale_page.text
+    stale_retry = client.post(
+        "/errors/retry",
+        data={"error_id": '{"Grabber":42}', "mam_id": "42"},
+    )
+    assert stale_retry.status_code == 409
+    assert len(repository.table_rows("errored_torrents")) == 1
+    dismissed = client.post(
+        "/errors/dismiss",
+        data={"error_id": '{"Grabber":42}'},
+        follow_redirects=False,
+    )
+    assert dismissed.status_code == 303
+    assert repository.table_rows("errored_torrents") == []
+    assert (
+        client.post("/errors/dismiss", data={"error_id": "not-json"}).status_code == 400
+    )
 
 
 def test_record_pages_are_paginated(tmp_path: Path) -> None:

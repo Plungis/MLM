@@ -4,23 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#020604">
-  <title>{{ title }} · HeavyMLM</title>
+  <title>{{ title }} · MyAnonaSuite</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v={{ version }}">
 </head>
-<body>
+<body data-suite="{{ suite_module }}">
 <div class="app-shell">
   <aside class="sidebar" aria-label="Primary navigation">
-    <a class="brand" href="/">
+    <a class="brand" href="/" aria-label="MyAnonaSuite home">
       <span class="brand-mark">H_</span>
       <span class="brand-copy">
-        <strong>HeavyMLM</strong>
-        <small>Library Control</small>
+        <strong>MyAnonaSuite</strong>
       </span>
     </a>
 
-    <div class="system-pill"><span class="status-dot"></span> System online</div>
+    <div class="system-pill"><span class="status-dot"></span> {{ suite_info.name }} / {{ suite_info.status }}</div>
 
     {% set path = request.url.path %}
+    {% if suite_module == "heavymlm" %}
     <nav>
       <div class="nav-group">
         <p class="nav-label">Control</p>
@@ -49,12 +49,14 @@
           <span>Diagnostics</span>
         </a>
         {% for key,label in [
-          ("events","Events"),("errored_torrents","Errors"),
-          ("lists","Lists"),("list_items","List Items")] %}
+          ("events","Events"),("lists","Lists"),("list_items","List Items")] %}
         <a class="nav-link{% if path == '/records/' + key %} active{% endif %}" href="/records/{{ key }}">
           <span>{{ label }}</span><span class="nav-count">{{ counts.get(key, 0) }}</span>
         </a>
         {% endfor %}
+        <a class="nav-link{% if path == '/records/errored_torrents' %} active{% endif %}" href="/records/errored_torrents">
+          <span>Errors</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
+        </a>
       </div>
 
       <div class="nav-group">
@@ -65,22 +67,46 @@
         <a class="nav-link" href="/health"><span>Health API</span></a>
       </div>
     </nav>
+    {% else %}
+    <nav class="module-nav">
+      <div class="nav-group">
+        <p class="nav-label">{{ suite_info.name }}</p>
+        <a class="nav-link active" href="/suite/{{ suite_module }}"><span>Module status</span></a>
+        <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
+      </div>
+    </nav>
+    {% endif %}
+
+    <div class="suite-switcher" aria-label="MyAnonaSuite module switcher">
+      <p class="nav-label">Suite switcher</p>
+      <div class="suite-switcher-grid">
+        <a class="suite-module heavymlm{% if suite_module == 'heavymlm' %} active{% endif %}" href="/" title="HeavyMLM">
+          <span>H_</span><small>MLM</small>
+        </a>
+        <a class="suite-module absidekick{% if suite_module == 'absidekick' %} active{% endif %}" href="/suite/absidekick" title="ABSidekick">
+          <span>A_</span><small>ABS</small>
+        </a>
+        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}" href="/suite/mam-spender" title="MAM-Spender">
+          <span>M$</span><small>Spend</small>
+        </a>
+      </div>
+    </div>
 
     <div class="sidebar-footer">
-      HeavyMLM {{ version }}<br>
-      Python runtime
+      MyAnonaSuite {{ version }}<br>
+      {{ suite_info.name }} module
     </div>
   </aside>
 
   <section class="content-shell">
     <header class="mobile-bar">
-      <span class="mobile-title">HeavyMLM / {{ title }}</span>
+      <span class="mobile-title">MyAnonaSuite / {{ suite_info.name }}</span>
       <button type="button" data-menu-toggle aria-expanded="false" aria-label="Toggle navigation">Menu</button>
     </header>
     <main class="page">
       {% block content %}{% endblock %}
       <footer class="page-footer">
-        <span>HeavyMLM {{ version }}</span>
+        <span>MyAnonaSuite {{ version }} / {{ suite_info.name }}</span>
         <span>{{ record_total }} indexed records</span>
       </footer>
     </main>

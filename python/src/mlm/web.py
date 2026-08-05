@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import math
 import time
 from collections.abc import AsyncIterator
@@ -18,12 +19,34 @@ from . import __version__
 from .autograbber import select_row
 from .config import Config, ConfigError, load_config, save_root_config_values
 from .database import ensure_database
+from .error_guidance import error_guidance
 from .mam import authenticated_mam_client
 from .repository import Repository
 from .scheduler import ServiceState
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+
+SUITE_MODULES = {
+    "heavymlm": {
+        "name": "HeavyMLM",
+        "icon": "H_",
+        "status": "Active",
+        "summary": "Automated MyAnonamouse library acquisition and organization.",
+    },
+    "absidekick": {
+        "name": "ABSidekick",
+        "icon": "A_",
+        "status": "Planned",
+        "summary": "Audiobookshelf metadata matching and library repair.",
+    },
+    "mam-spender": {
+        "name": "MAM-Spender",
+        "icon": "M$",
+        "status": "Planned",
+        "summary": "A web workspace for intentional MyAnonamouse bonus-point spending.",
+    },
+}
 
 
 def _redacted_config(config: Config) -> dict:
@@ -62,7 +85,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         finally:
             await state.close()
 
-    app = FastAPI(title="Myanonamouse Library Manager", lifespan=lifespan)
+    app = FastAPI(title="MyAnonaSuite", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     def active_config() -> Config:
@@ -87,6 +110,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def context(request: Request, **values: object) -> dict:
         snapshot = await ui_snapshot()
         counts = snapshot["counts"]
+        suite_module = str(values.pop("suite_module", "heavymlm"))
         return {
             "request": request,
             "counts": counts,
@@ -98,6 +122,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 app.state.services.mam_stats if hasattr(app.state, "services") else {}
             ),
             "version": __version__,
+            "suite_module": suite_module,
+            "suite_info": SUITE_MODULES[suite_module],
+            "suite_modules": SUITE_MODULES,
             **values,
         }
 
@@ -133,9 +160,30 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return RedirectResponse(
                 f"/records/{table}?page={page_count}", status_code=307
             )
+        if table == "errored_torrents":
+            pending_mam_ids = {
+                int(row["mam_id"])
+                for row in await asyncio.to_thread(repository.pending_selected)
+            }
+            for row in rows:
+                identifier = row.get("id")
+                row["_error_id"] = json.dumps(
+                    identifier,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                row["_mam_id"] = (
+                    identifier.get("Grabber") if isinstance(identifier, dict) else None
+                )
+                row["_retryable"] = (
+                    row["_mam_id"] is not None
+                    and int(row["_mam_id"]) in pending_mam_ids
+                )
+                row["_guidance"] = error_guidance(str(row.get("error", "")))
         return templates.TemplateResponse(
             request,
-            "records.html",
+            "errors.html" if table == "errored_torrents" else "records.html",
             await context(
                 request,
                 title=table.replace("_", " ").title(),
@@ -146,6 +194,49 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 total=total,
                 first_record=(page - 1) * page_size + 1 if rows else 0,
                 last_record=(page - 1) * page_size + len(rows),
+                retried=request.query_params.get("retried") == "1",
+                dismissed=request.query_params.get("dismissed") == "1",
+            ),
+        )
+
+    @app.post("/errors/retry")
+    async def retry_error(
+        error_id: str = Form(...), mam_id: int | None = Form(None)
+    ) -> RedirectResponse:
+        try:
+            identifier = json.loads(error_id)
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "invalid error identifier") from error
+        if mam_id is None or not repository.has_pending_mam_id(mam_id):
+            raise HTTPException(
+                409, "release is no longer waiting in the download queue"
+            )
+        repository.delete_error(identifier)
+        asyncio.create_task(app.state.services.trigger("downloader"))
+        return RedirectResponse("/records/errored_torrents?retried=1", status_code=303)
+
+    @app.post("/errors/dismiss")
+    async def dismiss_error(error_id: str = Form(...)) -> RedirectResponse:
+        try:
+            identifier = json.loads(error_id)
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "invalid error identifier") from error
+        repository.delete_error(identifier)
+        return RedirectResponse(
+            "/records/errored_torrents?dismissed=1", status_code=303
+        )
+
+    @app.get("/suite/{module}", response_class=HTMLResponse)
+    async def suite_placeholder(request: Request, module: str) -> HTMLResponse:
+        if module not in {"absidekick", "mam-spender"}:
+            raise HTTPException(404, f"unknown suite module: {module}")
+        return templates.TemplateResponse(
+            request,
+            "suite_placeholder.html",
+            await context(
+                request,
+                title=SUITE_MODULES[module]["name"],
+                suite_module=module,
             ),
         )
 

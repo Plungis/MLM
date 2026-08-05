@@ -91,6 +91,9 @@ def test_download_job_moves_selected_record_into_library_catalog(
     ensure_database(database)
     repository = Repository(database)
     add_selected(repository)
+    selected = repository.pending_selected()[0]
+    repository.record_grab_error(selected, RuntimeError("temporary failure"))
+    assert len(repository.table_rows("errored_torrents")) == 1
     mam = FakeMam()
     qbit = FakeQbit()
 
@@ -108,6 +111,7 @@ def test_download_job_moves_selected_record_into_library_catalog(
         "downloading_bytes": 12,
     }
     assert repository.table_rows("torrents")[0]["mam_id"] == 42
+    assert repository.table_rows("errored_torrents") == []
 
 
 def test_download_job_reports_unsatisfied_slot_deferral(tmp_path: Path) -> None:

@@ -332,7 +332,7 @@ class ServiceState:
         self.config = config
         self.repository.log_activity(
             "configuration",
-            "Applied configuration without restarting HeavyMLM",
+            "Applied configuration without restarting MyAnonaSuite",
             level="success",
             context={
                 "min_ratio": config.min_ratio,
