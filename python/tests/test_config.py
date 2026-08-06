@@ -148,3 +148,32 @@ method = "copy"
     with pytest.raises(ConfigError):
         save_config_text(path, 'mam_id = "broken"\nnot_a_setting = true\n')
     assert load_config(path).mam_id == "new-secret"
+
+
+def test_request_portal_config_requires_clean_custom_domains(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+mam_id = "secret"
+request_portal_enabled = true
+request_portal_domains = ["requests.example.com"]
+request_portal_title = "Family Requests"
+request_portal_access_code = "shared-secret"
+request_portal_rate_limit = 12
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.request_portal_enabled is True
+    assert config.request_portal_domains == ("requests.example.com",)
+    assert config.request_portal_title == "Family Requests"
+    assert config.request_portal_rate_limit == 12
+
+    path.write_text(
+        'mam_id = "secret"\nrequest_portal_enabled = true\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="request_portal_domains"):
+        load_config(path)

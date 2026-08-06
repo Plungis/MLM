@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#020604">
+  <title>{{ portal_title }} · MyAnonaSuite</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v={{ version }}">
+</head>
+<body class="request-portal-body">
+<main class="request-portal-shell">
+  <header class="request-portal-header">
+    <div class="request-portal-brand"><span class="request-brand-mark">R_</span><span>MyAnonaSuite</span></div>
+    <p class="eyebrow">Private library acquisition portal</p>
+    <h1>{{ portal_title }}</h1>
+    <p>Find the exact audiobook or ebook release you want, then send it for approval.</p>
+  </header>
+
+  {% if submitted %}
+  <div class="request-success" role="status"><strong>Request received.</strong><span>It is waiting in the approval inbox.</span></div>
+  {% endif %}
+
+  <section class="request-goodreads-card">
+    <div>
+      <p class="eyebrow">Goodreads link reader</p>
+      <h2>Paste a Goodreads book link</h2>
+      <p>We’ll read the public title, author, series, language, and ISBN, then use them to find matching MaM releases.</p>
+    </div>
+    <form method="get" action="{{ portal_root }}" class="request-goodreads-form">
+      <input type="url" name="goodreads_url" value="{{ goodreads_url }}" placeholder="https://www.goodreads.com/book/show/…" required>
+      <button class="primary" type="submit">Read link and search</button>
+    </form>
+  </section>
+
+  {% if goodreads_error %}<div class="flash error-text" role="alert"><span>{{ goodreads_error }}</span><span class="status error">Goodreads</span></div>{% endif %}
+  {% if goodreads %}
+  <section class="request-book-match">
+    {% if goodreads.cover_url %}<img src="{{ goodreads.cover_url }}" alt="Cover of {{ goodreads.title }}" referrerpolicy="no-referrer">{% endif %}
+    <div>
+      <span class="status ok">Goodreads metadata loaded</span>
+      <h2>{{ goodreads.title }}</h2>
+      {% if goodreads.authors %}<p>by {{ goodreads.authors | join(", ") }}</p>{% endif %}
+      <div class="request-book-facts">
+        {% if goodreads.series %}<span>{{ goodreads.series }}{% if goodreads.series_position %} #{{ goodreads.series_position }}{% endif %}</span>{% endif %}
+        {% if goodreads.language %}<span>{{ goodreads.language }}</span>{% endif %}
+        {% if goodreads.isbn %}<span>ISBN {{ goodreads.isbn }}</span>{% endif %}
+        {% if goodreads.format %}<span>{{ goodreads.format }}</span>{% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="panel request-search-panel">
+    <header class="panel-header"><div><h2>Advanced search</h2><p>Every filled field is combined using AND logic.</p></div>{% if rows %}<span class="chip">{{ rows | length }} matches</span>{% endif %}</header>
+    <div class="panel-body">
+      <form class="hm-filter-form" method="get" action="{{ portal_root }}" role="search">
+        {% if goodreads_url %}<input type="hidden" name="goodreads_url" value="{{ goodreads_url }}">{% endif %}
+        <div class="hm-filter-lead">
+          <label><span>Any keywords</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Title, author, narrator, ISBN…"></label>
+          <button class="primary" type="submit">Apply all filters</button>
+          <a class="button" href="{{ portal_root }}">Clear</a>
+        </div>
+        <div class="hm-filter-grid">
+          <label><span>Title contains</span><input type="text" name="title" value="{{ filters.title }}" placeholder="The Eye of the Bedlam Bride"></label>
+          <label><span>Author contains</span><input type="text" name="author" value="{{ filters.author }}" placeholder="Matt Dinniman"></label>
+          <label><span>Series contains</span><input type="text" name="series" value="{{ filters.series }}" placeholder="Dungeon Crawler Carl"></label>
+          <label><span>Narrator contains</span><input type="text" name="narrator" value="{{ filters.narrator }}" placeholder="Jeff Hays"></label>
+          <label><span>File type</span><select name="filetype">{% for value,label in [("","Any format"),("m4b","M4B"),("mp3","MP3"),("m4a","M4A"),("flac","FLAC"),("epub","EPUB"),("pdf","PDF"),("mobi","MOBI"),("azw3","AZW3"),("cbz","CBZ"),("cbr","CBR")] %}<option value="{{ value }}"{% if filters.filetype == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label><span>Category</span><select name="category">{% for value,label in [("","Any category"),("audiobook","Audiobook"),("ebook","Ebook"),("comic","Comic book"),("manga","Manga"),("musicology","Musicology"),("radio","Radio")] %}<option value="{{ value }}"{% if filters.category == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label><span>Language</span><input type="text" name="language" value="{{ filters.language }}" placeholder="English"></label>
+          <label><span>Download cost</span><select name="availability">{% for value,label in [("","Any cost"),("freeleech","Any freeleech"),("global","Global freeleech"),("personal","Personal freeleech"),("vip","VIP freeleech"),("ratio","Ratio download")] %}<option value="{{ value }}"{% if filters.availability == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label><span>Minimum seeders</span><input type="number" name="min_seeders" min="0" value="{{ filters.min_seeders }}"></label>
+          <label><span>Sort results</span><select name="sort">{% for value,label in [("relevance","MaM relevance"),("title","Title"),("author","Author"),("series","Series"),("filetype","File type"),("newest","Newest"),("seeders","Most seeders"),("size_asc","Smallest"),("size_desc","Largest")] %}<option value="{{ value }}"{% if filters.sort == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  {% if error %}<div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Search failed</span></div>{% endif %}
+
+  {% if rows %}
+  <section class="request-results" aria-label="Request search results">
+    <header class="request-results-header"><div><p class="eyebrow">Search results</p><h2>Choose a release</h2></div><span>Scanned {{ scanned }}{% if found > scanned %} of {{ found }}{% endif %}</span></header>
+    {% for row in rows %}
+    <article class="hm-release-card request-release-card">
+      <header class="hm-release-header"><div class="hm-availability">{% for badge in row.availability %}<span class="availability-badge {{ badge.tone }}">{{ badge.label }}</span>{% endfor %}</div><span class="hm-release-id">MaM #{{ row.id }}</span></header>
+      <div class="hm-release-main">
+        <div class="hm-release-copy">
+          <h2>{{ row.title }}</h2>
+          {% if row.authors %}<p class="hm-authors"><span>by</span> {{ row.authors | join(", ") }}</p>{% else %}<p class="hm-authors muted">Author information unavailable</p>{% endif %}
+          {% if row.series %}<p class="hm-secondary"><strong>Series</strong> {% for series in row.series %}{{ series.name }}{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+          {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
+        </div>
+      </div>
+      <dl class="hm-release-facts"><div><dt>Format</dt><dd>{{ row.filetypes | join(" / ") or "Unknown" }}</dd></div><div><dt>Category</dt><dd>{{ row.category }}</dd></div><div><dt>Size</dt><dd>{{ row.size }}</dd></div><div><dt>Language</dt><dd>{{ row.language }}</dd></div><div><dt>Files</dt><dd>{{ row.num_files or "—" }}</dd></div></dl>
+      <footer class="hm-release-footer"><div class="hm-peer-stats"><span><strong>{{ row.seeders }}</strong> seeders</span><span><strong>{{ row.leechers }}</strong> leechers</span><span><strong>{{ row.snatched }}</strong> snatched</span></div></footer>
+      <details class="request-submit-drawer">
+        <summary>Request this release</summary>
+        <form action="/request/submit" method="post">
+          <input type="hidden" name="mam_id" value="{{ row.id }}">
+          <input type="hidden" name="goodreads_url" value="{{ goodreads_url }}">
+          <label><span>Your name <small>optional</small></span><input type="text" name="requester_name" maxlength="120" autocomplete="name"></label>
+          <label><span>Contact <small>optional</small></span><input type="text" name="requester_contact" maxlength="200" placeholder="Email, Discord, etc."></label>
+          <label class="request-note"><span>Request note <small>optional</small></span><textarea name="note" maxlength="1000" rows="3" placeholder="Edition preferences or anything the library owner should know."></textarea></label>
+          <label class="request-honeypot" aria-hidden="true"><span>Website</span><input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+          <button class="primary" type="submit">Send request for approval</button>
+        </form>
+      </details>
+    </article>
+    {% endfor %}
+  </section>
+  {% elif searched and not error %}
+  <section class="panel empty-state"><div><strong>No releases passed every filter</strong><p>Broaden one field at a time, or remove the series filter if Goodreads selected a different edition.</p></div></section>
+  {% else %}
+  <section class="request-empty"><span>R?</span><div><strong>Start with a Goodreads link or advanced search</strong><p>Results include format, author, series, language, cost, size, and seed health.</p></div></section>
+  {% endif %}
+
+  <footer class="request-portal-footer"><span>MyAnonaSuite {{ version }}</span><span>Requests require library-owner approval</span></footer>
+</main>
+</body>
+</html>

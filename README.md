@@ -67,7 +67,12 @@ python -m pip install -e ./python
 mlm-python run --config ./config.toml --database ./data.sqlite3
 ```
 
-The web UI listens on port 3157 by default.
+The web UI listens on port 3157 by default. MyAnonaSuite can also serve a
+dedicated request portal on a configured custom domain. The public hostname is
+isolated from administrative routes, supports the full multi-filter MaM search
+and Goodreads book-link lookup, and sends every submission to an approval inbox
+instead of downloading automatically. See [python/README.md](python/README.md)
+for reverse-proxy and security setup.
 
 ## Migrate legacy data
 

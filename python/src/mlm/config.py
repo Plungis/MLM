@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import tomllib
@@ -45,6 +46,11 @@ class Config:
     ebook_types: tuple[str, ...] = ("cbz", "epub", "pdf", "mobi", "azw3", "azw", "cbr")
     music_types: tuple[str, ...] = ("pdf", "mp3")
     radio_types: tuple[str, ...] = ("mp3",)
+    request_portal_enabled: bool = False
+    request_portal_domains: tuple[str, ...] = ()
+    request_portal_title: str = "Library Requests"
+    request_portal_access_code: str = ""
+    request_portal_rate_limit: int = 20
     qbittorrent: tuple[QbitConfig, ...] = ()
     search: dict[str, Any] = field(default_factory=dict)
     audiobookshelf: dict[str, Any] | None = None
@@ -110,6 +116,7 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
             "ebook_types",
             "music_types",
             "radio_types",
+            "request_portal_domains",
             "autograbs",
             "snatchlist",
             "goodreads_lists",
@@ -131,6 +138,19 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
         for name in ("search_interval", "link_interval", "import_interval"):
             if int(getattr(config, name)) < 1:
                 raise ConfigError(f"{name} must be at least 1 minute")
+        if config.request_portal_rate_limit < 1:
+            raise ConfigError("request_portal_rate_limit must be at least 1")
+        if config.request_portal_enabled and not config.request_portal_domains:
+            raise ConfigError(
+                "request_portal_domains must contain a custom domain when the "
+                "request portal is enabled"
+            )
+        for domain in config.request_portal_domains:
+            if not domain.strip() or "://" in domain or "/" in domain or " " in domain:
+                raise ConfigError(
+                    "request_portal_domains entries must be hostnames without "
+                    "a scheme, path, or spaces"
+                )
         return config
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid configuration: {error}") from error
@@ -141,6 +161,12 @@ def _toml_scalar(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)) and all(
+        isinstance(item, str) for item in value
+    ):
+        return "[" + ", ".join(json.dumps(item) for item in value) + "]"
     raise ConfigError(f"unsupported editable value: {value!r}")
 
 

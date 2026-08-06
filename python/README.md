@@ -62,3 +62,31 @@ mlm-python run `
 The service runs the configured autograbbers, Goodreads and Notion imports,
 pending downloader, qBittorrent library organizers, and duplicate cleaner on
 their configured intervals. The dashboard listens on `web_host:web_port`.
+
+## Publish the request portal on a custom domain
+
+The Configuration screen can enable a separate request portal without exposing
+the HeavyMLM dashboard on that hostname. Set the request domain, a portal title,
+an optional shared access code, and a per-client request limit there. Changes
+apply immediately.
+
+Point an HTTPS reverse proxy at the MyAnonaSuite service and preserve the
+original `Host` header. For example, a minimal Caddy site is:
+
+```caddyfile
+requests.example.com {
+    reverse_proxy 127.0.0.1:3157
+}
+```
+
+Then set `request_portal_domains = ["requests.example.com"]` and enable the
+portal. That hostname serves only the request form and static assets; dashboard,
+configuration, API documentation, and approval routes return 404. Do not expose
+port 3157 directly to the public internet. Keep a shared access code configured,
+or put an authentication layer such as Cloudflare Access in front of the domain.
+
+Visitors can combine title, author, series, narrator, format, category,
+language, availability, seeder, and sort filters. They can also paste a public
+Goodreads book URL to prefill its metadata and run the search. Submissions never
+download automatically: they enter the Requests inbox for approval, and approval
+revalidates the MaM release before adding it to the normal download queue.

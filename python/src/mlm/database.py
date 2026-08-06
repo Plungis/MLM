@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -85,6 +85,18 @@ CREATE TABLE activity_log (
 );
 
 CREATE INDEX activity_log_created_at_idx ON activity_log(created_at DESC);
+
+CREATE TABLE requests (
+    id TEXT PRIMARY KEY,
+    mam_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX requests_status_created_idx ON requests(status, created_at DESC);
+CREATE INDEX requests_mam_id_idx ON requests(mam_id);
 """
 
 DATA_TABLES = (
@@ -142,6 +154,18 @@ def ensure_database(path: Path) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS activity_log_created_at_idx
                     ON activity_log(created_at DESC);
+                CREATE TABLE IF NOT EXISTS requests (
+                    id TEXT PRIMARY KEY,
+                    mam_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS requests_status_created_idx
+                    ON requests(status, created_at DESC);
+                CREATE INDEX IF NOT EXISTS requests_mam_id_idx
+                    ON requests(mam_id);
                 """
             )
             connection.execute(

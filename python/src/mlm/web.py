@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import ipaddress
 import json
 import math
 import time
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -33,6 +36,11 @@ from .modules.heavymlm.search import (
     search_seed,
 )
 from .repository import Repository
+from .request_portal import (
+    GoodreadsLookupError,
+    goodreads_book_id,
+    lookup_goodreads_book,
+)
 from .scheduler import ServiceState
 from .search import as_int
 
@@ -72,6 +80,8 @@ def _redacted_config(config: Config) -> dict:
     for row in value.get("notion_lists", []):
         if row.get("token"):
             row["token"] = "***"
+    if value.get("request_portal_access_code"):
+        value["request_portal_access_code"] = "***"
     return value
 
 
@@ -81,6 +91,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     repository = Repository(database_path)
     snapshot_cache: dict[str, object] = {"expires": 0.0, "value": None}
     snapshot_lock = asyncio.Lock()
+    request_rate_events: dict[str, deque[float]] = defaultdict(deque)
+    request_rate_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -114,6 +126,74 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         except ValueError:
             return False
 
+    def request_portal_host(request: Request) -> bool:
+        hostname = (request.url.hostname or "").casefold()
+        return hostname in {
+            domain.strip().casefold()
+            for domain in active_config().request_portal_domains
+        }
+
+    def request_portal_root(request: Request) -> str:
+        return "/" if request_portal_host(request) else "/request"
+
+    def request_access_token(config: Config) -> str:
+        return hmac.new(
+            config.mam_id.encode("utf-8"),
+            config.request_portal_access_code.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def request_portal_authorized(request: Request) -> bool:
+        # Keep localhost preview convenient, but never let a same-machine reverse
+        # proxy make the configured public hostname look like a local request.
+        if local_request(request) and not request_portal_host(request):
+            return True
+        current = active_config()
+        if not current.request_portal_access_code:
+            return True
+        supplied = request.cookies.get("mysuite_request_access", "")
+        return hmac.compare_digest(supplied, request_access_token(current))
+
+    def request_client_key(request: Request) -> str:
+        client_host = request.client.host if request.client else "unknown"
+        try:
+            proxy_is_local = ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            proxy_is_local = False
+        forwarded = request.headers.get("x-forwarded-for", "") if proxy_is_local else ""
+        candidate = forwarded.split(",", 1)[0].strip() if forwarded else client_host
+        return candidate or "unknown"
+
+    async def request_rate_allowed(request: Request, action: str) -> bool:
+        now = time.monotonic()
+        key = f"{action}:{request_client_key(request)}"
+        limit = active_config().request_portal_rate_limit
+        async with request_rate_lock:
+            events = request_rate_events[key]
+            while events and now - events[0] >= 60:
+                events.popleft()
+            if len(events) >= limit:
+                return False
+            events.append(now)
+            return True
+
+    @app.middleware("http")
+    async def isolate_request_domain(request: Request, call_next):
+        if not request_portal_host(request):
+            return await call_next(request)
+        if not active_config().request_portal_enabled:
+            return HTMLResponse("Request portal is disabled", status_code=404)
+        path = request.url.path
+        allowed = path in {
+            "/",
+            "/request",
+            "/request/unlock",
+            "/request/submit",
+        } or path.startswith("/static/")
+        if not allowed:
+            return HTMLResponse("Not found", status_code=404)
+        return await call_next(request)
+
     async def ui_snapshot() -> dict:
         now = time.monotonic()
         cached = snapshot_cache["value"]
@@ -137,6 +217,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "counts": counts,
             "pipeline": snapshot["pipeline"],
             "list_tracking": snapshot["list_tracking"],
+            "request_tracking": snapshot["request_tracking"],
             "record_total": sum(counts.values()),
             "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
             "mam_stats": (
@@ -151,6 +232,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
+        if request_portal_host(request):
+            return await request_portal_page(request)
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -291,6 +374,12 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         download_on_wedge_failure: str | None = Form(None),
         grab_both_formats: str | None = Form(None),
         add_torrents_stopped: str | None = Form(None),
+        request_portal_enabled: str | None = Form(None),
+        request_portal_domains: str = Form(""),
+        request_portal_title: str = Form("Library Requests"),
+        request_portal_rate_limit: str = Form("20"),
+        request_portal_access_code: str = Form(""),
+        clear_request_portal_access_code: str | None = Form(None),
         search_interval: str = Form(...),
         import_interval: str = Form(...),
         link_interval: str = Form(...),
@@ -311,10 +400,23 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "download_on_wedge_failure": (download_on_wedge_failure is not None),
                 "grab_both_formats": grab_both_formats is not None,
                 "add_torrents_stopped": add_torrents_stopped is not None,
+                "request_portal_enabled": request_portal_enabled is not None,
+                "request_portal_domains": tuple(
+                    domain.strip()
+                    for domain in request_portal_domains.replace("\n", ",").split(",")
+                    if domain.strip()
+                ),
+                "request_portal_title": request_portal_title.strip()
+                or "Library Requests",
+                "request_portal_rate_limit": int(request_portal_rate_limit),
                 "search_interval": int(search_interval),
                 "import_interval": int(import_interval),
                 "link_interval": int(link_interval),
             }
+            if request_portal_access_code:
+                values["request_portal_access_code"] = request_portal_access_code
+            elif clear_request_portal_access_code is not None:
+                values["request_portal_access_code"] = None
             updated = save_root_config_values(config_path, values)
             await app.state.services.reconfigure(updated)
         except (ConfigError, ValueError) as error:
@@ -384,9 +486,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             ),
         )
 
-    @app.get("/search", response_class=HTMLResponse)
-    async def search(
-        request: Request,
+    def manual_search_filters(
+        *,
         q: str = "",
         title: str = "",
         author: str = "",
@@ -398,30 +499,34 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         availability: str = "",
         min_seeders: int = 0,
         sort: str = "relevance",
-    ) -> HTMLResponse:
-        rows = []
-        error = None
-        found = 0
-        scanned = 0
-        filters = {
-            "q": q,
-            "title": title,
-            "author": author,
-            "series": series,
-            "narrator": narrator,
-            "filetype": filetype,
-            "category": category,
-            "language": language,
-            "availability": availability,
+    ) -> dict[str, object]:
+        return {
+            "q": q.strip(),
+            "title": title.strip(),
+            "author": author.strip(),
+            "series": series.strip(),
+            "narrator": narrator.strip(),
+            "filetype": filetype.strip().casefold(),
+            "category": category.strip().casefold(),
+            "language": language.strip(),
+            "availability": availability.strip().casefold(),
             "min_seeders": max(0, min_seeders),
-            "sort": sort,
+            "sort": sort.strip() or "relevance",
         }
-        searched = any(
+
+    def search_was_requested(filters: dict[str, object]) -> bool:
+        return any(
             value
             for name, value in filters.items()
             if name != "sort" and value not in {"", 0}
         )
-        if searched:
+
+    async def run_manual_search(filters: dict[str, object]) -> dict[str, object]:
+        rows: list[dict] = []
+        found = 0
+        scanned = 0
+        error = None
+        if search_was_requested(filters):
             try:
                 seed, search_in = search_seed(filters)
                 raw_by_id: dict[int, dict] = {}
@@ -461,6 +566,380 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 found = max(found, scanned)
             except Exception as caught:  # noqa: BLE001 - display API failure in UI
                 error = str(caught)
+        return {
+            "rows": rows,
+            "found": found,
+            "scanned": scanned,
+            "error": error,
+        }
+
+    async def render_request_portal(request: Request) -> HTMLResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            return templates.TemplateResponse(
+                request,
+                "request_unlock.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "error": None,
+                },
+            )
+
+        params = request.query_params
+        goodreads_url = params.get("goodreads_url", "").strip()
+        goodreads = None
+        goodreads_error = None
+        values = {
+            "q": params.get("q", ""),
+            "title": params.get("title", ""),
+            "author": params.get("author", ""),
+            "series": params.get("series", ""),
+            "narrator": params.get("narrator", ""),
+            "filetype": params.get("filetype", ""),
+            "category": params.get("category", ""),
+            "language": params.get("language", ""),
+            "availability": params.get("availability", ""),
+            "min_seeders": as_int(params.get("min_seeders")),
+            "sort": params.get("sort", "relevance"),
+        }
+        requested_lookup = bool(
+            goodreads_url
+            or any(
+                value
+                for name, value in values.items()
+                if name != "sort" and value not in {"", 0}
+            )
+        )
+        if requested_lookup and not await request_rate_allowed(request, "search"):
+            return templates.TemplateResponse(
+                request,
+                "request_portal.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "portal_root": request_portal_root(request),
+                    "filters": manual_search_filters(**values),
+                    "searched": True,
+                    "rows": [],
+                    "found": 0,
+                    "scanned": 0,
+                    "error": "Too many searches. Wait one minute and try again.",
+                    "goodreads_url": goodreads_url,
+                    "goodreads": None,
+                    "goodreads_error": None,
+                    "requester_name": params.get("requester_name", "")[:120],
+                    "requester_contact": params.get("requester_contact", "")[:200],
+                    "note": params.get("note", "")[:1000],
+                    "submitted": False,
+                },
+                status_code=429,
+            )
+        if goodreads_url:
+            try:
+                goodreads = await lookup_goodreads_book(goodreads_url)
+                values["title"] = values["title"] or goodreads["title"]
+                values["author"] = values["author"] or (
+                    goodreads["authors"][0] if goodreads["authors"] else ""
+                )
+                values["series"] = values["series"] or goodreads["series"]
+                values["language"] = values["language"] or goodreads["language"]
+                repository.log_activity(
+                    "requests",
+                    f"Read Goodreads request link: {goodreads['title']}",
+                    level="success",
+                    context={
+                        "goodreads_id": goodreads["goodreads_id"],
+                        "url": goodreads["url"],
+                    },
+                )
+            except GoodreadsLookupError as caught:
+                goodreads_error = str(caught)
+                repository.log_activity(
+                    "requests",
+                    "Goodreads request lookup failed",
+                    level="warning",
+                    context={"url": goodreads_url, "error": goodreads_error},
+                )
+        filters = manual_search_filters(**values)
+        searched = search_was_requested(filters)
+        result = await run_manual_search(filters)
+        return templates.TemplateResponse(
+            request,
+            "request_portal.html",
+            {
+                "request": request,
+                "version": __version__,
+                "portal_title": current.request_portal_title,
+                "portal_root": request_portal_root(request),
+                "filters": filters,
+                "searched": searched,
+                "rows": result["rows"],
+                "found": result["found"],
+                "scanned": result["scanned"],
+                "error": result["error"],
+                "goodreads_url": goodreads_url,
+                "goodreads": goodreads,
+                "goodreads_error": goodreads_error,
+                "requester_name": params.get("requester_name", "")[:120],
+                "requester_contact": params.get("requester_contact", "")[:200],
+                "note": params.get("note", "")[:1000],
+                "submitted": params.get("submitted") == "1",
+            },
+        )
+
+    @app.get("/request", response_class=HTMLResponse)
+    async def request_portal_page(request: Request) -> HTMLResponse:
+        return await render_request_portal(request)
+
+    @app.post("/request/unlock", response_class=HTMLResponse)
+    async def unlock_request_portal(
+        request: Request,
+        access_code: str = Form(""),
+    ) -> HTMLResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        allowed = await request_rate_allowed(request, "unlock")
+        valid = allowed and (
+            not current.request_portal_access_code
+            or hmac.compare_digest(access_code, current.request_portal_access_code)
+        )
+        if not valid:
+            return templates.TemplateResponse(
+                request,
+                "request_unlock.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "error": (
+                        "Too many attempts. Wait one minute."
+                        if not allowed
+                        else "That access code is not valid."
+                    ),
+                },
+                status_code=429 if not allowed else 403,
+            )
+        response = RedirectResponse(request_portal_root(request), status_code=303)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0]
+        response.set_cookie(
+            "mysuite_request_access",
+            request_access_token(current),
+            max_age=60 * 60 * 24 * 30,
+            httponly=True,
+            secure=request.url.scheme == "https" or forwarded_proto == "https",
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @app.post("/request/submit")
+    async def submit_request(
+        request: Request,
+        mam_id: int = Form(...),
+        requester_name: str = Form(""),
+        requester_contact: str = Form(""),
+        note: str = Form(""),
+        goodreads_url: str = Form(""),
+        website: str = Form(""),
+    ) -> RedirectResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            raise HTTPException(403, "request portal access code required")
+        if not await request_rate_allowed(request, "submit"):
+            raise HTTPException(429, "too many requests; wait one minute")
+        root = request_portal_root(request)
+        if website.strip():
+            return RedirectResponse(f"{root}?submitted=1", status_code=303)
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            raise HTTPException(404, f"MaM torrent {mam_id} was not found")
+        release = present_search_result(row)
+        source: dict[str, object] = {"kind": "manual"}
+        if goodreads_url:
+            try:
+                source = {
+                    "kind": "goodreads",
+                    "url": goodreads_url,
+                    "goodreads_id": goodreads_book_id(goodreads_url),
+                }
+            except GoodreadsLookupError:
+                source = {"kind": "manual"}
+        record = await asyncio.to_thread(
+            repository.create_request,
+            mam_id=mam_id,
+            release=release,
+            requester_name=requester_name[:120],
+            requester_contact=requester_contact[:200],
+            note=note[:1000],
+            source=source,
+        )
+        if repository.has_mam_id(mam_id):
+            await asyncio.to_thread(
+                repository.update_request,
+                record["id"],
+                "fulfilled",
+                decision_note="Already present in the library or download queue",
+            )
+        repository.log_activity(
+            "requests",
+            f"New request: {release['title']}",
+            level="success",
+            context={
+                "request_id": record["id"],
+                "mam_id": mam_id,
+                "requester_name": requester_name[:120],
+            },
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse(f"{root}?submitted=1", status_code=303)
+
+    @app.get("/requests", response_class=HTMLResponse)
+    async def request_inbox(
+        request: Request,
+        status: str = "pending",
+    ) -> HTMLResponse:
+        selected_status = (
+            status
+            if status
+            in {
+                "pending",
+                "approved",
+                "rejected",
+                "fulfilled",
+                "all",
+            }
+            else "pending"
+        )
+        rows = await asyncio.to_thread(
+            repository.request_rows,
+            status=None if selected_status == "all" else selected_status,
+        )
+        return templates.TemplateResponse(
+            request,
+            "requests.html",
+            await context(
+                request,
+                title="Request Inbox",
+                rows=rows,
+                selected_status=selected_status,
+                approved=request.query_params.get("approved") == "1",
+                rejected=request.query_params.get("rejected") == "1",
+                error=request.query_params.get("error", ""),
+            ),
+        )
+
+    @app.post("/requests/approve")
+    async def approve_request(request_id: str = Form(...)) -> RedirectResponse:
+        record = await asyncio.to_thread(repository.request_record, request_id)
+        if not record:
+            raise HTTPException(404, "request was not found")
+        if record["status"] != "pending":
+            raise HTTPException(409, "request has already been decided")
+        mam_id = int(record["mam_id"])
+        if repository.has_mam_id(mam_id):
+            await asyncio.to_thread(
+                repository.update_request,
+                request_id,
+                "fulfilled",
+                decision_note="Already present in the library or download queue",
+            )
+        else:
+            row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+            if not row:
+                return RedirectResponse(
+                    "/requests?error=The+selected+MaM+release+no+longer+exists",
+                    status_code=303,
+                )
+            selected = await select_row(
+                app.state.services.config,
+                repository,
+                row,
+                {"cost": "ratio", "name": f"request:{request_id}"},
+            )
+            if not selected:
+                return RedirectResponse(
+                    "/requests?error=Release+does+not+match+configured+formats",
+                    status_code=303,
+                )
+            await asyncio.to_thread(
+                repository.update_request,
+                request_id,
+                "approved",
+                decision_note="Approved and added to the download queue",
+            )
+            asyncio.create_task(app.state.services.trigger("downloader"))
+        repository.log_activity(
+            "requests",
+            f"Approved request: {record['release']['title']}",
+            level="success",
+            context={"request_id": request_id, "mam_id": mam_id},
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse("/requests?approved=1", status_code=303)
+
+    @app.post("/requests/reject")
+    async def reject_request(
+        request_id: str = Form(...),
+        decision_note: str = Form(""),
+    ) -> RedirectResponse:
+        record = await asyncio.to_thread(repository.request_record, request_id)
+        if not record:
+            raise HTTPException(404, "request was not found")
+        if record["status"] != "pending":
+            raise HTTPException(409, "request has already been decided")
+        await asyncio.to_thread(
+            repository.update_request,
+            request_id,
+            "rejected",
+            decision_note=decision_note[:500] or "Rejected by administrator",
+        )
+        repository.log_activity(
+            "requests",
+            f"Rejected request: {record['release']['title']}",
+            level="warning",
+            context={"request_id": request_id, "mam_id": record["mam_id"]},
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse("/requests?rejected=1", status_code=303)
+
+    @app.get("/search", response_class=HTMLResponse)
+    async def search(
+        request: Request,
+        q: str = "",
+        title: str = "",
+        author: str = "",
+        series: str = "",
+        narrator: str = "",
+        filetype: str = "",
+        category: str = "",
+        language: str = "",
+        availability: str = "",
+        min_seeders: int = 0,
+        sort: str = "relevance",
+    ) -> HTMLResponse:
+        filters = manual_search_filters(
+            q=q,
+            title=title,
+            author=author,
+            series=series,
+            narrator=narrator,
+            filetype=filetype,
+            category=category,
+            language=language,
+            availability=availability,
+            min_seeders=min_seeders,
+            sort=sort,
+        )
+        searched = search_was_requested(filters)
+        result = await run_manual_search(filters)
         return templates.TemplateResponse(
             request,
             "heavymlm/search.html",
@@ -470,10 +949,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 query=q,
                 filters=filters,
                 searched=searched,
-                rows=rows,
-                found=found,
-                scanned=scanned,
-                error=error,
+                rows=result["rows"],
+                found=result["found"],
+                scanned=result["scanned"],
+                error=result["error"],
             ),
         )
 

@@ -349,6 +349,8 @@ class ServiceState:
                 "goodreads_lists": len(config.goodreads_lists),
                 "notion_lists": len(config.notion_lists),
                 "libraries": len(config.libraries),
+                "request_portal_enabled": config.request_portal_enabled,
+                "request_portal_domains": list(config.request_portal_domains),
             },
         )
         self.start()

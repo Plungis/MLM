@@ -116,6 +116,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert config_page.status_code == 200
     assert "Complete configuration" in config_page.text
     assert "Download if wedge fails" in config_page.text
+    assert "Enable request portal" in config_page.text
+    assert 'name="request_portal_domains"' in config_page.text
     assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
@@ -159,6 +161,11 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "prefer_wedges": "true",
             "download_on_wedge_failure": "true",
             "grab_both_formats": "true",
+            "request_portal_enabled": "true",
+            "request_portal_domains": "requests.example.test",
+            "request_portal_title": "Family Requests",
+            "request_portal_rate_limit": "15",
+            "request_portal_access_code": "family-only",
             "search_interval": "20",
             "import_interval": "60",
             "link_interval": "5",
@@ -172,6 +179,11 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.prefer_wedges is True
     assert updated.download_on_wedge_failure is True
     assert updated.grab_both_formats is True
+    assert updated.request_portal_enabled is True
+    assert updated.request_portal_domains == ("requests.example.test",)
+    assert updated.request_portal_title == "Family Requests"
+    assert updated.request_portal_access_code == "family-only"
+    assert updated.request_portal_rate_limit == 15
 
     full_saved = client.post(
         "/config/full",

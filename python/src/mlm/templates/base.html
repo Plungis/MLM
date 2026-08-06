@@ -30,6 +30,9 @@
         <a class="nav-link{% if path == '/search' %} active{% endif %}" href="/search">
           <span>Search MaM</span>
         </a>
+        <a class="nav-link{% if path == '/requests' %} active{% endif %}" href="/requests">
+          <span>Requests</span><span class="nav-count{% if request_tracking.get('pending', 0) %} count-alert{% endif %}">{{ request_tracking.get("pending", 0) }}</span>
+        </a>
       </div>
 
       <div class="nav-group">

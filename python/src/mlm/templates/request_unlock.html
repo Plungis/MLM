@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#020604">
+  <title>{{ portal_title }} · MyAnonaSuite</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v={{ version }}">
+</head>
+<body class="request-portal-body">
+  <main class="request-unlock-shell">
+    <section class="request-unlock-card">
+      <span class="request-brand-mark">R_</span>
+      <p class="eyebrow">MyAnonaSuite / private request portal</p>
+      <h1>{{ portal_title }}</h1>
+      <p>Enter the shared access code to search the library request catalog.</p>
+      {% if error %}<div class="flash error-text" role="alert">{{ error }}</div>{% endif %}
+      <form action="/request/unlock" method="post">
+        <label><span>Access code</span><input type="password" name="access_code" required autofocus autocomplete="current-password"></label>
+        <button class="primary" type="submit">Open request portal</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

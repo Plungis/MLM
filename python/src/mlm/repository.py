@@ -132,6 +132,112 @@ class Repository:
                 for row in rows
             ]
 
+    def create_request(
+        self,
+        *,
+        mam_id: int,
+        release: dict[str, Any],
+        requester_name: str = "",
+        requester_contact: str = "",
+        note: str = "",
+        source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
+        row = {
+            "id": str(uuid4()),
+            "mam_id": mam_id,
+            "status": "pending",
+            "requester_name": requester_name.strip(),
+            "requester_contact": requester_contact.strip(),
+            "note": note.strip(),
+            "source": source or {},
+            "release": release,
+            "created_at": now,
+            "updated_at": now,
+            "decision_note": "",
+        }
+        with connect(self.path) as connection:
+            connection.execute(
+                """INSERT INTO requests
+                   (id, mam_id, status, created_at, updated_at, payload_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    row["id"],
+                    row["mam_id"],
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    canonical_json(row),
+                ),
+            )
+        return row
+
+    def request_record(self, request_id: str) -> dict[str, Any] | None:
+        with connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM requests WHERE id = ?", (request_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def request_rows(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT payload_json FROM requests"
+        parameters: tuple[Any, ...]
+        if status:
+            query += " WHERE status = ?"
+            parameters = (status, limit)
+        else:
+            parameters = (limit,)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        with connect(self.path) as connection:
+            rows = connection.execute(query, parameters)
+            return [json.loads(row[0]) for row in rows]
+
+    def update_request(
+        self,
+        request_id: str,
+        status: str,
+        *,
+        decision_note: str = "",
+    ) -> dict[str, Any] | None:
+        with connect(self.path) as connection:
+            stored = connection.execute(
+                "SELECT payload_json FROM requests WHERE id = ?", (request_id,)
+            ).fetchone()
+            if not stored:
+                return None
+            row = json.loads(stored[0])
+            row.update(
+                status=status,
+                decision_note=decision_note.strip(),
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+            connection.execute(
+                """UPDATE requests
+                   SET status = ?, updated_at = ?, payload_json = ?
+                   WHERE id = ?""",
+                (
+                    row["status"],
+                    row["updated_at"],
+                    canonical_json(row),
+                    request_id,
+                ),
+            )
+            return row
+
+    def request_counts(self) -> dict[str, int]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) FROM requests GROUP BY status"
+            )
+            counts = {str(row[0]): int(row[1]) for row in rows}
+            counts["total"] = sum(counts.values())
+            return counts
+
     def has_mam_id(self, mam_id: int) -> bool:
         with connect(self.path) as connection:
             selected = connection.execute(
@@ -428,6 +534,7 @@ class Repository:
             "events",
             "lists",
             "list_items",
+            "requests",
         )
         with connect(self.path) as connection:
             counts = {
@@ -468,6 +575,7 @@ class Repository:
                 "downloading_bytes": int(pipeline_row[2] or 0),
             },
             "list_tracking": tracking,
+            "request_tracking": self.request_counts(),
         }
 
     def counts(self) -> dict[str, int]:
