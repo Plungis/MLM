@@ -111,7 +111,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert client.get("/static/app.css").status_code == 200
     events = client.get("/records/events")
     assert events.status_code == 200
-    assert "Raw record" in events.text
+    assert "Lifecycle events" in events.text
+    assert "Event details" in events.text
     config_page = client.get("/config")
     assert config_page.status_code == 200
     assert "Complete configuration" in config_page.text
@@ -266,7 +267,7 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     assert "Path forward" in page.text
     assert "lower the wedge buffer" in page.text
     assert "Retry now" in page.text
-    assert "/diagnostics?component=downloader" in page.text
+    assert "/operations?view=diagnostics&component=downloader" in page.text
 
     retried = client.post(
         "/errors/retry",
@@ -369,7 +370,7 @@ def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
     assert "disk is full" in dashboard.text
     assert source in dashboard.text
     assert destination in dashboard.text
-    assert "/records/errored_torrents" in dashboard.text
+    assert "/operations?view=errors" in dashboard.text
 
     errors = client.get("/records/errored_torrents")
     assert errors.status_code == 200
@@ -377,7 +378,7 @@ def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
     assert source in errors.text
     assert destination in errors.text
     assert "Free space on the library drive" in errors.text
-    assert "/diagnostics?component=organizer" in errors.text
+    assert "/operations?view=diagnostics&component=organizer" in errors.text
 
 
 def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:
@@ -517,6 +518,80 @@ def test_record_pages_are_paginated(tmp_path: Path) -> None:
 
     assert first.status_code == 200
     assert "Page 1 / 2" in first.text
-    assert "/records/events?page=2" in first.text
+    assert "/operations?view=events&page=2" in first.text
     assert second.status_code == 200
     assert "Page 2 / 2" in second.text
+
+
+def test_lists_and_processed_library_are_consolidated(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    repository.upsert_list(
+        {
+            "id": "179120590:abs",
+            "title": "ABS Reading List",
+            "updated_at": "2026-08-06T12:00:00Z",
+        }
+    )
+    repository.upsert_list_item(
+        {
+            "guid": ["179120590:abs", "book-123"],
+            "list_id": "179120590:abs",
+            "title": "Tracked Book",
+            "authors": ["Example Author"],
+            "created_at": "2026-08-06T12:00:00Z",
+            "status": "already_grabbed",
+            "selected_mam_ids": [123],
+            "check_count": 1,
+            "last_result": "Skipped: already selected in an earlier run",
+        }
+    )
+    repository.record_linked(
+        {
+            "id": "hash-123",
+            "mam_id": 123,
+            "title_search": "tracked book",
+            "created_at": "2026-08-06T12:00:00Z",
+            "meta": {"title": "Tracked Book", "authors": ["Example Author"]},
+            "library_path": "E:\\MLM Ebook\\Example Author\\Tracked Book",
+        },
+        None,
+    )
+    repository.add_duplicate(
+        {
+            "mam_id": 124,
+            "title_search": "tracked book",
+            "meta": {
+                "title": "Tracked Book replacement",
+                "authors": ["Example Author"],
+            },
+        },
+        duplicate_of="hash-123",
+    )
+
+    client = TestClient(create_app(config, database))
+    lists = client.get("/lists")
+    filtered = client.get("/lists?list_id=179120590%3Aabs")
+    library = client.get("/library")
+    duplicates = client.get("/library?view=duplicates")
+    old_lists = client.get("/records/list_items")
+    old_duplicates = client.get("/records/duplicate_torrents")
+
+    assert lists.status_code == 200
+    assert "ABS Reading List" in lists.text
+    assert "Tracked Book" in lists.text
+    assert "1 sources" in lists.text
+    assert filtered.status_code == 200
+    assert "Skipped: already selected" in filtered.text
+    assert library.status_code == 200
+    assert "MLM Processed Library" in library.text
+    assert "Tracked Book" in library.text
+    assert duplicates.status_code == 200
+    assert "Tracked Book replacement" in duplicates.text
+    assert "Duplicate of hash-123" in duplicates.text
+    assert old_lists.url.path == "/lists"
+    assert old_duplicates.url.path == "/library"
+    assert old_duplicates.url.query == b"view=duplicates"

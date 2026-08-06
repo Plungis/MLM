@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -244,8 +245,194 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             ),
         )
 
+    async def prepare_error_rows(rows: list[dict]) -> None:
+        pending_mam_ids = {
+            int(row["mam_id"])
+            for row in await asyncio.to_thread(repository.pending_selected)
+        }
+        for row in rows:
+            identifier = row.get("id")
+            row["_error_id"] = json.dumps(
+                identifier,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            row["_mam_id"] = (
+                identifier.get("Grabber") if isinstance(identifier, dict) else None
+            )
+            row["_retryable"] = (
+                row["_mam_id"] is not None and int(row["_mam_id"]) in pending_mam_ids
+            )
+            row["_guidance"] = error_guidance(str(row.get("error", "")))
+
+    @app.get("/operations", response_class=HTMLResponse)
+    async def operations(
+        request: Request,
+        view: str = "diagnostics",
+        component: str = "",
+        page: int = 1,
+        live: str = "1",
+    ) -> HTMLResponse:
+        selected_view = (
+            view if view in {"diagnostics", "events", "errors"} else "diagnostics"
+        )
+        page = max(1, page)
+        page_size = 50
+        activity: list[dict] = []
+        rows: list[dict] = []
+        total = 0
+        if selected_view == "diagnostics":
+            activity = await asyncio.to_thread(
+                repository.recent_activity,
+                limit=300,
+                component=component or None,
+            )
+        else:
+            table = "events" if selected_view == "events" else "errored_torrents"
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            snapshot = await ui_snapshot()
+            total = int(snapshot["counts"].get(table, 0))
+            if selected_view == "errors":
+                await prepare_error_rows(rows)
+        page_count = max(1, math.ceil(total / page_size))
+        if selected_view != "diagnostics" and page > page_count:
+            return RedirectResponse(
+                f"/operations?{urlencode({'view': selected_view, 'page': page_count})}",
+                status_code=307,
+            )
+        return templates.TemplateResponse(
+            request,
+            "operations.html",
+            await context(
+                request,
+                title="Operations",
+                operations_view=selected_view,
+                activity=activity,
+                component=component,
+                live=live != "0",
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+                retried=request.query_params.get("retried") == "1",
+                dismissed=request.query_params.get("dismissed") == "1",
+            ),
+        )
+
+    @app.get("/lists", response_class=HTMLResponse)
+    async def combined_lists(
+        request: Request,
+        list_id: str = "",
+        page: int = 1,
+    ) -> HTMLResponse:
+        page = max(1, page)
+        page_size = 50
+        sources = await asyncio.to_thread(
+            repository.table_rows, "lists", limit=500, offset=0
+        )
+        item_counts = await asyncio.to_thread(repository.list_item_counts_by_list)
+        rows = await asyncio.to_thread(
+            repository.list_item_rows,
+            list_id=list_id or None,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        total = await asyncio.to_thread(repository.list_item_count, list_id or None)
+        page_count = max(1, math.ceil(total / page_size))
+        if page > page_count:
+            query = {"page": page_count}
+            if list_id:
+                query["list_id"] = list_id
+            return RedirectResponse(f"/lists?{urlencode(query)}", status_code=307)
+        selected_source = next(
+            (source for source in sources if str(source.get("id")) == list_id),
+            None,
+        )
+        return templates.TemplateResponse(
+            request,
+            "lists.html",
+            await context(
+                request,
+                title="Lists",
+                sources=sources,
+                item_counts=item_counts,
+                selected_list_id=list_id,
+                selected_source=selected_source,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+            ),
+        )
+
+    @app.get("/library", response_class=HTMLResponse)
+    async def combined_library(
+        request: Request,
+        view: str = "processed",
+        page: int = 1,
+    ) -> HTMLResponse:
+        selected_view = view if view in {"processed", "duplicates"} else "processed"
+        table = "torrents" if selected_view == "processed" else "duplicate_torrents"
+        page = max(1, page)
+        page_size = 50
+        rows = await asyncio.to_thread(
+            repository.table_rows,
+            table,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        snapshot = await ui_snapshot()
+        total = int(snapshot["counts"].get(table, 0))
+        page_count = max(1, math.ceil(total / page_size))
+        if page > page_count:
+            return RedirectResponse(
+                f"/library?{urlencode({'view': selected_view, 'page': page_count})}",
+                status_code=307,
+            )
+        return templates.TemplateResponse(
+            request,
+            "library.html",
+            await context(
+                request,
+                title="MLM Processed Library",
+                library_view=selected_view,
+                table=table,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+            ),
+        )
+
     @app.get("/records/{table}", response_class=HTMLResponse)
     async def records(request: Request, table: str, page: int = 1) -> HTMLResponse:
+        consolidated = {
+            "events": ("/operations", "events"),
+            "errored_torrents": ("/operations", "errors"),
+            "lists": ("/lists", ""),
+            "list_items": ("/lists", ""),
+            "torrents": ("/library", "processed"),
+            "duplicate_torrents": ("/library", "duplicates"),
+        }
+        if table in consolidated:
+            target, view = consolidated[table]
+            query = dict(request.query_params)
+            if view:
+                query["view"] = view
+            suffix = f"?{urlencode(query)}" if query else ""
+            return RedirectResponse(target + suffix, status_code=307)
         page = max(1, page)
         page_size = 50
         try:
@@ -264,30 +451,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return RedirectResponse(
                 f"/records/{table}?page={page_count}", status_code=307
             )
-        if table == "errored_torrents":
-            pending_mam_ids = {
-                int(row["mam_id"])
-                for row in await asyncio.to_thread(repository.pending_selected)
-            }
-            for row in rows:
-                identifier = row.get("id")
-                row["_error_id"] = json.dumps(
-                    identifier,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-                row["_mam_id"] = (
-                    identifier.get("Grabber") if isinstance(identifier, dict) else None
-                )
-                row["_retryable"] = (
-                    row["_mam_id"] is not None
-                    and int(row["_mam_id"]) in pending_mam_ids
-                )
-                row["_guidance"] = error_guidance(str(row.get("error", "")))
         return templates.TemplateResponse(
             request,
-            "errors.html" if table == "errored_torrents" else "records.html",
+            "records.html",
             await context(
                 request,
                 title=table.replace("_", " ").title(),
@@ -317,7 +483,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
         repository.delete_error(identifier)
         asyncio.create_task(app.state.services.trigger("downloader"))
-        return RedirectResponse("/records/errored_torrents?retried=1", status_code=303)
+        return RedirectResponse("/operations?view=errors&retried=1", status_code=303)
 
     @app.post("/errors/dismiss")
     async def dismiss_error(error_id: str = Form(...)) -> RedirectResponse:
@@ -326,9 +492,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         except json.JSONDecodeError as error:
             raise HTTPException(400, "invalid error identifier") from error
         repository.delete_error(identifier)
-        return RedirectResponse(
-            "/records/errored_torrents?dismissed=1", status_code=303
-        )
+        return RedirectResponse("/operations?view=errors&dismissed=1", status_code=303)
 
     @app.get("/suite/{module}", response_class=HTMLResponse)
     async def suite_placeholder(request: Request, module: str) -> HTMLResponse:
@@ -469,22 +633,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
         return RedirectResponse("/config?saved=1", status_code=303)
 
-    @app.get("/diagnostics", response_class=HTMLResponse)
-    async def diagnostics(request: Request, component: str = "") -> HTMLResponse:
-        activity = await asyncio.to_thread(
-            repository.recent_activity, limit=300, component=component or None
-        )
-        return templates.TemplateResponse(
-            request,
-            "diagnostics.html",
-            await context(
-                request,
-                title="Diagnostics",
-                activity=activity,
-                component=component,
-                live=request.query_params.get("live", "1") != "0",
-            ),
-        )
+    @app.get("/diagnostics")
+    async def diagnostics_redirect(request: Request) -> RedirectResponse:
+        query = dict(request.query_params)
+        query["view"] = "diagnostics"
+        return RedirectResponse(f"/operations?{urlencode(query)}", status_code=307)
 
     def manual_search_filters(
         *,

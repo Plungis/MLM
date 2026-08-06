@@ -1,22 +1,16 @@
-{% extends "base.html" %}
-{% block content %}
-<header class="page-header">
-  <div>
-    <p class="eyebrow">Live trace</p>
-    <h1>Diagnostics</h1>
-    <p class="subtitle">A five-second live view of source refreshes, matching decisions, queue checks, downloads, and scheduled jobs.</p>
-  </div>
+<section class="operations-view-header">
+  <div><h2>Live diagnostics</h2><p>A five-second live view of source refreshes, matching decisions, queue checks, downloads, and scheduled jobs.</p></div>
   <div class="page-meta">
     {% if live %}
     <span class="chip"><span class="status-dot"></span> Auto-refresh on</span>
-    <a class="button" href="/diagnostics?live=0{% if component %}&component={{ component }}{% endif %}">Pause</a>
+    <a class="button" href="/operations?view=diagnostics&live=0{% if component %}&component={{ component }}{% endif %}">Pause</a>
     {% else %}
     <span class="chip">Auto-refresh paused</span>
-    <a class="button" href="/diagnostics{% if component %}?component={{ component }}{% endif %}">Resume</a>
+    <a class="button" href="/operations?view=diagnostics{% if component %}&component={{ component }}{% endif %}">Resume</a>
     {% endif %}
-    <a class="button" href="/diagnostics">Clear filter</a>
+    <a class="button" href="/operations?view=diagnostics">Clear filter</a>
   </div>
-</header>
+</section>
 
 <section class="debug-grid">
   <article class="debug-window">
@@ -64,7 +58,7 @@
     </div>
     <div class="console-filters">
       {% for value,label in [("","All"),("scheduler","Scheduler"),("downloader","Downloader"),("organizer","Organizer"),("lists","Lists")] %}
-      <a class="chip{% if component == value %} active{% endif %}" href="/diagnostics{% if value %}?component={{ value }}{% endif %}">{{ label }}</a>
+      <a class="chip{% if component == value %} active{% endif %}" href="/operations?view=diagnostics{% if value %}&component={{ value }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
   </header>
@@ -72,7 +66,7 @@
     {% for entry in activity %}
     <article class="activity-line {{ entry.level }}">
       <time data-local-time="{{ entry.created_at }}">{{ entry.created_at }}</time>
-      <a href="/diagnostics?component={{ entry.component }}">[{{ entry.component }}]</a>
+      <a href="/operations?view=diagnostics&component={{ entry.component }}">[{{ entry.component }}]</a>
       <strong>{{ entry.message }}</strong>
       {% if entry.context %}<details><summary>context</summary><pre>{{ entry.context | tojson(indent=2) }}</pre></details>{% endif %}
     </article>
@@ -81,4 +75,3 @@
     {% endfor %}
   </div>
 </section>
-{% endblock %}

@@ -477,6 +477,41 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
+    def list_item_rows(
+        self,
+        *,
+        list_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT payload_json FROM list_items"
+        parameters: tuple[Any, ...]
+        if list_id:
+            query += " WHERE list_id = ?"
+            parameters = (list_id, limit, offset)
+        else:
+            parameters = (limit, offset)
+        query += " ORDER BY created_at_json DESC LIMIT ? OFFSET ?"
+        with connect(self.path) as connection:
+            rows = connection.execute(query, parameters)
+            return [json.loads(row[0]) for row in rows]
+
+    def list_item_count(self, list_id: str | None = None) -> int:
+        query = "SELECT COUNT(*) FROM list_items"
+        parameters: tuple[Any, ...] = ()
+        if list_id:
+            query += " WHERE list_id = ?"
+            parameters = (list_id,)
+        with connect(self.path) as connection:
+            return int(connection.execute(query, parameters).fetchone()[0])
+
+    def list_item_counts_by_list(self) -> dict[str, int]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                "SELECT list_id, COUNT(*) FROM list_items GROUP BY list_id"
+            )
+            return {str(row[0]): int(row[1]) for row in rows}
+
     def upsert_list_item(self, row: dict[str, Any]) -> None:
         with connect(self.path) as connection:
             connection.execute(

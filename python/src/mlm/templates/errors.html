@@ -1,16 +1,7 @@
-{% extends "base.html" %}
-{% block content %}
-<header class="page-header">
-  <div>
-    <p class="eyebrow">Recovery center</p>
-    <h1>Errors</h1>
-    <p class="subtitle">Every failure includes its exact reason, a recovery path, and a direct way to retry or dismiss it.</p>
-  </div>
-  <div class="page-meta">
-    <span class="chip">{{ total }} unresolved</span>
-    <a class="button" href="/diagnostics">Open diagnostics</a>
-  </div>
-</header>
+<section class="operations-view-header">
+  <div><h2>Recovery center</h2><p>Every failure includes its exact reason, a recovery path, and a direct way to retry or dismiss it.</p></div>
+  <span class="chip">{{ total }} unresolved</span>
+</section>
 
 {% if retried %}
 <div class="flash">The stored error was cleared and the downloader was asked to retry it.</div>
@@ -94,7 +85,7 @@
           </div>
         </div>
         <div class="error-links">
-          <a href="/diagnostics?component={{ guidance.component }}">View {{ guidance.component }} diagnostics</a>
+          <a href="/operations?view=diagnostics&component={{ guidance.component }}">View {{ guidance.component }} diagnostics</a>
           <a href="/config">Open configuration</a>
         </div>
       </div>
@@ -117,9 +108,8 @@
 
 {% if page_count > 1 %}
 <nav class="pagination" aria-label="Error pages">
-  {% if page > 1 %}<a class="button" href="/records/errored_torrents?page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  {% if page > 1 %}<a class="button" href="/operations?view=errors&page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
   <span class="chip">Page {{ page }} / {{ page_count }}</span>
-  {% if page < page_count %}<a class="button" href="/records/errored_torrents?page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+  {% if page < page_count %}<a class="button" href="/operations?view=errors&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
 </nav>
 {% endif %}
-{% endblock %}

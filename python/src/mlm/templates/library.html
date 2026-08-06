@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / processed records</p>
+    <h1>MLM Processed Library</h1>
+    <p class="subtitle">Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip">{{ counts.get("torrents", 0) }} processed</span>
+    <span class="chip">{{ counts.get("duplicate_torrents", 0) }} duplicates</span>
+  </div>
+</header>
+
+<nav class="request-inbox-tabs" aria-label="Processed library view">
+  <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed library · {{ counts.get("torrents", 0) }}</a>
+  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates & replacements · {{ counts.get("duplicate_torrents", 0) }}</a>
+</nav>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>{% if library_view == "duplicates" %}Duplicate and replacement candidates{% else %}Processed library records{% endif %}</h2>
+      <p>{% if library_view == "duplicates" %}Candidates retained for HeavyMLM cleanup and quality-replacement decisions.{% else %}Torrent records already inspected and tracked by HeavyMLM's library pipeline.{% endif %}</p>
+    </div>
+    <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}</span>
+  </header>
+  {% if rows %}<div class="record-list">
+    {% for row in rows %}
+    {% set meta = row.get("meta") or {} %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ row.get("title") or meta.get("title") or row.get("title_search") or row.get("id") or "Untitled record" }}</span>
+          <span class="record-id">{% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }}{% endif %}{% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}{% if row.get("library_path") %} · {{ row.get("library_path") }}{% endif %}</span>
+          {% if library_view == "duplicates" and row.get("duplicate_of") %}<span class="record-note">Duplicate of {{ row.get("duplicate_of") }}</span>{% endif %}
+        </div>
+        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "duplicates" %}Review candidate{% else %}Processed{% endif %}</span>
+      </div>
+      <details><summary>Record details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
+    </article>
+    {% endfor %}
+  </div>{% else %}<div class="empty-state"><div><strong>No records in this view</strong><p>HeavyMLM will populate it as the organizer and cleaner process your library.</p></div></div>{% endif %}
+</section>
+
+{% if page_count > 1 %}<nav class="pagination" aria-label="Library pages">
+  {% if page > 1 %}<a class="button" href="/library?view={{ library_view }}&page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="/library?view={{ library_view }}&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+</nav>{% endif %}
+{% endblock %}

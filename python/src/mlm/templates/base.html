@@ -37,28 +37,21 @@
 
       <div class="nav-group">
         <p class="nav-label">Library</p>
-        {% for key,label in [
-          ("torrents","Library"),("selected_torrents","Download Queue"),
-          ("duplicate_torrents","Duplicates")] %}
-        <a class="nav-link{% if path == '/records/' + key %} active{% endif %}" href="/records/{{ key }}">
-          <span>{{ label }}</span><span class="nav-count">{{ counts.get(key, 0) }}</span>
+        <a class="nav-link{% if path == '/library' %} active{% endif %}" href="/library">
+          <span>MLM Processed Library</span><span class="nav-count">{{ counts.get("torrents", 0) }}</span>
         </a>
-        {% endfor %}
+        <a class="nav-link{% if path == '/records/selected_torrents' %} active{% endif %}" href="/records/selected_torrents">
+          <span>Download Queue</span><span class="nav-count">{{ counts.get("selected_torrents", 0) }}</span>
+        </a>
+        <a class="nav-link{% if path == '/lists' %} active{% endif %}" href="/lists">
+          <span>Lists</span><span class="nav-count">{{ counts.get("list_items", 0) }}</span>
+        </a>
       </div>
 
       <div class="nav-group">
         <p class="nav-label">Activity</p>
-        <a class="nav-link{% if path == '/diagnostics' %} active{% endif %}" href="/diagnostics">
-          <span>Diagnostics</span>
-        </a>
-        {% for key,label in [
-          ("events","Events"),("lists","Lists"),("list_items","List Items")] %}
-        <a class="nav-link{% if path == '/records/' + key %} active{% endif %}" href="/records/{{ key }}">
-          <span>{{ label }}</span><span class="nav-count">{{ counts.get(key, 0) }}</span>
-        </a>
-        {% endfor %}
-        <a class="nav-link{% if path == '/records/errored_torrents' %} active{% endif %}" href="/records/errored_torrents">
-          <span>Errors</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
+        <a class="nav-link{% if path == '/operations' %} active{% endif %}" href="/operations">
+          <span>Operations</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
         </a>
       </div>
 

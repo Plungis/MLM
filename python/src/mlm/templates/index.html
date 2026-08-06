@@ -24,8 +24,8 @@
     {% if failure.get("destination") %}<code>Destination: {{ failure.get("destination") }}</code>{% endif %}
   </div>
   <div class="record-actions">
-    <a class="button danger" href="/records/errored_torrents">Open errors</a>
-    <a class="button" href="/diagnostics?component=organizer">Organizer trace</a>
+    <a class="button danger" href="/operations?view=errors">Open errors</a>
+    <a class="button" href="/operations?view=diagnostics&component=organizer">Organizer trace</a>
   </div>
 </section>
 {% endif %}
@@ -77,21 +77,26 @@
 {% endif %}
 
 <section class="metric-grid" aria-label="Library metrics">
-  {% for key,label,help in [
-    ("torrents","Library","organized titles"),
-    ("selected_torrents","Pipeline","selected and downloading"),
-    ("duplicate_torrents","Duplicates","replacement candidates"),
-    ("errored_torrents","Errors","need attention")] %}
-  <a class="metric" href="/records/{{ key }}">
-    <span class="metric-label">{{ label }}</span>
-    <strong class="metric-value">{{ counts.get(key, 0) }}</strong>
-    {% if key == "selected_torrents" %}
-    <span class="metric-help">{{ pipeline.awaiting }} awaiting · {{ pipeline.downloading }} in qBittorrent →</span>
-    {% else %}
-    <span class="metric-help">{{ help }} →</span>
-    {% endif %}
+  <a class="metric" href="/library">
+    <span class="metric-label">MLM Processed Library</span>
+    <strong class="metric-value">{{ counts.get("torrents", 0) }}</strong>
+    <span class="metric-help">{{ counts.get("duplicate_torrents", 0) }} duplicate candidates →</span>
   </a>
-  {% endfor %}
+  <a class="metric" href="/records/selected_torrents">
+    <span class="metric-label">Pipeline</span>
+    <strong class="metric-value">{{ counts.get("selected_torrents", 0) }}</strong>
+    <span class="metric-help">{{ pipeline.awaiting }} awaiting · {{ pipeline.downloading }} in qBittorrent →</span>
+  </a>
+  <a class="metric" href="/lists">
+    <span class="metric-label">Lists</span>
+    <strong class="metric-value">{{ counts.get("list_items", 0) }}</strong>
+    <span class="metric-help">{{ counts.get("lists", 0) }} configured sources →</span>
+  </a>
+  <a class="metric" href="/operations?view=errors">
+    <span class="metric-label">Operations</span>
+    <strong class="metric-value">{{ counts.get("errored_torrents", 0) }}</strong>
+    <span class="metric-help">errors needing attention →</span>
+  </a>
 </section>
 
 <section class="grid two">
@@ -169,7 +174,7 @@
               {% set failures = status.last_result.get("failures") or [] %}
               {% if failures %}
                 <div class="result-reason">{{ failures[-1].get("error") }}</div>
-                <a href="/records/errored_torrents">Open recovery</a>
+                <a href="/operations?view=errors">Open recovery</a>
               {% endif %}
               {% set reasons = status.last_result.get("skip_reasons") or {} %}
               {% if reasons.get("no_matching_library") %}
