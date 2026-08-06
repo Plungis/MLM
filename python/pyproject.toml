@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlm-python"
-version = "0.5.0b21"
+version = "0.5.0b22"
 description = "MyAnonaSuite with the HeavyMLM library automation module"
 readme = "README.md"
 requires-python = ">=3.11"

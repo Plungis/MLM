@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#020604">
   <title>{{ title }} · MyAnonaSuite</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
 </head>
 <body data-suite="{{ suite_module }}">
 <div class="app-shell">
@@ -115,6 +115,6 @@
     </main>
   </section>
 </div>
-<script src="{{ url_for('static', path='/app.js') }}?v={{ version }}"></script>
+<script src="/static/app.js?v={{ version }}"></script>
 </body>
 </html>

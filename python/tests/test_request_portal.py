@@ -176,6 +176,9 @@ def test_custom_domain_is_request_only_and_approval_queues_release(
     assert "Goodreads link reader" in portal.text
     assert "Dungeon Crawler Carl" in portal.text
     assert "Send request for approval" in portal.text
+    stylesheet = client.get("/static/app.css", headers=portal_headers)
+    assert stylesheet.status_code == 200
+    assert ".request-portal-body" in stylesheet.text
     assert client.get("/config", headers=portal_headers).status_code == 404
     assert client.get("/requests", headers=portal_headers).status_code == 404
     assert client.get("/").text.find("Dashboard") != -1
@@ -310,12 +313,17 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 41234))
         async with httpx.AsyncClient(
             transport=transport,
-            base_url="https://requests.example.test",
-            headers={"x-forwarded-for": "203.0.113.20"},
+            base_url="http://requests.example.test",
+            headers={
+                "x-forwarded-for": "203.0.113.20",
+                "x-forwarded-proto": "https",
+            },
         ) as client:
             locked = await client.get("/")
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
+            assert 'href="/static/app.css?v=0.5.0b22"' in locked.text
+            assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())
