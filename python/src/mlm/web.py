@@ -36,6 +36,7 @@ from .modules.heavymlm.search import (
     present_search_result,
     search_seed,
 )
+from .modules.mam_spender import default_public_state
 from .repository import Repository
 from .request_portal import (
     GoodreadsLookupError,
@@ -64,8 +65,8 @@ SUITE_MODULES = {
     "mam-spender": {
         "name": "MAM-Spender",
         "icon": "M$",
-        "status": "Planned",
-        "summary": "A web workspace for intentional MyAnonamouse bonus-point spending.",
+        "status": "Active",
+        "summary": "Automated bonus-point spending, history, and account intelligence.",
     },
 }
 
@@ -117,6 +118,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if hasattr(app.state, "services"):
             return app.state.services.config
         return config
+
+    def spender_service():
+        services = getattr(app.state, "services", None)
+        spender = getattr(services, "mam_spender", None)
+        if spender is None:
+            raise HTTPException(503, "MAM-Spender is still starting")
+        return spender
 
     def local_request(request: Request) -> bool:
         client_host = request.client.host if request.client else ""
@@ -495,9 +503,36 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return RedirectResponse("/operations?view=errors&dismissed=1", status_code=303)
 
     @app.get("/suite/{module}", response_class=HTMLResponse)
-    async def suite_placeholder(request: Request, module: str) -> HTMLResponse:
+    async def suite_module_page(
+        request: Request, module: str, view: str = "dashboard"
+    ) -> HTMLResponse:
         if module not in {"absidekick", "mam-spender"}:
             raise HTTPException(404, f"unknown suite module: {module}")
+        if module == "mam-spender":
+            selected_view = (
+                view
+                if view
+                in {"dashboard", "settings", "history", "analytics", "mam-data"}
+                else "dashboard"
+            )
+            services = getattr(app.state, "services", None)
+            spender = getattr(services, "mam_spender", None)
+            spender_state = (
+                spender.public_state()
+                if spender is not None
+                else default_public_state(repository)
+            )
+            return templates.TemplateResponse(
+                request,
+                "mam_spender.html",
+                await context(
+                    request,
+                    title="MAM-Spender",
+                    suite_module=module,
+                    spender=spender_state,
+                    spender_view=selected_view,
+                ),
+            )
         return templates.TemplateResponse(
             request,
             "suite_placeholder.html",
@@ -507,6 +542,69 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 suite_module=module,
             ),
         )
+
+    @app.get("/api/mam-spender/state")
+    async def mam_spender_state(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        return spender_service().public_state()
+
+    @app.post("/api/mam-spender/settings")
+    async def save_mam_spender_settings(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            payload = await request.json()
+            return spender_service().update_settings(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/session")
+    async def save_mam_spender_session(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            payload = await request.json()
+            return spender_service().save_session_id(str(payload.get("value", "")))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/import")
+    async def import_mam_spender_config(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            incoming = await request.json()
+            payload = incoming.get("config", incoming)
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            if not isinstance(payload, dict):
+                raise ValueError("legacy config must be a JSON object")
+            return spender_service().import_legacy(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/{action}")
+    async def mam_spender_action(request: Request, action: str) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        spender = spender_service()
+        if action == "start":
+            return spender.start_scheduler()
+        if action == "pause":
+            return spender.pause_scheduler()
+        if action == "run":
+            payload = await request.json()
+            return spender.run_now(
+                fl_only_override=bool(payload.get("fl_only_override", False))
+            )
+        if action == "reset-totals":
+            return spender.reset_totals()
+        if action == "refresh-account":
+            return await spender.refresh_mam_user_data()
+        if action == "refresh-bonus-history":
+            return await spender.refresh_bonus_history()
+        raise HTTPException(404, "unknown MAM-Spender action")
 
     @app.get("/config", response_class=HTMLResponse)
     async def show_config(request: Request) -> HTMLResponse:

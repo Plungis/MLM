@@ -1,15 +1,41 @@
 # MyAnonaSuite
 
 MyAnonaSuite is a shared terminal-style home for MyAnonamouse and audiobook
-library tools. HeavyMLM is the first active module; reserved workspaces for the
-future ABSidekick and MAM-Spender ports are available from the suite switcher.
+library tools. HeavyMLM and MAM-Spender are active modules; the ABSidekick
+workspace remains reserved for its future port.
 
 The suite shell and the three tools stay separated at the code boundary. Shared
 code is limited to navigation, theming, and explicit cross-module interfaces.
 HeavyMLM-specific presentation code and templates live under dedicated
-`modules/heavymlm` and `templates/heavymlm` namespaces; ABSidekick and
-MAM-Spender will receive sibling namespaces rather than importing HeavyMLM
-internals.
+`modules/heavymlm` and `modules/mam_spender` namespaces. Each module owns its
+policy, persistence, scheduler, and presentation while deliberately sharing the
+suite shell, SQLite runtime, and authenticated MaM client.
+
+## MAM-Spender module
+
+The MAM-Spender Web Edition v1.4 feature set is incorporated into the suite:
+
+- scheduled and manual spending scans, with a two-minute minimum interval;
+- upload-credit purchases in 50 GiB / 25,000-point blocks, capped at three
+  blocks per run;
+- Freeleech Wedge-only and alternating wedge/upload modes;
+- a configurable point reserve and optional VIP renewal at 83 days remaining;
+- balance verification, detailed failure traces, cumulative totals, local run
+  history, and confirmed spending events;
+- pie, bar, and cumulative timeline analytics;
+- MaM account data, notifications, bonus history, local/MaM clocks, Vault reset,
+  and Lotto reset/drawing countdowns;
+- Session_ID import from raw values, Cookie headers, Netscape/curl files, and
+  browser JSON exports; and
+- one-step import of the standalone Web Edition `data/config.json`, including
+  settings, totals, history, cached account data, and its plain stored
+  Session_ID.
+
+Open **M$ / Spend** in the bottom suite switcher. MAM-Spender uses the same
+approved API session and server process as HeavyMLM, so it does not open a
+second port or duplicate secrets. Purchases are irreversible; a purchase is
+recorded only when MaM explicitly reports success or the follow-up point balance
+confirms the expected store charge.
 
 HeavyMLM is both an auto downloader and a library organizer. Both parts are optional so either can be replaced with e.g. RSS or [booktree](https://github.com/myxdvz/booktree) if you prefer. And even if you use both, you can still add torrents manually and have them organized, and/or use booktree for collections or files that are not from MaM.
 

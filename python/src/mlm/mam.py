@@ -132,6 +132,25 @@ class MamClient:
         self._remember_cookie()
         return response.json()
 
+    async def request_json(
+        self,
+        path: str,
+        *,
+        params: Any = None,
+    ) -> Any:
+        """Make an authenticated JSON GET request for suite modules."""
+        response = await self.client.get(path, params=params)
+        self._raise_for_status(response)
+        self._remember_cookie()
+        try:
+            return response.json()
+        except ValueError as error:
+            raise MamError(
+                "Myanonamouse returned a non-JSON response "
+                f"from {path} (content-type="
+                f"{response.headers.get('content-type', 'unknown')})"
+            ) from error
+
     async def search(self, query: dict[str, Any]) -> dict[str, Any]:
         response = await self.client.post("/tor/js/loadSearchJSONbasic.php", json=query)
         self._raise_for_status(response)

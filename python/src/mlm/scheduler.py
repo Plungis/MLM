@@ -14,6 +14,7 @@ from .downloader import grab_selected_torrents
 from .library import organize_completed
 from .lists import run_goodreads_import, run_notion_import
 from .mam import MamClient
+from .modules.mam_spender import MamSpenderService
 from .qbittorrent import QbitClient
 from .repository import Repository
 from .snatchlist import run_snatchlist_search
@@ -37,6 +38,10 @@ class ServiceState:
     mam_stats: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task] = field(default_factory=list)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    mam_spender: MamSpenderService = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.mam_spender = MamSpenderService(self.repository, self.mam)
 
     def report_progress(
         self,
@@ -223,6 +228,7 @@ class ServiceState:
         return {"refreshed": refreshed, "selected": selected, "failed": failed}
 
     def start(self) -> None:
+        self.mam_spender.start()
         for index, rule in enumerate(self.config.autograbs):
             interval = int(rule.get("search_interval") or self.config.search_interval)
             name = f"autograb:{index}"
@@ -362,6 +368,7 @@ class ServiceState:
         for task in self.tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await self.mam_spender.close()
         await self.mam.close()
 
     async def trigger(self, name: str) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -97,6 +97,30 @@ CREATE TABLE requests (
 
 CREATE INDEX requests_status_created_idx ON requests(status, created_at DESC);
 CREATE INDEX requests_mam_id_idx ON requests(mam_id);
+
+CREATE TABLE mam_spender_state (
+    key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL
+);
+
+CREATE TABLE mam_spender_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX mam_spender_history_created_idx
+    ON mam_spender_history(created_at DESC);
+
+CREATE TABLE mam_spender_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    category TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE INDEX mam_spender_events_created_idx
+    ON mam_spender_events(created_at DESC);
 """
 
 DATA_TABLES = (
@@ -166,6 +190,25 @@ def ensure_database(path: Path) -> None:
                     ON requests(status, created_at DESC);
                 CREATE INDEX IF NOT EXISTS requests_mam_id_idx
                     ON requests(mam_id);
+                CREATE TABLE IF NOT EXISTS mam_spender_state (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mam_spender_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS mam_spender_history_created_idx
+                    ON mam_spender_history(created_at DESC);
+                CREATE TABLE IF NOT EXISTS mam_spender_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS mam_spender_events_created_idx
+                    ON mam_spender_events(created_at DESC);
                 """
             )
             connection.execute(

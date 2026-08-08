@@ -131,6 +131,13 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     spender = client.get("/suite/mam-spender")
     assert spender.status_code == 200
     assert 'data-suite="mam-spender"' in spender.text
+    assert "Spend deliberately" in spender.text
+    assert "SPEND_AUDIT.log" in spender.text
+    spender_settings = client.get("/suite/mam-spender?view=settings")
+    assert spender_settings.status_code == 200
+    assert "Import old config.json" in spender_settings.text
+    spender_history = client.get("/suite/mam-spender?view=history")
+    assert "MaM bonus history" in spender_history.text
     assert client.get("/suite/not-real").status_code == 404
 
     app.state.services = FakeServices(load_config(config))

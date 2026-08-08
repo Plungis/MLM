@@ -1,6 +1,7 @@
 # MyAnonaSuite Python Runtime
 
-This directory contains the MyAnonaSuite runtime and its active HeavyMLM module.
+This directory contains the MyAnonaSuite runtime and its active HeavyMLM and
+MAM-Spender modules.
 The `mlm-python` command and existing data paths remain unchanged for backward
 compatibility.
 
@@ -62,6 +63,19 @@ mlm-python run `
 The service runs the configured autograbbers, Goodreads and Notion imports,
 pending downloader, qBittorrent library organizers, and duplicate cleaner on
 their configured intervals. The dashboard listens on `web_host:web_port`.
+
+## Use MAM-Spender
+
+Open `http://localhost:3157/suite/mam-spender` or choose **M$ / Spend** in the
+suite switcher. Its Dashboard, Settings, History, Analytics, and MaM Data views
+are part of the same process, database, and authenticated MaM session as
+HeavyMLM.
+
+To migrate the standalone MAM-Spender Web Edition, open **MAM-Spender →
+Settings**, copy the contents of its `data/config.json` into **Import old
+config.json**, and choose **Import Web Edition data**. This imports module
+settings, totals, run history, spending events, cached MaM data, bonus history,
+and any plain Session_ID. The original file is not changed.
 
 ## Publish the request portal on a custom domain
 
