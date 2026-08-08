@@ -511,8 +511,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if module == "mam-spender":
             selected_view = (
                 view
-                if view
-                in {"dashboard", "settings", "history", "analytics", "mam-data"}
+                if view in {"dashboard", "settings", "history", "analytics", "mam-data"}
                 else "dashboard"
             )
             services = getattr(app.state, "services", None)

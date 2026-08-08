@@ -134,13 +134,9 @@ class MamSpenderService:
         self.points_per_min = self.store.value("points_per_min")
         self.mam_user_data = dict(self.store.value("mam_user_data", {}))
         self.mam_user_error = str(self.store.value("mam_user_error", ""))
-        self.mam_user_fetched_at = str(
-            self.store.value("mam_user_fetched_at", "")
-        )
+        self.mam_user_fetched_at = str(self.store.value("mam_user_fetched_at", ""))
         self.bonus_history = list(self.store.value("bonus_history", []))[-500:]
-        self.bonus_history_error = str(
-            self.store.value("bonus_history_error", "")
-        )
+        self.bonus_history_error = str(self.store.value("bonus_history_error", ""))
         self.bonus_history_fetched_at = str(
             self.store.value("bonus_history_fetched_at", "")
         )
@@ -235,9 +231,7 @@ class MamSpenderService:
             "bonus_history_fetched_at": self.bonus_history_fetched_at,
             "logs": list(
                 reversed(
-                    self.repository.recent_activity(
-                        limit=300, component=COMPONENT
-                    )
+                    self.repository.recent_activity(limit=300, component=COMPONENT)
                 )
             ),
             "session_id_saved": bool(self.repository.config_value("mam_id")),
@@ -292,9 +286,7 @@ class MamSpenderService:
         self.totals = Totals()
         self.store.clear_totals()
         self._persist_runtime()
-        self.store.add_history(
-            {"kind": "manual", "result": "Cumulative totals reset."}
-        )
+        self.store.add_history({"kind": "manual", "result": "Cumulative totals reset."})
         self.log("Cumulative totals reset.")
         return self.public_state()
 
@@ -322,9 +314,7 @@ class MamSpenderService:
         self.mam_user_fetched_at = str(payload.get("mam_user_fetched_at", ""))
         self.bonus_history = list(payload.get("bonus_history", []))[-500:]
         self.bonus_history_error = str(payload.get("bonus_history_error", ""))
-        self.bonus_history_fetched_at = str(
-            payload.get("bonus_history_fetched_at", "")
-        )
+        self.bonus_history_fetched_at = str(payload.get("bonus_history_fetched_at", ""))
         for row in list(payload.get("history", []))[-300:]:
             if isinstance(row, dict):
                 self.store.add_history(row)
@@ -451,9 +441,7 @@ class MamSpenderService:
             self.totals.cumulative_upload_gb += purchased_gb
             self.totals.cumulative_points_spent += spent
             self.totals.cumulative_freeleech_wedges += wedges
-            self.totals.cumulative_freeleech_points_spent += (
-                wedges * FL_WEDGE_COST
-            )
+            self.totals.cumulative_freeleech_points_spent += wedges * FL_WEDGE_COST
             self.totals.cumulative_vip_purchases += int(vip_purchased)
             if spent or purchased_gb or wedges or vip_purchased:
                 refreshed = await self._summary_data()
@@ -595,10 +583,7 @@ class MamSpenderService:
         if after <= 0 and self._response_succeeded(response):
             after = max(points - FL_WEDGE_COST, 0)
         observed_spend = max(points - after, 0)
-        if (
-            observed_spend < FL_WEDGE_COST
-            and not self._response_succeeded(response)
-        ):
+        if observed_spend < FL_WEDGE_COST and not self._response_succeeded(response):
             self.log(
                 "Freeleech Wedge purchase failed verification.",
                 level="error",

@@ -73,9 +73,7 @@ def test_wedge_purchase_uses_bonus_store_and_verifies_points(
             "_": mam.requests[0][1]["_"],
         },
     )
-    assert spender.public_state()["spend_events"][0]["category"] == (
-        "freeleech_wedge"
-    )
+    assert spender.public_state()["spend_events"][0]["category"] == ("freeleech_wedge")
 
 
 def test_wedge_purchase_respects_points_buffer(tmp_path: Path) -> None:
