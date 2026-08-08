@@ -255,6 +255,8 @@ class MamSpenderService:
             self.settings.alternate_next_purchase = str(
                 incoming["alternate_next_purchase"]
             )
+        if "theme" in incoming:
+            self.settings.theme = str(incoming["theme"])
         if "points_buffer" in incoming:
             self.settings.points_buffer = int(incoming["points_buffer"])
         if "next_run_delay_minutes" in incoming:

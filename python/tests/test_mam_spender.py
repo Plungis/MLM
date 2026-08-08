@@ -88,6 +88,18 @@ def test_wedge_purchase_respects_points_buffer(tmp_path: Path) -> None:
     assert mam.requests == []
 
 
+def test_module_theme_is_saved_and_invalid_values_are_normalized(
+    tmp_path: Path,
+) -> None:
+    mam = FakeMam()
+    spender = service(tmp_path, mam)
+
+    assert spender.update_settings({"theme": "mouse"})["settings"]["theme"] == ("mouse")
+    assert spender.update_settings({"theme": "not-a-theme"})["settings"]["theme"] == (
+        "ember"
+    )
+
+
 def test_wedge_success_is_not_lost_to_points_earned_during_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

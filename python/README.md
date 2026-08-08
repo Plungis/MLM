@@ -66,13 +66,15 @@ their configured intervals. The dashboard listens on `web_host:web_port`.
 
 ## Use MAM-Spender
 
-Open `http://localhost:3157/suite/mam-spender` or choose **M$ / Spend** in the
-suite switcher. Its Dashboard, Settings, History, Analytics, and MaM Data views
-are part of the same process, database, and authenticated MaM session as
-HeavyMLM.
+Open `http://localhost:3157/suite/mam-spender/dashboard` or choose **M$ / Spend**
+in the suite switcher. Its Dashboard, Graph, History, All MaM Data, and Config
+pages are part of the same process, database, and authenticated MaM session as
+HeavyMLM. The Config page controls the module's purchase policy, point buffer,
+schedule, theme, and Session_ID/import tools; it also identifies the exact
+running suite version and listener.
 
 To migrate the standalone MAM-Spender Web Edition, open **MAM-Spender →
-Settings**, copy the contents of its `data/config.json` into **Import old
+Config**, copy the contents of its `data/config.json` into **Import old
 config.json**, and choose **Import Web Edition data**. This imports module
 settings, totals, run history, spending events, cached MaM data, bonus history,
 and any plain Session_ID. The original file is not changed.

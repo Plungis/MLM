@@ -376,6 +376,7 @@
   }
 
   function render() {
+    document.body.dataset.spenderTheme = state.settings?.theme || "ember";
     renderStatus();
     renderLog();
     renderHistory();
@@ -447,6 +448,7 @@
         buy_upload_credit: data.has("buy_upload_credit"),
         fl_only: data.has("fl_only"),
         alternate_fl_upload: data.has("alternate_fl_upload"),
+        theme: data.get("theme"),
         points_buffer: Number(data.get("points_buffer")),
         next_run_delay_minutes: Number(data.get("next_run_delay_minutes")),
       };
@@ -479,6 +481,18 @@
       showNotice("Shared MaM API session saved. The cookie was not echoed back.");
     } catch (error) {
       showNotice(error.message, "error");
+    }
+  });
+
+  one("[data-spender-session-file]")?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    const input = one("[data-spender-session]");
+    if (!file || !input) return;
+    try {
+      input.value = await file.text();
+      showNotice(`Loaded ${file.name}. Review it, then save the Session_ID.`);
+    } catch {
+      showNotice(`Could not read ${file.name}.`, "error");
     }
   });
 

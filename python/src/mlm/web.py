@@ -502,6 +502,55 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         repository.delete_error(identifier)
         return RedirectResponse("/operations?view=errors&dismissed=1", status_code=303)
 
+    mam_spender_views = {"dashboard", "config", "history", "analytics", "mam-data"}
+    mam_spender_aliases = {
+        "settings": "config",
+        "graph": "analytics",
+        "mamdata": "mam-data",
+    }
+
+    async def render_mam_spender(request: Request, view: str) -> HTMLResponse:
+        normalized = mam_spender_aliases.get(view.casefold(), view.casefold())
+        if normalized not in mam_spender_views:
+            raise HTTPException(404, f"unknown MAM-Spender page: {view}")
+        services = getattr(app.state, "services", None)
+        spender = getattr(services, "mam_spender", None)
+        spender_state = (
+            spender.public_state()
+            if spender is not None
+            else default_public_state(repository)
+        )
+        current = active_config()
+        labels = {
+            "dashboard": "Dashboard",
+            "config": "Config",
+            "history": "History",
+            "analytics": "Graph",
+            "mam-data": "All MaM Data",
+        }
+        return templates.TemplateResponse(
+            request,
+            "mam_spender.html",
+            await context(
+                request,
+                title=f"MAM-Spender {labels[normalized]}",
+                suite_module="mam-spender",
+                spender=spender_state,
+                spender_view=normalized,
+                spender_runtime={
+                    "suite_version": __version__,
+                    "source_version": "MAM-Spender Web Edition v1.4.0",
+                    "host": current.web_host,
+                    "port": current.web_port,
+                    "config_path": str(config_path) if local_request(request) else None,
+                },
+            ),
+        )
+
+    @app.get("/suite/mam-spender/{view}", response_class=HTMLResponse)
+    async def mam_spender_page(request: Request, view: str) -> HTMLResponse:
+        return await render_mam_spender(request, view)
+
     @app.get("/suite/{module}", response_class=HTMLResponse)
     async def suite_module_page(
         request: Request, module: str, view: str = "dashboard"
@@ -509,29 +558,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if module not in {"absidekick", "mam-spender"}:
             raise HTTPException(404, f"unknown suite module: {module}")
         if module == "mam-spender":
-            selected_view = (
-                view
-                if view in {"dashboard", "settings", "history", "analytics", "mam-data"}
-                else "dashboard"
-            )
-            services = getattr(app.state, "services", None)
-            spender = getattr(services, "mam_spender", None)
-            spender_state = (
-                spender.public_state()
-                if spender is not None
-                else default_public_state(repository)
-            )
-            return templates.TemplateResponse(
-                request,
-                "mam_spender.html",
-                await context(
-                    request,
-                    title="MAM-Spender",
-                    suite_module=module,
-                    spender=spender_state,
-                    spender_view=selected_view,
-                ),
-            )
+            return await render_mam_spender(request, view)
         return templates.TemplateResponse(
             request,
             "suite_placeholder.html",

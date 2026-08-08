@@ -20,10 +20,14 @@ class Settings:
     alternate_fl_upload: bool = False
     alternate_next_purchase: str = "freeleech_wedge"
     fl_only: bool = False
+    theme: str = "ember"
     points_buffer: int = 10_000
     next_run_delay_minutes: int = 15
 
     def normalize(self) -> None:
+        self.theme = str(self.theme).strip().casefold()
+        if self.theme not in {"green", "ember", "modern", "mouse"}:
+            self.theme = "ember"
         self.points_buffer = max(0, min(MAX_POINTS_BUFFER, int(self.points_buffer)))
         self.next_run_delay_minutes = max(
             MIN_INTERVAL_MINUTES, int(self.next_run_delay_minutes)

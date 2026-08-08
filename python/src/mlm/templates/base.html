@@ -67,14 +67,14 @@
     <nav class="module-nav">
       <div class="nav-group">
         <p class="nav-label">Spend control</p>
-        <a class="nav-link{% if spender_view == 'dashboard' %} active{% endif %}" href="/suite/mam-spender?view=dashboard"><span>Dashboard</span></a>
-        <a class="nav-link{% if spender_view == 'settings' %} active{% endif %}" href="/suite/mam-spender?view=settings"><span>Settings</span></a>
+        <a class="nav-link{% if spender_view == 'dashboard' %} active{% endif %}" href="/suite/mam-spender/dashboard"><span>Dashboard</span></a>
+        <a class="nav-link{% if spender_view == 'config' %} active{% endif %}" href="/suite/mam-spender/config"><span>Config</span></a>
       </div>
       <div class="nav-group">
         <p class="nav-label">Intelligence</p>
-        <a class="nav-link{% if spender_view == 'history' %} active{% endif %}" href="/suite/mam-spender?view=history"><span>History</span></a>
-        <a class="nav-link{% if spender_view == 'analytics' %} active{% endif %}" href="/suite/mam-spender?view=analytics"><span>Analytics</span></a>
-        <a class="nav-link{% if spender_view == 'mam-data' %} active{% endif %}" href="/suite/mam-spender?view=mam-data"><span>MaM Data</span></a>
+        <a class="nav-link{% if spender_view == 'analytics' %} active{% endif %}" href="/suite/mam-spender/analytics"><span>Graph</span></a>
+        <a class="nav-link{% if spender_view == 'history' %} active{% endif %}" href="/suite/mam-spender/history"><span>History</span></a>
+        <a class="nav-link{% if spender_view == 'mam-data' %} active{% endif %}" href="/suite/mam-spender/mam-data"><span>All MaM Data</span></a>
       </div>
       <div class="nav-group">
         <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
@@ -99,7 +99,7 @@
         <a class="suite-module absidekick{% if suite_module == 'absidekick' %} active{% endif %}" href="/suite/absidekick" title="ABSidekick">
           <span>A_</span><small>ABS</small>
         </a>
-        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}" href="/suite/mam-spender" title="MAM-Spender">
+        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}" href="/suite/mam-spender/dashboard" title="MAM-Spender">
           <span>M$</span><small>Spend</small>
         </a>
       </div>

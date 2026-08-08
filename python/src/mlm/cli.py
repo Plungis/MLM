@@ -5,6 +5,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+from . import __version__
 from .config import ConfigError, load_config
 from .downloader import grab_selected_torrents
 from .mam import authenticated_mam_client
@@ -15,6 +16,9 @@ from .repository import Repository
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mlm-python")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     migration = subparsers.add_parser(
         "migrate", help="back up and migrate a legacy native_db database to SQLite"
@@ -74,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
             from .web import create_app
 
             config = load_config(args.config)
+            print(
+                f"Starting MyAnonaSuite {__version__} "
+                f"from {Path(__file__).resolve().parent}"
+            )
             uvicorn.run(
                 create_app(args.config, args.database),
                 host=config.web_host,

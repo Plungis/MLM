@@ -97,9 +97,98 @@ body[data-suite="mam-spender"] {
   --shadow: rgba(242, 173, 50, 0.16);
 }
 
-/* MAM-Spender keeps the suite's terminal language with a sharper lime/teal ledger. */
+body[data-suite="mam-spender"][data-spender-theme="green"] {
+  --bg: #020604;
+  --bg-raised: #051009;
+  --panel: rgba(5, 18, 10, 0.92);
+  --panel-strong: rgba(8, 29, 15, 0.96);
+  --surface: #020a05;
+  --surface-hover: #08170d;
+  --text: #b7f7bf;
+  --text-strong: #e4ffe7;
+  --muted: #73ad7b;
+  --dim: #376a40;
+  --line: #2bdc58;
+  --accent-rgb: 43, 220, 88;
+  --line-soft: rgba(43, 220, 88, 0.22);
+  --accent: #7cff91;
+  --accent-strong: #c8ffd1;
+  --shadow: rgba(43, 220, 88, 0.15);
+}
+
+body[data-suite="mam-spender"][data-spender-theme="modern"] {
+  --bg: #02070b;
+  --bg-raised: #06131a;
+  --panel: rgba(5, 20, 29, 0.92);
+  --panel-strong: rgba(8, 31, 44, 0.96);
+  --surface: #020b10;
+  --surface-hover: #071a24;
+  --text: #b8eaff;
+  --text-strong: #e4f8ff;
+  --muted: #76abc0;
+  --dim: #3b7186;
+  --line: #38c9ff;
+  --accent-rgb: 56, 201, 255;
+  --line-soft: rgba(56, 201, 255, 0.22);
+  --accent: #7edcff;
+  --accent-strong: #d1f4ff;
+  --shadow: rgba(56, 201, 255, 0.15);
+}
+
+body[data-suite="mam-spender"][data-spender-theme="mouse"] {
+  --bg: #09030b;
+  --bg-raised: #17081c;
+  --panel: rgba(28, 8, 34, 0.92);
+  --panel-strong: rgba(45, 12, 55, 0.96);
+  --surface: #100313;
+  --surface-hover: #26092c;
+  --text: #efc8f4;
+  --text-strong: #ffe8ff;
+  --muted: #bd84c5;
+  --dim: #77437f;
+  --line: #df63ea;
+  --accent-rgb: 223, 99, 234;
+  --line-soft: rgba(223, 99, 234, 0.23);
+  --accent: #ef8ef6;
+  --accent-strong: #ffd1ff;
+  --shadow: rgba(223, 99, 234, 0.16);
+}
+
+/* MAM-Spender keeps its own controls while sharing the suite shell. */
 .spender-hero {
   align-items: flex-end;
+}
+
+.spender-view-tabs {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: -4px 0 14px;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.spender-view-tabs a {
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font: 700 11px/1.2 var(--mono);
+  letter-spacing: 0.07em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.spender-view-tabs a:hover {
+  border-color: var(--line-soft);
+  color: var(--text-strong);
+}
+
+.spender-view-tabs a.active {
+  border-color: var(--line);
+  background: rgba(var(--accent-rgb), 0.13);
+  color: var(--accent-strong);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .spender-run-controls,
@@ -281,6 +370,18 @@ body[data-suite="mam-spender"] {
   align-items: start;
 }
 
+.spender-config-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 18px;
+}
+
+.spender-config-heading h2 {
+  margin: 0;
+}
+
 .spender-settings h2,
 .spender-settings-side h2 {
   margin-top: 0;
@@ -325,9 +426,38 @@ body[data-suite="mam-spender"] {
   gap: 7px;
 }
 
+.spender-settings select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed var(--dim);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-strong);
+  padding: 9px 12px;
+}
+
 .spender-settings-side {
   display: grid;
   gap: 18px;
+}
+
+.spender-file-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  color: var(--text-strong);
+}
+
+.spender-file-field input[type="file"] {
+  width: 100%;
+  border: 1px dashed var(--dim);
+  background: var(--surface);
+  color: var(--muted);
+  padding: 10px;
+}
+
+.spender-file-field small {
+  color: var(--muted);
 }
 
 .spender-settings textarea,
@@ -353,6 +483,35 @@ body[data-suite="mam-spender"] {
   max-width: 850px;
   padding: 10px 0;
   color: var(--muted);
+}
+
+.spender-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.spender-runtime-grid > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.spender-runtime-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.spender-runtime-grid strong {
+  overflow-wrap: anywhere;
+  color: var(--accent-strong);
 }
 
 .spender-table td:first-child {
@@ -426,6 +585,10 @@ body[data-suite="mam-spender"] {
   .spender-guardrail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .spender-runtime-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -448,8 +611,14 @@ body[data-suite="mam-spender"] {
   .spender-metrics,
   .spender-account-grid,
   .spender-guardrail-grid,
-  .spender-facts {
+  .spender-facts,
+  .spender-runtime-grid {
     grid-template-columns: 1fr;
+  }
+
+  .spender-view-tabs a {
+    flex: 1 1 calc(50% - 7px);
+    text-align: center;
   }
 }
 

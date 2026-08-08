@@ -27,11 +27,14 @@ The MAM-Spender Web Edition v1.4 feature set is incorporated into the suite:
   and Lotto reset/drawing countdowns;
 - Session_ID import from raw values, Cookie headers, Netscape/curl files, and
   browser JSON exports; and
+- its original Green, Ember, Modern, and Mouse module themes; and
 - one-step import of the standalone Web Edition `data/config.json`, including
   settings, totals, history, cached account data, and its plain stored
   Session_ID.
 
-Open **M$ / Spend** in the bottom suite switcher. MAM-Spender uses the same
+Open **M$ / Spend** in the bottom suite switcher. Dedicated Dashboard, Graph,
+History, All MaM Data, and Config pages are available under
+`/suite/mam-spender/`. MAM-Spender uses the same
 approved API session and server process as HeavyMLM, so it does not open a
 second port or duplicate secrets. Purchases are irreversible; a purchase is
 recorded only when MaM explicitly reports success or the follow-up point balance

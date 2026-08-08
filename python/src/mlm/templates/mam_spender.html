@@ -16,6 +16,14 @@
   </div>
 </header>
 
+<nav class="spender-view-tabs" aria-label="MAM-Spender pages">
+  <a class="{% if spender_view == 'dashboard' %}active{% endif %}" href="/suite/mam-spender/dashboard">Dashboard</a>
+  <a class="{% if spender_view == 'analytics' %}active{% endif %}" href="/suite/mam-spender/analytics">Graph</a>
+  <a class="{% if spender_view == 'history' %}active{% endif %}" href="/suite/mam-spender/history">History</a>
+  <a class="{% if spender_view == 'mam-data' %}active{% endif %}" href="/suite/mam-spender/mam-data">All MaM Data</a>
+  <a class="{% if spender_view == 'config' %}active{% endif %}" href="/suite/mam-spender/config">Config</a>
+</nav>
+
 <div class="spender-marquee" aria-label="MaM clocks and reset timers">
   <div data-spender-marquee>Loading MaM clocks...</div>
 </div>
@@ -65,7 +73,11 @@
   </div>
   <p class="muted">Purchases are irreversible. MAM-Spender records a purchase only after the bonus balance confirms the expected decrease.</p>
 </section>
-{% elif spender_view == "settings" %}
+{% elif spender_view == "config" %}
+<header class="section-heading spender-config-heading">
+  <div><p class="eyebrow">Independent module settings</p><h2>MAM-Spender configuration</h2></div>
+  <span class="status ok">Saved locally</span>
+</header>
 <section class="grid two spender-settings-grid">
   <form class="panel panel-body spender-settings" data-spender-settings>
     <p class="eyebrow">Purchase policy</p>
@@ -76,6 +88,12 @@
     <label class="toggle-setting"><input type="checkbox" name="alternate_fl_upload" {% if spender.settings.alternate_fl_upload %}checked{% endif %}><span><strong>Alternate wedge and upload</strong><small>Switch the target after each confirmed purchase.</small></span></label>
 
     <div class="form-grid two">
+      <label><span>Module theme</span><select name="theme">
+        <option value="green" {% if spender.settings.theme == "green" %}selected{% endif %}>Green terminal</option>
+        <option value="ember" {% if spender.settings.theme == "ember" %}selected{% endif %}>Ember ledger</option>
+        <option value="modern" {% if spender.settings.theme == "modern" %}selected{% endif %}>Modern blue</option>
+        <option value="mouse" {% if spender.settings.theme == "mouse" %}selected{% endif %}>Mouse purple</option>
+      </select><small>Changes only the MAM-Spender module.</small></label>
       <label><span>Points reserve</span><input type="number" name="points_buffer" min="0" max="25000" step="100" value="{{ spender.settings.points_buffer }}"><small>Always left untouched, up to 25,000.</small></label>
       <label><span>Scan interval (minutes)</span><input type="number" name="next_run_delay_minutes" min="2" step="1" value="{{ spender.settings.next_run_delay_minutes }}"><small>Minimum two minutes.</small></label>
     </div>
@@ -91,6 +109,7 @@
       <p class="eyebrow">Shared authentication</p>
       <h2>MaM Session_ID</h2>
       <p class="muted">MAM-Spender and HeavyMLM now use one API session. Paste a raw Session_ID, Cookie header, Netscape/curl cookie file contents, or browser JSON export.</p>
+      <label class="spender-file-field"><span>Choose a cookie or browser-export file</span><input type="file" data-spender-session-file accept=".cookies,.txt,.json,text/plain,application/json"><small>The browser reads it locally and places its contents below; the file path is not retained.</small></label>
       <textarea rows="5" data-spender-session autocomplete="off" placeholder="mam_id=... or exported cookie data"></textarea>
       <div class="spender-setting-actions"><button class="button" type="button" data-spender-save-session>Validate format and save</button><a class="button" href="https://www.myanonamouse.net/preferences/index.php?view=security" target="_blank" rel="noreferrer">Open MaM Security</a></div>
       <p class="muted">The value is never returned to the browser after saving.</p>
@@ -107,8 +126,15 @@
 </section>
 
 <section class="panel panel-body">
-  <p class="eyebrow">Runtime</p><h2>Server settings are suite-wide now</h2>
-  <p class="muted">MAM-Spender uses MyAnonaSuite's current host, port, reverse-proxy setup, and local-only mutation policy. There is no second port or separate process to maintain.</p>
+  <div class="panel-heading-row"><div><p class="eyebrow">Runtime identity</p><h2>This is the integrated Web Edition module</h2></div><a class="button" href="/config">Open suite network config</a></div>
+  <div class="spender-runtime-grid">
+    <div><span>Suite build</span><strong>{{ spender_runtime.suite_version }}</strong></div>
+    <div><span>Ported feature baseline</span><strong>{{ spender_runtime.source_version }}</strong></div>
+    <div><span>Active listener</span><strong>{{ spender_runtime.host }}:{{ spender_runtime.port }}</strong></div>
+    <div><span>Module database</span><strong>SQLite schema v4</strong></div>
+  </div>
+  {% if spender_runtime.config_path %}<p class="muted">Suite config: <code>{{ spender_runtime.config_path }}</code></p>{% endif %}
+  <p class="muted">The module owns its purchase policy, theme, scheduler, Session_ID import, history, graphs, and cached MaM data. Host and port remain suite-wide so you only run one server and maintain one reverse proxy.</p>
   <details class="spender-instructions"><summary>Session instructions and purchase warnings</summary>
     <div><p>Create the API session on the same internet connection as MyAnonaSuite. In MaM, open Preferences → Security, create an API session with the appropriate IP/ASN lock, then paste it above. Recreate it whenever the locked network identity changes.</p>
     <ul><li>Minimum upload purchase: 50 GiB.</li><li>Upload credit: 25,000 points per 50 GiB.</li><li>Upload run cap: 150 GiB.</li><li>Freeleech Wedges: 50,000 points each.</li><li>Purchases cannot be reversed.</li></ul>

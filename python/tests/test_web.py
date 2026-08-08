@@ -133,11 +133,22 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'data-suite="mam-spender"' in spender.text
     assert "Spend deliberately" in spender.text
     assert "SPEND_AUDIT.log" in spender.text
-    spender_settings = client.get("/suite/mam-spender?view=settings")
-    assert spender_settings.status_code == 200
-    assert "Import old config.json" in spender_settings.text
-    spender_history = client.get("/suite/mam-spender?view=history")
+    for page in ("dashboard", "config", "history", "analytics", "mam-data"):
+        assert client.get(f"/suite/mam-spender/{page}").status_code == 200
+    spender_config = client.get("/suite/mam-spender/config")
+    assert "MAM-Spender configuration" in spender_config.text
+    assert "Import old config.json" in spender_config.text
+    assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
+    assert "0.5.0b25" in spender_config.text
+    assert 'href="/suite/mam-spender/config"' in spender_config.text
+    # Keep bookmarks from the first integrated beta working.
+    assert (
+        "MAM-Spender configuration"
+        in client.get("/suite/mam-spender?view=settings").text
+    )
+    spender_history = client.get("/suite/mam-spender/history")
     assert "MaM bonus history" in spender_history.text
+    assert client.get("/suite/mam-spender/not-real").status_code == 404
     assert client.get("/suite/not-real").status_code == 404
 
     app.state.services = FakeServices(load_config(config))
