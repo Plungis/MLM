@@ -63,13 +63,29 @@
   </article>
 </section>
 
+<section class="grid two spender-dashboard-settings">
+  {% include "modules/mam_spender/_purchase_settings.html" %}
+  <article class="panel panel-body spender-dashboard-config-help">
+    <p class="eyebrow">Live configuration</p>
+    <h2>Changes apply immediately</h2>
+    <p class="muted">These are the controls used most often in the original Web Edition. Save here without leaving the dashboard; authentication, migration, and runtime details remain on the dedicated Config page.</p>
+    <dl class="spender-facts">
+      <div><dt>Scheduler</dt><dd>{% if spender.scheduler_enabled %}Enabled{% else %}Paused{% endif %}</dd></div>
+      <div><dt>Next target</dt><dd>{{ spender.settings.alternate_next_purchase | replace('_', ' ') }}</dd></div>
+      <div><dt>Reserve</dt><dd data-spender-field="dashboard_reserve">{{ spender.settings.points_buffer }} points</dd></div>
+      <div><dt>Interval</dt><dd data-spender-field="dashboard_interval">{{ spender.settings.next_run_delay_minutes }} minutes</dd></div>
+    </dl>
+    <div class="spender-setting-actions"><a class="button" href="/suite/mam-spender/config">Authentication &amp; advanced config</a><a class="button" href="/suite/mam-spender/history">Review spending history</a></div>
+  </article>
+</section>
+
 <section class="panel panel-body spender-safety-panel">
   <p class="eyebrow">Purchase guardrails</p>
   <div class="spender-guardrail-grid">
     <div><strong>50 GiB</strong><span>per 25,000 points</span></div>
     <div><strong>150 GiB</strong><span>maximum per run</span></div>
     <div><strong>50,000</strong><span>per freeleech wedge</span></div>
-    <div><strong>{{ spender.settings.points_buffer }}</strong><span>points kept in reserve</span></div>
+    <div><strong data-spender-field="points_buffer">{{ spender.settings.points_buffer }}</strong><span>points kept in reserve</span></div>
   </div>
   <p class="muted">Purchases are irreversible. MAM-Spender records a purchase only after the bonus balance confirms the expected decrease.</p>
 </section>
@@ -79,30 +95,7 @@
   <span class="status ok">Saved locally</span>
 </header>
 <section class="grid two spender-settings-grid">
-  <form class="panel panel-body spender-settings" data-spender-settings>
-    <p class="eyebrow">Purchase policy</p>
-    <h2>What should the spender buy?</h2>
-    <label class="toggle-setting"><input type="checkbox" name="buy_vip" {% if spender.settings.buy_vip %}checked{% endif %}><span><strong>Renew maximum VIP</strong><small>Purchase when VIP has 83 days or less remaining.</small></span></label>
-    <label class="toggle-setting"><input type="checkbox" name="buy_upload_credit" {% if spender.settings.buy_upload_credit %}checked{% endif %}><span><strong>Buy upload credit</strong><small>50 GiB per 25,000 points, capped at 150 GiB per run.</small></span></label>
-    <label class="toggle-setting"><input type="checkbox" name="fl_only" {% if spender.settings.fl_only %}checked{% endif %}><span><strong>Freeleech Wedges only</strong><small>Never purchase upload credit during normal scheduled runs.</small></span></label>
-    <label class="toggle-setting"><input type="checkbox" name="alternate_fl_upload" {% if spender.settings.alternate_fl_upload %}checked{% endif %}><span><strong>Alternate wedge and upload</strong><small>Switch the target after each confirmed purchase.</small></span></label>
-
-    <div class="form-grid two">
-      <label><span>Module theme</span><select name="theme">
-        <option value="green" {% if spender.settings.theme == "green" %}selected{% endif %}>Green terminal</option>
-        <option value="ember" {% if spender.settings.theme == "ember" %}selected{% endif %}>Ember ledger</option>
-        <option value="modern" {% if spender.settings.theme == "modern" %}selected{% endif %}>Modern blue</option>
-        <option value="mouse" {% if spender.settings.theme == "mouse" %}selected{% endif %}>Mouse purple</option>
-      </select><small>Changes only the MAM-Spender module.</small></label>
-      <label><span>Points reserve</span><input type="number" name="points_buffer" min="0" max="25000" step="100" value="{{ spender.settings.points_buffer }}"><small>Always left untouched, up to 25,000.</small></label>
-      <label><span>Scan interval (minutes)</span><input type="number" name="next_run_delay_minutes" min="2" step="1" value="{{ spender.settings.next_run_delay_minutes }}"><small>Minimum two minutes.</small></label>
-    </div>
-    <div class="spender-setting-actions">
-      <button class="button primary" type="submit">Save and apply</button>
-      <button class="button" type="button" data-spender-action="run-fl">Run one wedge-only scan</button>
-    </div>
-    <p class="muted" data-spender-alternate>Next alternating target: {{ spender.settings.alternate_next_purchase | replace('_', ' ') }}.</p>
-  </form>
+  {% include "modules/mam_spender/_purchase_settings.html" %}
 
   <div class="spender-settings-side">
     <article class="panel panel-body">
@@ -134,7 +127,7 @@
     <div><span>Module database</span><strong>SQLite schema v4</strong></div>
   </div>
   {% if spender_runtime.config_path %}<p class="muted">Suite config: <code>{{ spender_runtime.config_path }}</code></p>{% endif %}
-  <p class="muted">The module owns its purchase policy, theme, scheduler, Session_ID import, history, graphs, and cached MaM data. Host and port remain suite-wide so you only run one server and maintain one reverse proxy.</p>
+  <p class="muted">The module owns its purchase policy, scheduler, Session_ID import, history, graphs, and cached MaM data. Host and port remain suite-wide so you only run one server and maintain one reverse proxy.</p>
   <details class="spender-instructions"><summary>Session instructions and purchase warnings</summary>
     <div><p>Create the API session on the same internet connection as MyAnonaSuite. In MaM, open Preferences → Security, create an API session with the appropriate IP/ASN lock, then paste it above. Recreate it whenever the locked network identity changes.</p>
     <ul><li>Minimum upload purchase: 50 GiB.</li><li>Upload credit: 25,000 points per 50 GiB.</li><li>Upload run cap: 150 GiB.</li><li>Freeleech Wedges: 50,000 points each.</li><li>Purchases cannot be reversed.</li></ul>

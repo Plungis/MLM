@@ -87,6 +87,9 @@
     setText("[data-spender-field='cumulative_points_spent']", formatNumber(state.totals?.cumulative_points_spent, "0"));
     setText("[data-spender-field='cumulative_vip_purchases']", formatNumber(state.totals?.cumulative_vip_purchases, "0"));
     setText("[data-spender-field='cumulative_freeleech_points_spent']", formatNumber(state.totals?.cumulative_freeleech_points_spent, "0"));
+    setText("[data-spender-field='points_buffer']", formatNumber(state.settings?.points_buffer, "0"));
+    setText("[data-spender-field='dashboard_reserve']", `${formatNumber(state.settings?.points_buffer, "0")} points`);
+    setText("[data-spender-field='dashboard_interval']", `${formatNumber(state.settings?.next_run_delay_minutes, "0")} minutes`);
     setText("[data-spender-field='next_run']", state.scheduler_enabled ? formatCountdown(state.next_run_seconds) : "Paused");
     ["username", "vip_expires", "uploaded", "downloaded", "ratio"].forEach((key) => {
       setText(`[data-spender-field='${key}']`, state.user?.[key] || "N/A");
@@ -376,7 +379,6 @@
   }
 
   function render() {
-    document.body.dataset.spenderTheme = state.settings?.theme || "ember";
     renderStatus();
     renderLog();
     renderHistory();
@@ -448,7 +450,6 @@
         buy_upload_credit: data.has("buy_upload_credit"),
         fl_only: data.has("fl_only"),
         alternate_fl_upload: data.has("alternate_fl_upload"),
-        theme: data.get("theme"),
         points_buffer: Number(data.get("points_buffer")),
         next_run_delay_minutes: Number(data.get("next_run_delay_minutes")),
       };
@@ -461,6 +462,16 @@
       }
     });
   }
+
+  all("[data-spender-setting-value]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!settings) return;
+      const input = settings.elements.namedItem(button.dataset.spenderSettingTarget);
+      if (!(input instanceof HTMLInputElement)) return;
+      input.value = button.dataset.spenderSettingValue;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  });
 
   one("[data-spender-reset]")?.addEventListener("click", async () => {
     if (!window.confirm("Reset cumulative MAM-Spender totals? Purchase history remains intact.")) return;

@@ -27,7 +27,6 @@ The MAM-Spender Web Edition v1.4 feature set is incorporated into the suite:
   and Lotto reset/drawing countdowns;
 - Session_ID import from raw values, Cookie headers, Netscape/curl files, and
   browser JSON exports; and
-- its original Green, Ember, Modern, and Mouse module themes; and
 - one-step import of the standalone Web Edition `data/config.json`, including
   settings, totals, history, cached account data, and its plain stored
   Session_ID.
@@ -39,6 +38,12 @@ approved API session and server process as HeavyMLM, so it does not open a
 second port or duplicate secrets. Purchases are irreversible; a purchase is
 recorded only when MaM explicitly reports success or the follow-up point balance
 confirms the expected store charge.
+
+Frequently adjusted MAM-Spender purchase controls appear on both its Dashboard
+and Config pages and share one module-owned template, so behavior does not drift
+between screens. Backend policy, storage, and service code live together under
+`python/src/mlm/modules/mam_spender`, which includes a contributor file map and
+extension guide.
 
 HeavyMLM is both an auto downloader and a library organizer. Both parts are optional so either can be replaced with e.g. RSS or [booktree](https://github.com/myxdvz/booktree) if you prefer. And even if you use both, you can still add torrents manually and have them organized, and/or use booktree for collections or files that are not from MaM.
 
