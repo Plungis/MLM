@@ -300,8 +300,7 @@ def test_organizer_continues_after_one_torrent_fails(tmp_path: Path) -> None:
     assert repository.torrent("abc123") is not None
     assert any(message.startswith("Failed Missing Book") for message, _, _ in progress)
     assert any(
-        message.startswith("Progress 1/2")
-        and "1 errors" in message
+        message.startswith("Progress 1/2") and "1 errors" in message
         for message, _, _ in progress
     )
     failures = repository.table_rows("errored_torrents")
