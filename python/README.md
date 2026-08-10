@@ -80,12 +80,28 @@ config.json**, and choose **Import Web Edition data**. This imports module
 settings, totals, run history, spending events, cached MaM data, bonus history,
 and any plain Session_ID. The original file is not changed.
 
+## ABSidekick module
+
+Choose **A_ / ABS** in the suite switcher to open the integrated ABSidekick
+organizer. Its own sidebar exposes Run Center, Review Desk, Targeting, Matching,
+Tags & Actions, and Config. Config stores the Audiobookshelf URL, library,
+provider, and optional remembered API token; all policy changes apply to the
+next preview or run without restarting MyAnonaSuite.
+
+ABSidekick retains the source project's dry-run preview, weighted scoring,
+metadata-patch, ABS quick-match and tags-only modes, author/tag/path targeting,
+pause/resume/cancel, retries, live searchable logs, cover comparisons, and
+manual approve/reject workflow. Its state is stored in an `absidekick` folder
+beside the configured SQLite database, separate from HeavyMLM and MAM-Spender.
+
 ## Publish the request portal on a custom domain
 
 The Configuration screen can enable a separate request portal without exposing
 the HeavyMLM dashboard on that hostname. Set the request domain, a portal title,
-an optional shared access code, and a per-client request limit there. Changes
-apply immediately.
+a shared requester username/password, and a per-client request limit there.
+Changes apply immediately. The password is never written to `config.toml` in
+plain text; MyAnonaSuite saves a salted PBKDF2-SHA256 hash. The old shared access
+code remains available under **Legacy shared access code** for upgraded installs.
 
 Point an HTTPS reverse proxy at the MyAnonaSuite service and preserve the
 original `Host` header. For example, a minimal Caddy site is:
@@ -99,8 +115,13 @@ requests.example.com {
 Then set `request_portal_domains = ["requests.example.com"]` and enable the
 portal. That hostname serves only the request form and static assets; dashboard,
 configuration, API documentation, and approval routes return 404. Do not expose
-port 3157 directly to the public internet. Keep a shared access code configured,
-or put an authentication layer such as Cloudflare Access in front of the domain.
+port 3157 directly to the public internet. Configure requester credentials, or
+put an authentication layer such as Cloudflare Access in front of the domain.
+
+Administrators can open the portal in a new tab from **Requests → Request
+Portal** in the sidebar or the **Open request portal** button in the request
+inbox. On the admin machine, that direct preview remains available even while
+the external hostname requires a login.
 
 Visitors can combine title, author, series, narrator, format, category,
 language, availability, seeder, and sort filters. They can also paste a public

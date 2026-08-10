@@ -10,7 +10,10 @@
 <body class="request-portal-body">
 <main class="request-portal-shell">
   <header class="request-portal-header">
-    <div class="request-portal-brand"><span class="request-brand-mark">R_</span><span>MyAnonaSuite</span></div>
+    <div class="request-portal-brand-row">
+      <div class="request-portal-brand"><span class="request-brand-mark">R_</span><span>MyAnonaSuite</span></div>
+      {% if login_required %}<form action="/request/logout" method="post" class="request-logout"><span>{{ portal_username or "Requester" }}</span><button class="button" type="submit">Sign out</button></form>{% endif %}
+    </div>
     <p class="eyebrow">Private library acquisition portal</p>
     <h1>{{ portal_title }}</h1>
     <p>Find the exact audiobook or ebook release you want, then send it for approval.</p>
@@ -99,7 +102,7 @@
         <form action="/request/submit" method="post">
           <input type="hidden" name="mam_id" value="{{ row.id }}">
           <input type="hidden" name="goodreads_url" value="{{ goodreads_url }}">
-          <label><span>Your name <small>optional</small></span><input type="text" name="requester_name" maxlength="120" autocomplete="name"></label>
+          <label><span>Your name <small>optional</small></span><input type="text" name="requester_name" maxlength="120" autocomplete="name" value="{{ requester_name }}"></label>
           <label><span>Contact <small>optional</small></span><input type="text" name="requester_contact" maxlength="200" placeholder="Email, Discord, etc."></label>
           <label class="request-note"><span>Request note <small>optional</small></span><textarea name="note" maxlength="1000" rows="3" placeholder="Edition preferences or anything the library owner should know."></textarea></label>
           <label class="request-honeypot" aria-hidden="true"><span>Website</span><input type="text" name="website" tabindex="-1" autocomplete="off"></label>

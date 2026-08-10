@@ -8,6 +8,7 @@ from mlm.config import load_config
 from mlm.database import connect, ensure_database
 from mlm.migration import canonical_json
 from mlm.repository import Repository
+from mlm.request_auth import verify_request_password
 from mlm.scheduler import JobStatus
 from mlm.web import create_app
 
@@ -103,6 +104,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert dashboard.status_code == 200
     assert "MyAnonaSuite" in dashboard.text
     assert "HeavyMLM" in dashboard.text
+    assert "Request Portal" in dashboard.text
+    assert 'href="/request"' in dashboard.text
     assert "Library Control" not in dashboard.text
     assert "Run pipeline" in dashboard.text
     assert 'class="nav-link active"' in dashboard.text
@@ -119,6 +122,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Download if wedge fails" in config_page.text
     assert "Enable request portal" in config_page.text
     assert 'name="request_portal_domains"' in config_page.text
+    assert 'name="request_portal_username"' in config_page.text
+    assert 'name="request_portal_password"' in config_page.text
     assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
@@ -127,7 +132,50 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     absidekick = client.get("/suite/absidekick")
     assert absidekick.status_code == 200
     assert 'data-suite="absidekick"' in absidekick.text
-    assert "Shell ready. Integration has not started yet." in absidekick.text
+    assert "ABSidekick" in absidekick.text
+    assert "Beta V.91.1 integrated" in absidekick.text
+    assert "Run Controls" in absidekick.text
+    assert "Live Log" in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b27"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b27"' in absidekick.text
+    for page in (
+        "run",
+        "review",
+        "targeting",
+        "matching",
+        "tags",
+        "config",
+    ):
+        assert client.get(f"/suite/absidekick/{page}").status_code == 200
+    absidekick_config = client.get("/suite/absidekick/config")
+    assert "Connection" in absidekick_config.text
+    assert 'id="baseUrl"' in absidekick_config.text
+    assert 'id="token"' in absidekick_config.text
+    assert client.get("/suite/absidekick/not-real").status_code == 404
+    absidekick_state = client.get("/api/absidekick/state")
+    assert absidekick_state.status_code == 200
+    assert absidekick_state.json()["version"] == "Beta V.91.1"
+    saved_absidekick = client.post(
+        "/api/absidekick/settings",
+        json={
+            "settings": {
+                "connection": {
+                    "baseUrl": "http://localhost:13378",
+                    "libraryId": "library-1",
+                    "provider": "audible",
+                    "rememberConnection": True,
+                },
+                "matching": {"threshold": 88},
+            },
+            "token": "abs-secret-token",
+        },
+    )
+    assert saved_absidekick.status_code == 200
+    assert saved_absidekick.json()["settings"]["connection"]["hasToken"] is True
+    assert "token" not in saved_absidekick.json()["settings"]["connection"]
+    absidekick_settings = tmp_path / "absidekick" / "settings.json"
+    assert absidekick_settings.exists()
+    assert "abs-secret-token" in absidekick_settings.read_text(encoding="utf-8")
     spender = client.get("/suite/mam-spender")
     assert spender.status_code == 200
     assert 'data-suite="mam-spender"' in spender.text
@@ -143,7 +191,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b26" in spender_config.text
+    assert "0.5.0b27" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -190,6 +238,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "request_portal_domains": "requests.example.test",
             "request_portal_title": "Family Requests",
             "request_portal_rate_limit": "15",
+            "request_portal_username": "family",
+            "request_portal_password": "correct horse",
             "request_portal_access_code": "family-only",
             "search_interval": "20",
             "import_interval": "60",
@@ -207,6 +257,11 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.request_portal_enabled is True
     assert updated.request_portal_domains == ("requests.example.test",)
     assert updated.request_portal_title == "Family Requests"
+    assert updated.request_portal_username == "family"
+    assert verify_request_password(
+        "correct horse", updated.request_portal_password_hash
+    )
+    assert "correct horse" not in config.read_text(encoding="utf-8")
     assert updated.request_portal_access_code == "family-only"
     assert updated.request_portal_rate_limit == 15
 

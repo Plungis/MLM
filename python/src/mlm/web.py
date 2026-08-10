@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,6 +31,8 @@ from .config import (
 from .database import ensure_database
 from .error_guidance import error_guidance
 from .mam import authenticated_mam_client
+from .modules.absidekick import SOURCE_VERSION, ABSidekickService
+from .modules.absidekick.core import ABSAPIError
 from .modules.heavymlm.search import (
     filter_search_results,
     present_search_result,
@@ -38,6 +40,7 @@ from .modules.heavymlm.search import (
 )
 from .modules.mam_spender import default_public_state
 from .repository import Repository
+from .request_auth import hash_request_password, verify_request_password
 from .request_portal import (
     GoodreadsLookupError,
     goodreads_book_id,
@@ -59,8 +62,8 @@ SUITE_MODULES = {
     "absidekick": {
         "name": "ABSidekick",
         "icon": "A_",
-        "status": "Planned",
-        "summary": "Audiobookshelf metadata matching and library repair.",
+        "status": "Active",
+        "summary": "Audiobookshelf metadata matching, review, and library repair.",
     },
     "mam-spender": {
         "name": "MAM-Spender",
@@ -84,6 +87,8 @@ def _redacted_config(config: Config) -> dict:
             row["token"] = "***"
     if value.get("request_portal_access_code"):
         value["request_portal_access_code"] = "***"
+    if value.get("request_portal_password_hash"):
+        value["request_portal_password_hash"] = "***"
     return value
 
 
@@ -91,6 +96,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     ensure_database(database_path)
     config = load_config(config_path)
     repository = Repository(database_path)
+    absidekick = ABSidekickService(database_path.parent / "absidekick")
     snapshot_cache: dict[str, object] = {"expires": 0.0, "value": None}
     snapshot_lock = asyncio.Lock()
     request_rate_events: dict[str, deque[float]] = defaultdict(deque)
@@ -146,11 +152,29 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return "/" if request_portal_host(request) else "/request"
 
     def request_access_token(config: Config) -> str:
+        if config.request_portal_password_hash:
+            credential = "\0".join(
+                (
+                    "credentials",
+                    config.request_portal_username,
+                    config.request_portal_password_hash,
+                )
+            )
+        else:
+            # Preserve tokens issued by the legacy shared-code login.
+            credential = config.request_portal_access_code
         return hmac.new(
             config.mam_id.encode("utf-8"),
-            config.request_portal_access_code.encode("utf-8"),
+            credential.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
+
+    def request_login_mode(config: Config) -> str:
+        if config.request_portal_password_hash:
+            return "credentials"
+        if config.request_portal_access_code:
+            return "access_code"
+        return "public"
 
     def request_portal_authorized(request: Request) -> bool:
         # Keep localhost preview convenient, but never let a same-machine reverse
@@ -158,7 +182,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if local_request(request) and not request_portal_host(request):
             return True
         current = active_config()
-        if not current.request_portal_access_code:
+        if request_login_mode(current) == "public":
             return True
         supplied = request.cookies.get("mysuite_request_access", "")
         return hmac.compare_digest(supplied, request_access_token(current))
@@ -197,6 +221,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "/",
             "/request",
             "/request/unlock",
+            "/request/logout",
             "/request/submit",
         } or path.startswith("/static/")
         if not allowed:
@@ -551,6 +576,44 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def mam_spender_page(request: Request, view: str) -> HTMLResponse:
         return await render_mam_spender(request, view)
 
+    absidekick_views = {
+        "connection",
+        "targeting",
+        "matching",
+        "tags",
+        "run",
+        "review",
+    }
+    absidekick_aliases = {"config": "connection", "dashboard": "run"}
+
+    async def render_absidekick(request: Request, view: str) -> HTMLResponse:
+        normalized = absidekick_aliases.get(view.casefold(), view.casefold())
+        if normalized not in absidekick_views:
+            raise HTTPException(404, f"unknown ABSidekick page: {view}")
+        labels = {
+            "connection": "Config",
+            "targeting": "Targeting",
+            "matching": "Matching",
+            "tags": "Tags & Actions",
+            "run": "Run Center",
+            "review": "Review Desk",
+        }
+        return templates.TemplateResponse(
+            request,
+            "absidekick.html",
+            await context(
+                request,
+                title=f"ABSidekick {labels[normalized]}",
+                suite_module="absidekick",
+                absidekick_view=normalized,
+                absidekick_source_version=SOURCE_VERSION,
+            ),
+        )
+
+    @app.get("/suite/absidekick/{view}", response_class=HTMLResponse)
+    async def absidekick_page(request: Request, view: str) -> HTMLResponse:
+        return await render_absidekick(request, view)
+
     @app.get("/suite/{module}", response_class=HTMLResponse)
     async def suite_module_page(
         request: Request, module: str, view: str = "dashboard"
@@ -559,14 +622,131 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             raise HTTPException(404, f"unknown suite module: {module}")
         if module == "mam-spender":
             return await render_mam_spender(request, view)
-        return templates.TemplateResponse(
-            request,
-            "suite_placeholder.html",
-            await context(
-                request,
-                title=SUITE_MODULES[module]["name"],
-                suite_module=module,
-            ),
+        return await render_absidekick(request, view)
+
+    async def absidekick_payload(request: Request) -> dict[str, object]:
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as error:
+            raise ValueError("request body must be valid JSON") from error
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return payload
+
+    async def absidekick_call(request: Request, function, *args):
+        if not local_request(request):
+            return JSONResponse(
+                {"ok": False, "error": "ABSidekick controls are local-only"},
+                status_code=403,
+            )
+        try:
+            return await asyncio.to_thread(function, *args)
+        except ABSAPIError as error:
+            return JSONResponse(
+                {"ok": False, "error": str(error), "body": error.body},
+                status_code=error.status or 502,
+            )
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        except RuntimeError as error:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": str(error),
+                    "job": absidekick.job_snapshot(),
+                },
+                status_code=409,
+            )
+        except LookupError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=404)
+        except Exception as error:  # noqa: BLE001 - return JSON to module UI
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=500)
+
+    @app.get("/api/absidekick/state")
+    async def absidekick_state(request: Request):
+        return await absidekick_call(request, absidekick.public_state)
+
+    @app.get("/api/absidekick/libraries")
+    async def absidekick_libraries(request: Request):
+        return await absidekick_call(request, absidekick.libraries)
+
+    @app.get("/api/absidekick/filter-data")
+    async def absidekick_filter_data(request: Request, libraryId: str = ""):
+        return await absidekick_call(request, absidekick.filter_data, libraryId)
+
+    @app.get("/api/absidekick/job")
+    async def absidekick_job(request: Request):
+        return await absidekick_call(
+            request, lambda: {"ok": True, "job": absidekick.job_snapshot()}
+        )
+
+    @app.get("/api/absidekick/item-cover/{item_id}")
+    async def absidekick_item_cover(request: Request, item_id: str):
+        result = await absidekick_call(request, absidekick.cover, item_id)
+        if isinstance(result, JSONResponse):
+            return result
+        content, content_type = result
+        return Response(
+            content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+
+    @app.post("/api/absidekick/connect")
+    async def absidekick_connect(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.connect, payload)
+
+    @app.post("/api/absidekick/settings")
+    async def absidekick_settings(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.save, payload)
+
+    @app.post("/api/absidekick/preview")
+    async def absidekick_preview(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.preview, payload)
+
+    @app.post("/api/absidekick/review/{action}")
+    async def absidekick_review(request: Request, action: str):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        if action == "scan":
+            function = absidekick.scan_review
+        elif action == "approve":
+            function = absidekick.approve_review
+        elif action == "reject":
+            function = absidekick.reject_review
+        else:
+            return JSONResponse(
+                {"ok": False, "error": "unknown review action"},
+                status_code=404,
+            )
+        return await absidekick_call(request, function, payload)
+
+    @app.post("/api/absidekick/job/{action}")
+    async def absidekick_job_action(request: Request, action: str):
+        if action == "start":
+            try:
+                payload = await absidekick_payload(request)
+            except ValueError as error:
+                return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+            return await absidekick_call(request, absidekick.start, payload)
+        if action in {"pause", "resume", "cancel"}:
+            return await absidekick_call(request, absidekick.job_action, action)
+        return JSONResponse(
+            {"ok": False, "error": "unknown job action"}, status_code=404
         )
 
     @app.get("/api/mam-spender/state")
@@ -666,6 +846,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         request_portal_domains: str = Form(""),
         request_portal_title: str = Form("Library Requests"),
         request_portal_rate_limit: str = Form("20"),
+        request_portal_username: str = Form(""),
+        request_portal_password: str = Form(""),
+        clear_request_portal_credentials: str | None = Form(None),
         request_portal_access_code: str = Form(""),
         clear_request_portal_access_code: str | None = Form(None),
         search_interval: str = Form(...),
@@ -701,6 +884,26 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "import_interval": int(import_interval),
                 "link_interval": int(link_interval),
             }
+            current = active_config()
+            if clear_request_portal_credentials is not None:
+                values["request_portal_username"] = None
+                values["request_portal_password_hash"] = None
+            else:
+                username = (
+                    request_portal_username.strip() or current.request_portal_username
+                )
+                password_hash = current.request_portal_password_hash
+                if request_portal_password:
+                    password_hash = await asyncio.to_thread(
+                        hash_request_password, request_portal_password
+                    )
+                if username or password_hash:
+                    if not username or not password_hash:
+                        raise ConfigError(
+                            "enter both a requester username and password"
+                        )
+                    values["request_portal_username"] = username
+                    values["request_portal_password_hash"] = password_hash
             if request_portal_access_code:
                 values["request_portal_access_code"] = request_portal_access_code
             elif clear_request_portal_access_code is not None:
@@ -862,6 +1065,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "request": request,
                     "version": __version__,
                     "portal_title": current.request_portal_title,
+                    "login_mode": request_login_mode(current),
+                    "portal_username": current.request_portal_username,
                     "error": None,
                 },
             )
@@ -900,6 +1105,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "version": __version__,
                     "portal_title": current.request_portal_title,
                     "portal_root": request_portal_root(request),
+                    "portal_username": current.request_portal_username,
+                    "login_required": request_login_mode(current) != "public",
                     "filters": manual_search_filters(**values),
                     "searched": True,
                     "rows": [],
@@ -909,7 +1116,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "goodreads_url": goodreads_url,
                     "goodreads": None,
                     "goodreads_error": None,
-                    "requester_name": params.get("requester_name", "")[:120],
+                    "requester_name": (
+                        params.get("requester_name", "").strip()
+                        or current.request_portal_username
+                    )[:120],
                     "requester_contact": params.get("requester_contact", "")[:200],
                     "note": params.get("note", "")[:1000],
                     "submitted": False,
@@ -953,6 +1163,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "version": __version__,
                 "portal_title": current.request_portal_title,
                 "portal_root": request_portal_root(request),
+                "portal_username": current.request_portal_username,
+                "login_required": request_login_mode(current) != "public",
                 "filters": filters,
                 "searched": searched,
                 "rows": result["rows"],
@@ -962,7 +1174,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "goodreads_url": goodreads_url,
                 "goodreads": goodreads,
                 "goodreads_error": goodreads_error,
-                "requester_name": params.get("requester_name", "")[:120],
+                "requester_name": (
+                    params.get("requester_name", "").strip()
+                    or current.request_portal_username
+                )[:120],
                 "requester_contact": params.get("requester_contact", "")[:200],
                 "note": params.get("note", "")[:1000],
                 "submitted": params.get("submitted") == "1",
@@ -976,16 +1191,30 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     @app.post("/request/unlock", response_class=HTMLResponse)
     async def unlock_request_portal(
         request: Request,
+        username: str = Form(""),
+        password: str = Form(""),
         access_code: str = Form(""),
     ) -> HTMLResponse:
         current = active_config()
         if not current.request_portal_enabled:
             raise HTTPException(404, "request portal is disabled")
         allowed = await request_rate_allowed(request, "unlock")
-        valid = allowed and (
-            not current.request_portal_access_code
-            or hmac.compare_digest(access_code, current.request_portal_access_code)
-        )
+        login_mode = request_login_mode(current)
+        if login_mode == "credentials":
+            username_valid = hmac.compare_digest(
+                username, current.request_portal_username
+            )
+            password_valid = verify_request_password(
+                password, current.request_portal_password_hash
+            )
+            credentials_valid = username_valid and password_valid
+        elif login_mode == "access_code":
+            credentials_valid = hmac.compare_digest(
+                access_code, current.request_portal_access_code
+            )
+        else:
+            credentials_valid = True
+        valid = allowed and credentials_valid
         if not valid:
             return templates.TemplateResponse(
                 request,
@@ -994,10 +1223,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "request": request,
                     "version": __version__,
                     "portal_title": current.request_portal_title,
+                    "login_mode": login_mode,
+                    "portal_username": current.request_portal_username,
                     "error": (
                         "Too many attempts. Wait one minute."
                         if not allowed
-                        else "That access code is not valid."
+                        else (
+                            "That username or password is not valid."
+                            if login_mode == "credentials"
+                            else "That access code is not valid."
+                        )
                     ),
                 },
                 status_code=429 if not allowed else 403,
@@ -1015,6 +1250,17 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         )
         return response
 
+    @app.post("/request/logout")
+    async def logout_request_portal(request: Request) -> RedirectResponse:
+        response = RedirectResponse(request_portal_root(request), status_code=303)
+        response.delete_cookie(
+            "mysuite_request_access",
+            path="/",
+            httponly=True,
+            samesite="strict",
+        )
+        return response
+
     @app.post("/request/submit")
     async def submit_request(
         request: Request,
@@ -1029,7 +1275,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if not current.request_portal_enabled:
             raise HTTPException(404, "request portal is disabled")
         if not request_portal_authorized(request):
-            raise HTTPException(403, "request portal access code required")
+            raise HTTPException(403, "request portal login required")
         if not await request_rate_allowed(request, "submit"):
             raise HTTPException(429, "too many requests; wait one minute")
         root = request_portal_root(request)

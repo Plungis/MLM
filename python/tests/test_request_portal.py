@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from mlm.config import load_config
 from mlm.database import ensure_database
 from mlm.repository import Repository
+from mlm.request_auth import hash_request_password
 from mlm.request_portal import (
     GoodreadsLookupError,
     lookup_goodreads_book,
@@ -71,7 +72,14 @@ class PortalServices:
         self.config = config
 
 
-def portal_config(path: Path, *, access_code: str = "") -> None:
+def portal_config(
+    path: Path,
+    *,
+    access_code: str = "",
+    username: str = "",
+    password: str = "",
+) -> None:
+    password_hash = hash_request_password(password) if password else ""
     path.write_text(
         f"""
 mam_id = "session"
@@ -79,6 +87,8 @@ request_portal_enabled = true
 request_portal_domains = ["requests.example.test"]
 request_portal_title = "Randy's Library Requests"
 request_portal_access_code = {json.dumps(access_code)}
+request_portal_username = {json.dumps(username)}
+request_portal_password_hash = {json.dumps(password_hash)}
 request_portal_rate_limit = 20
 audio_types = ["m4b", "mp3"]
 """,
@@ -208,6 +218,7 @@ def test_custom_domain_is_request_only_and_approval_queues_release(
     assert inbox.status_code == 200
     assert "Reader" in inbox.text
     assert "M4B please" in inbox.text
+    assert "Open request portal" in inbox.text
     approved = client.post(
         "/requests/approve",
         data={"request_id": requests[0]["id"]},
@@ -293,8 +304,64 @@ def test_remote_request_portal_uses_shared_access_cookie(tmp_path: Path) -> None
             )
             assert unlocked.status_code == 303
             assert "mysuite_request_access=" in unlocked.headers["set-cookie"]
-            portal = await client.get("/")
+            portal = await client.get("/", params={"q": "Dungeon"})
             assert "Goodreads link reader" in portal.text
+
+    asyncio.run(exercise())
+
+
+def test_remote_request_portal_uses_username_and_password(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    portal_config(
+        config_path,
+        username="family",
+        password="correct horse",
+    )
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    app = create_app(config_path, database)
+    app.state.services = PortalServices(load_config(config_path))
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(
+            app=app,
+            client=("203.0.113.20", 41234),
+        )
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="https://requests.example.test",
+        ) as client:
+            locked = await client.get("/")
+            assert locked.status_code == 200
+            assert 'name="username"' in locked.text
+            assert 'name="password"' in locked.text
+            assert 'name="access_code"' not in locked.text
+
+            wrong = await client.post(
+                "/request/unlock",
+                data={"username": "family", "password": "wrong password"},
+            )
+            assert wrong.status_code == 403
+            assert "not valid" in wrong.text
+
+            unlocked = await client.post(
+                "/request/unlock",
+                data={"username": "family", "password": "correct horse"},
+                follow_redirects=False,
+            )
+            assert unlocked.status_code == 303
+            assert "mysuite_request_access=" in unlocked.headers["set-cookie"]
+
+            portal = await client.get("/", params={"q": "Dungeon"})
+            assert "Goodreads link reader" in portal.text
+            assert 'name="requester_name"' in portal.text
+            assert 'value="family"' in portal.text
+            assert "Sign out" in portal.text
+
+            logged_out = await client.post("/request/logout", follow_redirects=False)
+            assert logged_out.status_code == 303
+            locked_again = await client.get("/")
+            assert 'name="password"' in locked_again.text
 
     asyncio.run(exercise())
 
@@ -323,7 +390,7 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b26"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b27"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())

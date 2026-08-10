@@ -101,14 +101,31 @@
         <small>Per-client limit for searches, unlock attempts, and submissions.</small>
       </label>
       <label class="setting-field">
-        <span>New shared access code</span>
-        <input type="password" name="request_portal_access_code" value="" autocomplete="new-password" placeholder="{% if config.request_portal_access_code %}Configured — leave blank to keep{% else %}Optional but recommended{% endif %}">
-        <small>Protects private-tracker search results. Leave blank to preserve the current code.</small>
+        <span>Requester username</span>
+        <input type="text" name="request_portal_username" maxlength="100" value="{{ config.request_portal_username }}" autocomplete="username" placeholder="family">
+        <small>Shared username required before anyone can search or submit requests.</small>
+      </label>
+      <label class="setting-field">
+        <span>New requester password</span>
+        <input type="password" name="request_portal_password" minlength="8" value="" autocomplete="new-password" placeholder="{% if config.request_portal_password_hash %}Configured — leave blank to keep{% else %}At least 8 characters{% endif %}">
+        <small>Saved as a salted PBKDF2 hash. Leave blank to preserve the current password.</small>
       </label>
       <label class="setting-toggle">
-        <input type="checkbox" name="clear_request_portal_access_code" value="true">
-        <span><strong>Remove shared access code</strong><small>Makes the request domain public. Use only when another access layer such as Cloudflare Access protects it.</small></span>
+        <input type="checkbox" name="clear_request_portal_credentials" value="true">
+        <span><strong>Remove requester login</strong><small>Clears the username and password. The legacy access code below may still protect the portal.</small></span>
       </label>
+      <details class="setting-field config-legacy-auth">
+        <summary>Legacy shared access code</summary>
+        <p class="muted">Kept so existing installations continue working. Username/password login takes precedence when configured.</p>
+        <label class="setting-field">
+          <span>New shared access code</span>
+          <input type="password" name="request_portal_access_code" value="" autocomplete="new-password" placeholder="{% if config.request_portal_access_code %}Configured — leave blank to keep{% else %}Not configured{% endif %}">
+        </label>
+        <label class="setting-toggle">
+          <input type="checkbox" name="clear_request_portal_access_code" value="true">
+          <span><strong>Remove shared access code</strong><small>Makes the portal public only when no requester username/password is configured.</small></span>
+        </label>
+      </details>
     </div>
   </section>
 

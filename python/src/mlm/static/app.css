@@ -775,6 +775,15 @@ button.danger {
   color: var(--accent-strong);
 }
 
+.nav-link-child {
+  min-height: 32px;
+  margin-left: 18px;
+  border-left: 1px dashed var(--line-soft);
+  border-radius: 0 4px 4px 0;
+  padding-block: 5px;
+  font-size: 12px;
+}
+
 .nav-count {
   min-width: 24px;
   border: 1px solid var(--line-soft);
@@ -1774,6 +1783,23 @@ pre {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.config-legacy-auth {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--line-soft);
+  padding: 13px;
+}
+
+.config-legacy-auth summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.config-legacy-auth > label,
+.config-legacy-auth > p {
+  margin-top: 12px;
+}
+
 .setting-field {
   display: grid;
   gap: 7px;
@@ -2548,6 +2574,14 @@ pre {
   margin: 0 0 28px;
 }
 
+.request-portal-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 34px;
+}
+
 .request-portal-header h1,
 .request-unlock-card h1 {
   margin: 7px 0 10px;
@@ -2561,10 +2595,18 @@ pre {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 34px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.request-logout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -2865,7 +2907,8 @@ pre {
 
   .request-results-header,
   .request-success,
-  .request-portal-footer {
+  .request-portal-footer,
+  .request-portal-brand-row {
     align-items: flex-start;
     flex-direction: column;
   }

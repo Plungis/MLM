@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="absidekickModule" class="absidekick-module" data-initial-view="{{ absidekick_view }}">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MyAnonaSuite / Audiobookshelf API runner</p>
+        <h1>ABSidekick</h1>
+        <p class="abs-subtitle">Score, review, and repair Audiobookshelf metadata without browser automation.</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="status ok">{{ absidekick_source_version }} integrated</span>
+        <button id="saveSettingsBtn" class="ghost">Save Settings</button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <section class="status-grid">
+        <article class="metric">
+          <span>Status</span>
+          <strong id="jobStatus">Idle</strong>
+        </article>
+        <article class="metric">
+          <span>Processed</span>
+          <strong id="processedMetric">0 / 0</strong>
+        </article>
+        <article class="metric">
+          <span>Matched</span>
+          <strong id="matchedMetric">0</strong>
+        </article>
+        <article class="metric">
+          <span>Unmatched</span>
+          <strong id="unmatchedMetric">0</strong>
+        </article>
+        <article class="metric">
+          <span>Review</span>
+          <strong id="reviewMetric">0</strong>
+        </article>
+      </section>
+
+      <section class="layout">
+        <aside class="panel nav-panel">
+          <button class="tab active" data-tab="connection">Connection</button>
+          <button class="tab" data-tab="targeting">Targeting</button>
+          <button class="tab" data-tab="matching">Matching</button>
+          <button class="tab" data-tab="tags">Tags</button>
+          <button class="tab" data-tab="run">Run</button>
+          <button class="tab" data-tab="review">Review</button>
+        </aside>
+
+        <section class="panel content-panel">
+          <form id="settingsForm">
+            <div class="tab-panel active" id="tab-connection">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Server</p>
+                  <h2>Connection</h2>
+                </div>
+                <button type="button" id="connectBtn">Connect</button>
+              </div>
+              <div class="grid two">
+                <label class="field">
+                  <span>ABS URL</span>
+                  <input id="baseUrl" placeholder="http://localhost:13378" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>API Token</span>
+                  <input id="token" type="password" placeholder="Paste token for this session" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>Library</span>
+                  <select id="libraryId"></select>
+                </label>
+                <label class="field">
+                  <span>Provider</span>
+                  <select id="provider">
+                    <option>audible</option>
+                    <option>google</option>
+                    <option>openlibrary</option>
+                    <option>itunes</option>
+                    <option>audible.ca</option>
+                    <option>audible.uk</option>
+                    <option>audible.au</option>
+                    <option>audible.fr</option>
+                    <option>audible.de</option>
+                    <option>audible.jp</option>
+                    <option>audible.it</option>
+                    <option>audible.in</option>
+                    <option>audible.es</option>
+                    <option>fantlab</option>
+                  </select>
+                </label>
+              </div>
+              <label class="check">
+                <input id="rememberConnection" type="checkbox" />
+                <span>Remember URL/library/token in the module's private data folder</span>
+              </label>
+              <div class="note" id="connectionNote">Token is never returned to the browser after save. ABSidekick controls are restricted to the machine running MyAnonaSuite.</div>
+            </div>
+
+            <div class="tab-panel" id="tab-targeting">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Scope</p>
+                  <h2>Targeting</h2>
+                </div>
+                <button type="button" id="loadFiltersBtn" class="ghost">Load Authors/Tags</button>
+              </div>
+              <div class="grid three">
+                <label class="field">
+                  <span>Target Mode</span>
+                  <select id="targetMode">
+                    <option value="unprocessed">Unprocessed only</option>
+                    <option value="not_matched">Anything not matched</option>
+                    <option value="unmatched">Only unmatched tag</option>
+                    <option value="matched">Only matched tag</option>
+                    <option value="review">Only review tag</option>
+                    <option value="all">Everything</option>
+                    <option value="custom">Custom filters only</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Title Contains</span>
+                  <input id="titleContains" placeholder="optional" />
+                </label>
+                <label class="field">
+                  <span>Path Contains</span>
+                  <input id="pathContains" placeholder="optional" />
+                </label>
+              </div>
+              <div class="grid two">
+                <label class="field">
+                  <span>Include Authors</span>
+                  <select id="includeAuthors" multiple size="8"></select>
+                </label>
+                <label class="field">
+                  <span>Exclude Authors</span>
+                  <select id="excludeAuthors" multiple size="8"></select>
+                </label>
+              </div>
+              <div class="grid three">
+                <label class="field">
+                  <span>Include Tags</span>
+                  <input id="includeTags" placeholder="comma separated" />
+                </label>
+                <label class="field">
+                  <span>Include Tag Mode</span>
+                  <select id="includeTagMode">
+                    <option value="any">Any listed tag</option>
+                    <option value="all">All listed tags</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Exclude Tags</span>
+                  <input id="excludeTags" placeholder="comma separated" />
+                </label>
+              </div>
+              <div class="checks">
+                <label class="check"><input id="missingMetadataOnly" type="checkbox" /><span>Only missing title/author metadata</span></label>
+                <label class="check"><input id="missingCoverOnly" type="checkbox" /><span>Only missing cover</span></label>
+                <label class="check"><input id="noAsinOnly" type="checkbox" /><span>Only items without ASIN</span></label>
+                <label class="check"><input id="noIsbnOnly" type="checkbox" /><span>Only items without ISBN</span></label>
+                <label class="check"><input id="skipMissingItems" type="checkbox" /><span>Skip missing items</span></label>
+                <label class="check"><input id="skipInvalidItems" type="checkbox" /><span>Skip invalid items</span></label>
+              </div>
+            </div>
+
+            <div class="tab-panel" id="tab-matching">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Scoring</p>
+                  <h2>Matching</h2>
+                </div>
+              </div>
+              <div class="grid four">
+                <label class="field">
+                  <span>Auto Threshold</span>
+                  <input id="threshold" type="number" min="1" max="100" />
+                </label>
+                <label class="field">
+                  <span>Review Floor</span>
+                  <input id="reviewFloor" type="number" min="1" max="100" />
+                </label>
+                <label class="field">
+                  <span>Candidate Limit</span>
+                  <input id="candidateLimit" type="number" min="1" max="25" />
+                </label>
+                <label class="field">
+                  <span>Duration Tolerance</span>
+                  <input id="durationToleranceMinutes" type="number" min="1" max="120" />
+                </label>
+              </div>
+              <div class="grid three">
+                <label class="field">
+                  <span>Apply Mode</span>
+                  <select id="applyMode">
+                    <option value="metadata_patch">Patch chosen candidate metadata</option>
+                    <option value="quick_match">ABS quick match first result</option>
+                    <option value="tags_only">Tags only</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Cover Mode</span>
+                  <select id="coverMode">
+                    <option value="if_missing">If missing</option>
+                    <option value="always">Always</option>
+                    <option value="never">Never</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Result Sort</span>
+                  <select id="sort">
+                    <option value="media.metadata.title">Title</option>
+                    <option value="addedAt">Added</option>
+                    <option value="updatedAt">Updated</option>
+                    <option value="media.duration">Duration</option>
+                  </select>
+                </label>
+              </div>
+              <div class="checks">
+                <label class="check"><input id="overwriteMetadata" type="checkbox" /><span>Overwrite existing metadata fields</span></label>
+                <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
+                <label class="check"><input id="requireAuthor" type="checkbox" /><span>Require a solid author score</span></label>
+                <label class="check"><input id="requireTitleToken" type="checkbox" /><span>Require at least one important title token</span></label>
+                <label class="check"><input id="sortDesc" type="checkbox" /><span>Descending sort</span></label>
+              </div>
+              <h3>Score Weights</h3>
+              <div class="grid six">
+                <label class="field"><span>Title</span><input id="weightTitle" type="number" min="0" max="100" /></label>
+                <label class="field"><span>Author</span><input id="weightAuthor" type="number" min="0" max="100" /></label>
+                <label class="field"><span>Series</span><input id="weightSeries" type="number" min="0" max="100" /></label>
+                <label class="field"><span>Narrator</span><input id="weightNarrator" type="number" min="0" max="100" /></label>
+                <label class="field"><span>Year</span><input id="weightYear" type="number" min="0" max="100" /></label>
+                <label class="field"><span>Duration</span><input id="weightDuration" type="number" min="0" max="100" /></label>
+              </div>
+            </div>
+
+            <div class="tab-panel" id="tab-tags">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Markers</p>
+                  <h2>Tags & Actions</h2>
+                </div>
+              </div>
+              <div class="grid three">
+                <label class="field"><span>Matched Tag</span><input id="matchedTag" /></label>
+                <label class="field"><span>Unmatched Tag</span><input id="unmatchedTag" /></label>
+                <label class="field"><span>Review Tag</span><input id="reviewTag" /></label>
+              </div>
+              <div class="checks">
+                <label class="check"><input id="tagMatched" type="checkbox" /><span>Tag successful matches</span></label>
+                <label class="check"><input id="tagUnmatched" type="checkbox" /><span>Tag items below threshold as unmatched</span></label>
+                <label class="check"><input id="tagReview" type="checkbox" /><span>Tag maybe-matches for review</span></label>
+                <label class="check"><input id="clearUnmatchedOnMatch" type="checkbox" /><span>Clear unmatched tag after match</span></label>
+                <label class="check"><input id="clearReviewOnMatch" type="checkbox" /><span>Clear review tag after match</span></label>
+                <label class="check"><input id="clearMatchedOnUnmatched" type="checkbox" /><span>Clear matched tag when marking unmatched</span></label>
+              </div>
+            </div>
+
+            <div class="tab-panel" id="tab-run">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Execution</p>
+                  <h2>Run Controls</h2>
+                </div>
+                <div class="button-row">
+                  <button type="button" id="previewBtn" class="ghost">Preview</button>
+                  <button type="button" id="startBtn">Start</button>
+                </div>
+              </div>
+              <div class="grid four">
+                <label class="field"><span>Run Limit</span><input id="limit" type="number" min="0" /></label>
+                <label class="field"><span>Page Size</span><input id="pageSize" type="number" min="1" max="500" /></label>
+                <label class="field"><span>Delay ms</span><input id="requestDelayMs" type="number" min="0" max="10000" /></label>
+                <label class="field"><span>Retries</span><input id="maxRetries" type="number" min="0" max="10" /></label>
+              </div>
+              <div class="checks">
+                <label class="check"><input id="dryRun" type="checkbox" /><span>Dry run: score and log only</span></label>
+                <label class="check"><input id="stopOnError" type="checkbox" /><span>Stop on first error</span></label>
+              </div>
+              <div class="button-row run-buttons">
+                <button type="button" id="pauseBtn" class="ghost">Pause</button>
+                <button type="button" id="resumeBtn" class="ghost">Resume</button>
+                <button type="button" id="cancelBtn" class="danger">Cancel</button>
+                <button type="button" id="exportBtn" class="ghost">Export Log</button>
+              </div>
+              <div id="previewPanel" class="preview hidden"></div>
+            </div>
+
+            <div class="tab-panel" id="tab-review">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Human Checkpoint</p>
+                  <h2>Review Desk</h2>
+                </div>
+                <div class="button-row">
+                  <button type="button" id="scanReviewBtn" class="ghost">Scan Review Tags</button>
+                  <button type="button" id="loadJobReviewBtn" class="ghost">Load Job Queue</button>
+                </div>
+              </div>
+              <div class="grid four">
+                <label class="field"><span>Scan Limit</span><input id="reviewScanLimit" type="number" min="1" max="250" /></label>
+                <label class="field"><span>Candidates Per Item</span><input id="reviewCandidateLimit" type="number" min="1" max="15" /></label>
+                <label class="check"><input id="rejectAddsUnmatchedTag" type="checkbox" /><span>Reject adds unmatched tag</span></label>
+                <label class="check"><input id="rejectClearsReviewTag" type="checkbox" /><span>Reject clears review tag</span></label>
+              </div>
+              <div class="note">
+                Approve writes the selected candidate to Audiobookshelf and clears the review tag. Reject marks the item unmatched so it leaves this queue.
+              </div>
+              <div id="reviewDesk" class="review-desk"></div>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Telemetry</p>
+            <h2>Live Log</h2>
+          </div>
+          <span id="latestItem" class="latest"></span>
+        </div>
+        <div class="log-tools">
+          <label class="field compact"><span>Search</span><input id="logSearch" placeholder="title, candidate, message" /></label>
+          <label class="field compact">
+            <span>Level</span>
+            <select id="logLevel">
+              <option value="all">All</option>
+              <option value="success">Success</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+              <option value="info">Info</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span>Sort</span>
+            <select id="logSort">
+              <option value="time">Time</option>
+              <option value="level">Level</option>
+              <option value="score">Score</option>
+              <option value="title">Title</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span>Direction</span>
+            <select id="logDirection">
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span>Page Size</span>
+            <select id="logPageSize">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+        </div>
+        <div id="log" class="log"></div>
+        <div class="pager">
+          <button type="button" id="logPrevBtn" class="ghost">Prev</button>
+          <span id="logPageInfo">Page 0 / 0</span>
+          <button type="button" id="logNextBtn" class="ghost">Next</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/absidekick.js?v={{ version }}"></script>{% endblock %}

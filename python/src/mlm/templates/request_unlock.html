@@ -13,10 +13,15 @@
       <span class="request-brand-mark">R_</span>
       <p class="eyebrow">MyAnonaSuite / private request portal</p>
       <h1>{{ portal_title }}</h1>
-      <p>Enter the shared access code to search the library request catalog.</p>
+      <p>{% if login_mode == "credentials" %}Sign in to search the library request catalog and submit requests.{% else %}Enter the shared access code to search the library request catalog.{% endif %}</p>
       {% if error %}<div class="flash error-text" role="alert">{{ error }}</div>{% endif %}
       <form action="/request/unlock" method="post">
+        {% if login_mode == "credentials" %}
+        <label><span>Username</span><input type="text" name="username" required autofocus autocomplete="username" value="{{ portal_username }}"></label>
+        <label><span>Password</span><input type="password" name="password" required autocomplete="current-password"></label>
+        {% else %}
         <label><span>Access code</span><input type="password" name="access_code" required autofocus autocomplete="current-password"></label>
+        {% endif %}
         <button class="primary" type="submit">Open request portal</button>
       </form>
     </section>

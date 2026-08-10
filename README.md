@@ -105,8 +105,16 @@ The web UI listens on port 3157 by default. MyAnonaSuite can also serve a
 dedicated request portal on a configured custom domain. The public hostname is
 isolated from administrative routes, supports the full multi-filter MaM search
 and Goodreads book-link lookup, and sends every submission to an approval inbox
-instead of downloading automatically. See [python/README.md](python/README.md)
+instead of downloading automatically. Administrators can open it directly from
+the Request Portal link beneath Requests. The portal supports a shared requester
+username/password whose password is stored only as a salted hash. See
+[python/README.md](python/README.md)
 for reverse-proxy and security setup.
+
+The suite switcher also includes the complete ABSidekick Audiobookshelf
+organizer. Its connection/config, targeting, weighted matching, dry-run and
+write modes, run controls, live logs, and review desk run inside the shared UI
+while remaining isolated under `mlm/modules/absidekick/`.
 
 ## Migrate legacy data
 

@@ -10,6 +10,7 @@ from mlm.config import (
     save_config_text,
     save_root_config_values,
 )
+from mlm.request_auth import hash_request_password
 
 
 def test_loads_legacy_names_and_defaults(tmp_path: Path) -> None:
@@ -151,14 +152,17 @@ method = "copy"
 
 
 def test_request_portal_config_requires_clean_custom_domains(tmp_path: Path) -> None:
+    password_hash = hash_request_password("correct horse")
     path = tmp_path / "config.toml"
     path.write_text(
-        """
+        f"""
 mam_id = "secret"
 request_portal_enabled = true
 request_portal_domains = ["requests.example.com"]
 request_portal_title = "Family Requests"
 request_portal_access_code = "shared-secret"
+request_portal_username = "family"
+request_portal_password_hash = "{password_hash}"
 request_portal_rate_limit = 12
 """,
         encoding="utf-8",
@@ -169,6 +173,8 @@ request_portal_rate_limit = 12
     assert config.request_portal_enabled is True
     assert config.request_portal_domains == ("requests.example.com",)
     assert config.request_portal_title == "Family Requests"
+    assert config.request_portal_username == "family"
+    assert config.request_portal_password_hash == password_hash
     assert config.request_portal_rate_limit == 12
 
     path.write_text(
@@ -176,4 +182,11 @@ request_portal_rate_limit = 12
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="request_portal_domains"):
+        load_config(path)
+
+    path.write_text(
+        'mam_id = "secret"\nrequest_portal_username = "family"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="request_portal_username"):
         load_config(path)

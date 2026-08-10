@@ -10,4 +10,4 @@ def test_cli_reports_installed_version(capsys: pytest.CaptureFixture[str]) -> No
         build_parser().parse_args(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "mlm-python 0.5.0b26"
+    assert capsys.readouterr().out.strip() == "mlm-python 0.5.0b27"

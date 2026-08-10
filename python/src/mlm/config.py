@@ -49,6 +49,8 @@ class Config:
     request_portal_enabled: bool = False
     request_portal_domains: tuple[str, ...] = ()
     request_portal_title: str = "Library Requests"
+    request_portal_username: str = ""
+    request_portal_password_hash: str = ""
     request_portal_access_code: str = ""
     request_portal_rate_limit: int = 20
     qbittorrent: tuple[QbitConfig, ...] = ()
@@ -140,6 +142,15 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
                 raise ConfigError(f"{name} must be at least 1 minute")
         if config.request_portal_rate_limit < 1:
             raise ConfigError("request_portal_rate_limit must be at least 1")
+        if bool(config.request_portal_username) != bool(
+            config.request_portal_password_hash
+        ):
+            raise ConfigError(
+                "request_portal_username and request_portal_password_hash must "
+                "both be configured"
+            )
+        if len(config.request_portal_username) > 100:
+            raise ConfigError("request_portal_username cannot exceed 100 characters")
         if config.request_portal_enabled and not config.request_portal_domains:
             raise ConfigError(
                 "request_portal_domains must contain a custom domain when the "
