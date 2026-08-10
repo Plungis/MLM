@@ -30,12 +30,15 @@ ProgressCallback = Callable[
 class OrganizerRun:
     scanned: int = 0
     linked: int = 0
+    already_existing: int = 0
     incomplete: int = 0
+    skipped: int = 0
     failed: int = 0
     skip_reasons: dict[str, int] = field(default_factory=dict)
     failures: list[dict[str, Any]] = field(default_factory=list)
 
     def skip(self, reason: str) -> None:
+        self.skipped += 1
         self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
 
 
@@ -365,6 +368,35 @@ def _progress(
 ) -> None:
     if callback:
         callback(message, level, context)
+
+
+def _organizer_progress(
+    callback: ProgressCallback | None,
+    result: OrganizerRun,
+    *,
+    current: int,
+    total: int,
+) -> None:
+    counts: dict[str, object] = {
+        "current": current,
+        "total": total,
+        "organized": result.linked,
+        "already_existing": result.already_existing,
+        "downloading": result.incomplete,
+        "skipped": result.skipped,
+        "errors": result.failed,
+    }
+    _progress(
+        callback,
+        (
+            f"Progress {current}/{total} | {result.linked} organized | "
+            f"{result.already_existing} already existed | "
+            f"{result.incomplete} downloading | {result.skipped} skipped | "
+            f"{result.failed} errors"
+        ),
+        level="warning" if result.failed else "info",
+        context=counts,
+    )
 
 
 async def _library_scope_torrents(
@@ -793,6 +825,12 @@ async def organize_completed(
                 level="debug",
                 context=context,
             )
+            _organizer_progress(
+                progress,
+                result,
+                current=index,
+                total=len(scoped_torrents),
+            )
             continue
         try:
             outcome = await _organize_torrent(
@@ -807,6 +845,8 @@ async def organize_completed(
             )
             if outcome == "linked":
                 result.linked += 1
+            elif outcome == "already_organized":
+                result.already_existing += 1
             else:
                 result.skip(outcome)
         except asyncio.CancelledError:
@@ -840,17 +880,28 @@ async def organize_completed(
                 level="error",
                 context=failure,
             )
+        _organizer_progress(
+            progress,
+            result,
+            current=index,
+            total=len(scoped_torrents),
+        )
     _progress(
         progress,
         (
-            f"Organizer finished: {result.linked} organized, "
-            f"{result.incomplete} downloading, {result.failed} failed"
+            f"Organizer finished: {result.scanned}/{len(scoped_torrents)} checked | "
+            f"{result.linked} organized | "
+            f"{result.already_existing} already existed | "
+            f"{result.incomplete} downloading | {result.skipped} skipped | "
+            f"{result.failed} errors"
         ),
         level="success" if not result.failed else "warning",
         context={
             "scanned": result.scanned,
             "linked": result.linked,
+            "already_existing": result.already_existing,
             "incomplete": result.incomplete,
+            "skipped": result.skipped,
             "failed": result.failed,
             "skip_reasons": result.skip_reasons,
             "failures": result.failures,

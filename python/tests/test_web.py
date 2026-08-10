@@ -136,8 +136,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Beta V.91.1 integrated" in absidekick.text
     assert "Run Controls" in absidekick.text
     assert "Live Log" in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b27"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b27"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b28"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b28"' in absidekick.text
     for page in (
         "run",
         "review",
@@ -191,7 +191,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b27" in spender_config.text
+    assert "0.5.0b28" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -434,7 +434,9 @@ def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
         last_result={
             "scanned": 1,
             "linked": 0,
+            "already_existing": 2,
             "incomplete": 0,
+            "skipped": 0,
             "failed": 1,
             "skip_reasons": {},
             "failures": [failure],
@@ -446,6 +448,7 @@ def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
     dashboard = client.get("/")
     assert dashboard.status_code == 200
     assert "Organizer could not publish 1 library item(s)" in dashboard.text
+    assert "2 already existed" in dashboard.text
     assert "disk is full" in dashboard.text
     assert source in dashboard.text
     assert destination in dashboard.text

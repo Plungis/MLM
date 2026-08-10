@@ -187,6 +187,73 @@ def test_organizer_hardlinks_completed_torrent(tmp_path: Path) -> None:
     assert any(message.startswith("Organizer scope: 1") for message, _, _ in progress)
     assert any(message.startswith("Placing file 1/1") for message, _, _ in progress)
     assert any(message.startswith("Organizer finished") for message, _, _ in progress)
+    assert any(
+        message.startswith("Progress 1/1 | 1 organized | 0 already existed")
+        for message, _, _ in progress
+    )
+
+
+def test_organizer_reports_already_existing_library_items(tmp_path: Path) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"audio")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(tmp_path / "library"),
+                "method": "copy",
+            },
+        ),
+    )
+    qbit = FakeQbit(downloads)
+
+    first = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            qbit,
+            FakeMam(),
+        )
+    )
+    assert first.linked == 1
+
+    progress: list[tuple[str, str, dict | None]] = []
+    second = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            qbit,
+            FakeMam(),
+            progress=lambda message, level, context: progress.append(
+                (message, level, context)
+            ),
+        )
+    )
+
+    assert second.scanned == 1
+    assert second.linked == 0
+    assert second.already_existing == 1
+    assert second.skipped == 0
+    assert second.skip_reasons == {}
+    assert any(
+        message.startswith("Progress 1/1 | 0 organized | 1 already existed")
+        for message, _, _ in progress
+    )
+    final_message, _, final_context = next(
+        row for row in progress if row[0].startswith("Organizer finished")
+    )
+    assert "1 already existed" in final_message
+    assert final_context is not None
+    assert final_context["already_existing"] == 1
 
 
 def test_organizer_continues_after_one_torrent_fails(tmp_path: Path) -> None:
@@ -227,9 +294,16 @@ def test_organizer_continues_after_one_torrent_fails(tmp_path: Path) -> None:
     assert result.scanned == 2
     assert result.failed == 1
     assert result.linked == 1
+    assert result.already_existing == 0
+    assert result.skipped == 0
     assert qbit.requested_categories == ["Audiobooks"]
     assert repository.torrent("abc123") is not None
     assert any(message.startswith("Failed Missing Book") for message, _, _ in progress)
+    assert any(
+        message.startswith("Progress 1/2")
+        and "1 errors" in message
+        for message, _, _ in progress
+    )
     failures = repository.table_rows("errored_torrents")
     assert len(failures) == 1
     assert failures[0]["id"] == {"Organizer": "missing123"}
