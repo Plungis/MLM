@@ -9,6 +9,7 @@ wedge_buffer = 0
 prefer_wedges = false # use wedges on non-free torrents before falling back to ratio
 download_on_wedge_failure = false # if a wedge request fails, allow a ratio-safe normal download
 grab_both_formats = false # for list imports, independently grab audiobook and ebook
+split_collections = true # organize multi-book torrents into individual library books
 search_interval = 30
 link_interval = 10
 import_interval = 135

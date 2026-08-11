@@ -169,6 +169,7 @@
               <strong>{{ status.last_result.get("linked", 0) }} organized</strong>
               {% if status.last_result.get("failed", 0) %}<strong class="error-text">{{ status.last_result.get("failed") }} failed</strong>{% endif %}
               <span class="muted"> · {{ status.last_result.get("already_existing", 0) }} already existed
+                · {{ status.last_result.get("collections", 0) }} collection torrents
                 · {{ status.last_result.get("incomplete", 0) }} still downloading
                 · {{ status.last_result.get("skipped", (status.last_result.get("skip_reasons") or {}).values() | sum) }} skipped
               </span>

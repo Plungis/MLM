@@ -38,6 +38,7 @@ class Config:
     grab_both_formats: bool = False
     add_torrents_stopped: bool = False
     exclude_narrator_in_library_dir: bool = False
+    split_collections: bool = True
     search_interval: int = 30
     link_interval: int = 10
     import_interval: int = 135

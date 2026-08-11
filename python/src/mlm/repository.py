@@ -347,6 +347,9 @@ class Repository:
             rows = connection.execute(
                 """SELECT payload_json FROM torrents
                    WHERE json_extract(payload_json, '$.library_path') IS NOT NULL
+                      OR json_array_length(
+                           json_extract(payload_json, '$.collection_items')
+                         ) > 0
                    ORDER BY title_search"""
             )
             return [json.loads(row[0]) for row in rows]

@@ -112,6 +112,21 @@ async def match_torrents_to_audiobookshelf(
 ) -> int:
     matched = 0
     for torrent in repository.library_torrents():
+        collection_items = torrent.get("collection_items") or []
+        if collection_items:
+            changed = False
+            for item in collection_items:
+                if item.get("abs_id"):
+                    continue
+                book = await client.find_book(item)
+                if not book:
+                    continue
+                item["abs_id"] = book["id"]
+                matched += 1
+                changed = True
+            if changed:
+                repository.update_torrent(torrent)
+            continue
         if torrent.get("abs_id"):
             continue
         book = await client.find_book(torrent)

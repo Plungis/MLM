@@ -1709,6 +1709,35 @@ input::placeholder {
   padding: 13px 14px;
 }
 
+.collection-book-list {
+  display: grid;
+  gap: 1px;
+  border-top: 1px dashed var(--line-soft);
+  padding: 8px 14px;
+}
+
+.collection-book-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  background: rgba(var(--accent-rgb), 0.025);
+}
+
+.collection-book-row small {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+}
+
+.collection-book-number {
+  color: var(--accent);
+  font-family: var(--mono);
+  text-align: right;
+}
+
 .record-id {
   display: block;
   margin-top: 3px;
@@ -2446,6 +2475,15 @@ pre {
   .record-summary,
   .recovery-grid {
     grid-template-columns: 1fr;
+  }
+
+  .collection-book-row {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .collection-book-row .status {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .hm-release-main,

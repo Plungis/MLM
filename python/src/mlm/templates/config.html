@@ -72,6 +72,10 @@
         <input type="checkbox" name="grab_both_formats" value="true"{% if config.grab_both_formats %} checked{% endif %}>
         <span><strong>Grab audiobook and ebook</strong><small>For list imports, track both formats independently and search again only for the version that is still missing.</small></span>
       </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="split_collections" value="true"{% if config.split_collections %} checked{% endif %}>
+        <span><strong>Split collection torrents</strong><small>Detect book folders, flat ebook collections, and flat M4B/M4A collections, then publish every detected title as its own library book. Disc and chapter layouts stay together.</small></span>
+      </label>
     </div>
   </section>
 

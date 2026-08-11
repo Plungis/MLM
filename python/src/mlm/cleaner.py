@@ -22,6 +22,8 @@ def _preference(config: Config, torrent: dict) -> int:
 
 
 def remove_library_files(torrent: dict) -> None:
+    for item in torrent.get("collection_items", []):
+        remove_library_files(item)
     library_path_value = torrent.get("library_path")
     if not library_path_value:
         return
@@ -44,6 +46,22 @@ def remove_library_files(torrent: dict) -> None:
         library_path.rmdir()
 
 
+def _library_size(torrent: dict) -> int:
+    rows = torrent.get("collection_items") or [torrent]
+    total = 0
+    for row in rows:
+        library_path_value = row.get("library_path")
+        if not library_path_value:
+            continue
+        library_path = Path(library_path_value)
+        total += sum(
+            path.stat().st_size
+            for relative in row.get("library_files", [])
+            if (path := library_path / relative).exists()
+        )
+    return total
+
+
 async def clean_superseded(
     config: Config,
     repository: Repository,
@@ -59,11 +77,7 @@ async def clean_superseded(
         rows.sort(
             key=lambda row: (
                 _preference(config, row),
-                -sum(
-                    (Path(row["library_path"]) / file).stat().st_size
-                    for file in row.get("library_files", [])
-                    if (Path(row["library_path"]) / file).exists()
-                ),
+                -_library_size(row),
             )
         )
         keep, *remove_rows = rows
@@ -79,6 +93,7 @@ async def clean_superseded(
             torrent["replaced_with"] = [keep["id"], keep["created_at"]]
             torrent["library_path"] = None
             torrent["library_files"] = []
+            torrent["collection_items"] = []
             torrent["library_mismatch"] = None
             torrent["abs_id"] = None
             repository.update_torrent(torrent)

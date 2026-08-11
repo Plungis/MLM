@@ -35,8 +35,20 @@
           <span class="record-id">{% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }}{% endif %}{% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}{% if row.get("library_path") %} · {{ row.get("library_path") }}{% endif %}</span>
           {% if library_view == "duplicates" and row.get("duplicate_of") %}<span class="record-note">Duplicate of {{ row.get("duplicate_of") }}</span>{% endif %}
         </div>
-        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "duplicates" %}Review candidate{% else %}Processed{% endif %}</span>
+        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "duplicates" %}Review candidate{% elif row.get("collection_items") %}Collection · {{ row.get("collection_items") | length }} books{% else %}Processed{% endif %}</span>
       </div>
+      {% if row.get("collection_items") %}
+      <div class="collection-book-list">
+        {% for book in row.get("collection_items") %}
+        {% set book_meta = book.get("meta") or {} %}
+        <div class="collection-book-row">
+          <span class="collection-book-number">{{ loop.index }}</span>
+          <div><strong>{{ book.get("title") or book_meta.get("title") or "Untitled book" }}</strong><small>{% if book_meta.get("authors") %}{{ book_meta.get("authors") | join(", ") }} · {% endif %}{{ book.get("library_path") }}</small></div>
+          <span class="status {% if book.get('abs_id') %}ok{% else %}waiting{% endif %}">{% if book.get("abs_id") %}ABS matched{% else %}Organized{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <details><summary>Record details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
     </article>
     {% endfor %}

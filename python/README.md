@@ -64,6 +64,12 @@ The service runs the configured autograbbers, Goodreads and Notion imports,
 pending downloader, qBittorrent library organizers, and duplicate cleaner on
 their configured intervals. The dashboard listens on `web_host:web_port`.
 
+The HeavyMLM organizer can split multi-book torrents into individual library
+books. It recognizes distinct book folders, flat ebook collections, and flat
+M4B/M4A/MP4 collections, reads embedded EPUB/audio metadata when available,
+and leaves ambiguous disc/chapter/track layouts intact. The behavior is enabled
+by `split_collections = true` and can be changed live from Configuration.
+
 ## Use MAM-Spender
 
 Open `http://localhost:3157/suite/mam-spender/dashboard` or choose **M$ / Spend**
