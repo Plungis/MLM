@@ -478,7 +478,10 @@ class ScoringTests(unittest.TestCase):
                     return sample_item(["ABSidekick: Needs Review"])
                 if path == "/api/search/books":
                     return [
-                        {"title": "A Completely Different Book", "author": "New Author"},
+                        {
+                            "title": "A Completely Different Book",
+                            "author": "New Author",
+                        },
                         {"title": "Wizard's First Rule", "author": "Terry Goodkind"},
                     ]
                 raise AssertionError(path)
