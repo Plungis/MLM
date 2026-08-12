@@ -392,6 +392,60 @@ select:focus {
   margin-bottom: 0.85rem;
 }
 
+.review-search {
+  background: rgba(4, 31, 18, 0.72);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius);
+  margin-bottom: 0.85rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.review-search > summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 900;
+  letter-spacing: 0.025em;
+}
+
+.review-search > .meta {
+  margin: 0.6rem 0;
+}
+
+.review-search-form {
+  align-items: end;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(12rem, 2fr) minmax(10rem, 1.4fr) minmax(8rem, 0.8fr) 6rem auto;
+}
+
+.review-search-form .field,
+.review-search-form .field.compact {
+  margin: 0;
+}
+
+.review-search-form .field span em {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.review-search-feedback {
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+  margin-top: 0.7rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.review-search-feedback.error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+.review-search-feedback.success {
+  color: var(--accent);
+}
+
 .compare-grid {
   display: grid;
   gap: 0.75rem;
@@ -478,6 +532,14 @@ select:focus {
   accent-color: var(--accent);
   min-height: auto;
   width: auto;
+}
+
+.candidate-origin {
+  color: #9eeeff;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
 }
 
 .card-label,
@@ -632,6 +694,10 @@ select:focus {
   .tab {
     text-align: center;
   }
+
+  .review-search-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -657,6 +723,10 @@ select:focus {
   }
 
   .candidate-card {
+    grid-template-columns: 1fr;
+  }
+
+  .review-search-form {
     grid-template-columns: 1fr;
   }
 }

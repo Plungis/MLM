@@ -786,6 +786,75 @@ def search_candidates(
     ]
 
 
+def search_review_candidates(
+    client: ABSClient,
+    item_id: str,
+    query: dict[str, Any],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a reviewer-controlled ABS metadata search for one library item."""
+
+    if not isinstance(query, dict):
+        raise ValueError("query must be an object")
+    title = str(query.get("title") or "").strip()
+    author = str(query.get("author") or "").strip()
+    provider = str(
+        query.get("provider")
+        or settings.get("connection", {}).get("provider")
+        or "audible"
+    ).strip()
+    try:
+        limit = int(query.get("limit") or 20)
+    except (TypeError, ValueError) as error:
+        raise ValueError("manual search limit must be a number") from error
+
+    if not title and not author:
+        raise ValueError("enter a title or author to search")
+    if len(title) > 300 or len(author) > 200:
+        raise ValueError("manual search terms are too long")
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown Audiobookshelf metadata provider: {provider}")
+    if not 1 <= limit <= 30:
+        raise ValueError("manual search limit must be between 1 and 30")
+
+    item = get_library_item(client, item_id)
+    results = client.get(
+        "/api/search/books",
+        params={
+            "title": title,
+            "author": author,
+            "provider": provider,
+            "limit": limit,
+        },
+    )
+    if not isinstance(results, list):
+        results = []
+    ranked = rank_candidates(
+        item,
+        [candidate for candidate in results if isinstance(candidate, dict)][:limit],
+        settings,
+    )
+    candidates = [
+        {
+            **scored,
+            "searchSource": "manual",
+            "searchProvider": provider,
+        }
+        for scored in ranked
+    ]
+    return {
+        "item": summarize_item(item),
+        "query": {
+            "title": title,
+            "author": author,
+            "provider": provider,
+            "limit": limit,
+        },
+        "candidates": candidates,
+        "resultCount": len(candidates),
+    }
+
+
 def get_library_item(client: ABSClient, item_id: str) -> dict[str, Any]:
     payload = client.get(f"/api/items/{urllib.parse.quote(str(item_id))}")
     if isinstance(payload, dict) and isinstance(payload.get("libraryItem"), dict):

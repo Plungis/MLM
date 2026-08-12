@@ -27,6 +27,10 @@ Runtime state lives beside the selected SQLite database in the
   **Remember URL/library/token** is enabled.
 - `review_state.json` remembers approved and rejected review items.
 
+The Review Desk also supports reviewer-controlled searches by title, optional
+author, and metadata provider. Manual results are rescored by `core.py` against
+the canonical Audiobookshelf item and use the normal review approval path.
+
 ## Boundaries
 
 MyAnonaSuite owns routing, local-only access checks, static delivery, and the

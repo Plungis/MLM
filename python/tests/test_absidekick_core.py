@@ -6,6 +6,7 @@ from mlm.modules.absidekick.core import (
     build_review_row,
     candidate_metadata_payload,
     rank_candidates,
+    search_review_candidates,
     should_process_item,
     summarize_item,
 )
@@ -118,6 +119,66 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("title", payload)
         self.assertNotIn("authors", payload)
         self.assertEqual(payload["asin"], "B000123")
+
+    def test_manual_review_search_uses_custom_terms_and_rescores_results(self):
+        class SearchClient:
+            def __init__(self):
+                self.search_params = None
+
+            def get(self, path, params=None):
+                if path == "/api/items/li_test":
+                    return sample_item(["ABSidekick: Needs Review"])
+                if path == "/api/search/books":
+                    self.search_params = params
+                    return [
+                        {"title": "Stone of Tears", "author": "Terry Goodkind"},
+                        {
+                            "title": "Wizards First Rule",
+                            "author": "Terry Goodkind",
+                            "publishedYear": "1994",
+                        },
+                    ]
+                raise AssertionError(path)
+
+        client = SearchClient()
+        result = search_review_candidates(
+            client,
+            "li_test",
+            {
+                "title": "wizards first",
+                "author": "",
+                "provider": "openlibrary",
+                "limit": 20,
+            },
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertEqual(
+            client.search_params,
+            {
+                "title": "wizards first",
+                "author": "",
+                "provider": "openlibrary",
+                "limit": 20,
+            },
+        )
+        self.assertEqual(result["resultCount"], 2)
+        self.assertEqual(
+            result["candidates"][0]["candidate"]["title"],
+            "Wizards First Rule",
+        )
+        self.assertEqual(result["candidates"][0]["searchSource"], "manual")
+        self.assertEqual(result["candidates"][0]["searchProvider"], "openlibrary")
+        self.assertEqual(result["item"]["id"], "li_test")
+
+    def test_manual_review_search_rejects_unknown_provider(self):
+        with self.assertRaisesRegex(ValueError, "unknown Audiobookshelf"):
+            search_review_candidates(
+                object(),
+                "li_test",
+                {"title": "Wizard", "provider": "not-real"},
+                DEFAULT_SETTINGS,
+            )
 
 
 if __name__ == "__main__":

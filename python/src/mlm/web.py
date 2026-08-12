@@ -724,6 +724,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
         if action == "scan":
             function = absidekick.scan_review
+        elif action == "search":
+            function = absidekick.search_review
         elif action == "approve":
             function = absidekick.approve_review
         elif action == "reject":

@@ -57,3 +57,43 @@ def test_absidekick_does_not_persist_token_when_remember_is_disabled(
     saved = json.loads(service.settings_path.read_text(encoding="utf-8"))
     assert "token" not in saved["connection"]
     assert service.public_state()["settings"]["connection"]["hasToken"] is True
+
+
+def test_absidekick_review_search_uses_normal_service_connection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class SearchClient:
+        def get(self, path, params=None):
+            if path == "/api/items/item-1":
+                return {
+                    "id": "item-1",
+                    "path": "/books/The Book",
+                    "media": {
+                        "duration": 3600,
+                        "metadata": {"title": "The Book", "authorName": "An Author"},
+                    },
+                }
+            if path == "/api/search/books":
+                assert params["provider"] == "google"
+                return [{"title": "The Book", "author": "An Author"}]
+            raise AssertionError(path)
+
+    service = ABSidekickService(tmp_path / "absidekick")
+    monkeypatch.setattr(service, "client", lambda settings, token: SearchClient())
+
+    result = service.search_review(
+        {
+            "itemId": "item-1",
+            "query": {
+                "title": "Book",
+                "author": "",
+                "provider": "google",
+                "limit": 12,
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["resultCount"] == 1
+    assert result["query"]["limit"] == 12
+    assert result["candidates"][0]["candidate"]["title"] == "The Book"

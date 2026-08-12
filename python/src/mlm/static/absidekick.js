@@ -1,5 +1,21 @@
 const $ = (id) => document.getElementById(id);
 const API_ROOT = "/api/absidekick";
+const REVIEW_PROVIDERS = [
+  "audible",
+  "google",
+  "openlibrary",
+  "itunes",
+  "audible.ca",
+  "audible.uk",
+  "audible.au",
+  "audible.fr",
+  "audible.de",
+  "audible.jp",
+  "audible.it",
+  "audible.in",
+  "audible.es",
+  "fantlab",
+];
 
 let appState = {
   settings: null,
@@ -452,6 +468,7 @@ function renderCandidateCard(scored, rowIndex, candidateIndex) {
         <input type="radio" name="review-${rowIndex}" value="${candidateIndex}" ${checked} />
         <span>Use This</span>
       </label>
+      ${scored.searchSource === "manual" ? `<div class="candidate-origin">Manual search · ${escapeHtml(scored.searchProvider || "provider")}</div>` : ""}
       <div class="candidate-title">${escapeHtml(candidate.title || "Untitled")}</div>
       <div class="candidate-author ${authorInfo.matches ? "author-match" : ""}">
         <span>${escapeHtml(author)}</span>
@@ -488,6 +505,79 @@ function renderScoreParts(parts) {
   `;
 }
 
+function reviewSearchState(row) {
+  if (!row.manualSearch) {
+    row.manualSearch = {
+      title: row.item?.title || "",
+      author: row.item?.author || "",
+      provider: $("provider")?.value || appState.settings?.connection?.provider || "audible",
+      limit: 20,
+      open: false,
+      loading: false,
+      message: "",
+      error: "",
+    };
+  }
+  return row.manualSearch;
+}
+
+function renderReviewSearch(row, rowIndex) {
+  const search = reviewSearchState(row);
+  const options = REVIEW_PROVIDERS.map(
+    (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${provider}</option>`,
+  ).join("");
+  const feedback = search.error
+    ? `<div class="review-search-feedback error">${escapeHtml(search.error)}</div>`
+    : search.message
+      ? `<div class="review-search-feedback success">${escapeHtml(search.message)}</div>`
+      : "";
+  return `
+    <details class="review-search"${search.open ? " open" : ""}>
+      <summary>Search for another match</summary>
+      <p class="meta">Simplify the title, clear the author, or switch providers to broaden the Audiobookshelf metadata search. New results are added ahead of the original suggestions.</p>
+      <form class="review-search-form" data-review-search-form data-row="${rowIndex}">
+        <label class="field">
+          <span>Title</span>
+          <input type="search" name="title" value="${escapeHtml(search.title)}" placeholder="Book title or distinctive words" maxlength="300" />
+        </label>
+        <label class="field">
+          <span>Author <em>optional</em></span>
+          <input type="search" name="author" value="${escapeHtml(search.author)}" placeholder="Clear this to broaden results" maxlength="200" />
+        </label>
+        <label class="field">
+          <span>Provider</span>
+          <select name="provider">${options}</select>
+        </label>
+        <label class="field compact">
+          <span>Results</span>
+          <input type="number" name="limit" value="${Number(search.limit) || 20}" min="1" max="30" />
+        </label>
+        <button type="submit"${search.loading ? " disabled" : ""}>${search.loading ? "Searching…" : "Search ABS"}</button>
+      </form>
+      ${feedback}
+    </details>
+  `;
+}
+
+function candidateIdentity(scored) {
+  const candidate = scored?.candidate || {};
+  const identifier = candidate.asin || candidate.isbn || candidate.id || candidate.bookId;
+  if (identifier) return `id:${String(identifier).toLowerCase()}`;
+  return [candidate.title, candidateAuthor(candidate), candidate.publishedYear]
+    .map((value) => String(value || "").toLowerCase().trim())
+    .join("|");
+}
+
+function mergeReviewCandidates(manualCandidates, existingCandidates) {
+  const seen = new Set();
+  return [...manualCandidates, ...existingCandidates].filter((scored) => {
+    const identity = candidateIdentity(scored);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 function renderReviewDesk() {
   const root = $("reviewDesk");
   const rows = appState.reviewRows || [];
@@ -512,6 +602,7 @@ function renderReviewDesk() {
               <button type="button" class="danger" data-review-action="reject" data-row="${rowIndex}">Reject</button>
             </div>
           </div>
+          ${renderReviewSearch(row, rowIndex)}
           <div class="compare-grid">
             ${renderCurrentBookCard(item)}
             ${
@@ -594,6 +685,51 @@ async function loadState() {
   setForm(payload.settings);
   renderJob(payload.job);
   renderReviewDesk();
+}
+
+async function searchReview(rowIndex, form) {
+  const row = appState.reviewRows[rowIndex];
+  if (!row) return;
+  const formData = new FormData(form);
+  const search = reviewSearchState(row);
+  search.title = String(formData.get("title") || "").trim();
+  search.author = String(formData.get("author") || "").trim();
+  search.provider = String(formData.get("provider") || "audible");
+  search.limit = Number(formData.get("limit") || 20);
+  search.open = true;
+  search.loading = true;
+  search.message = "";
+  search.error = "";
+  renderReviewDesk();
+  try {
+    const payload = await api("/api/review/search", {
+      method: "POST",
+      body: JSON.stringify({
+        settings: getSettingsFromForm(),
+        itemId: row.item.id,
+        query: {
+          title: search.title,
+          author: search.author,
+          provider: search.provider,
+          limit: search.limit,
+        },
+        ...tokenPayload(),
+      }),
+    });
+    const candidates = payload.candidates || [];
+    row.item = payload.item || row.item;
+    row.candidates = mergeReviewCandidates(candidates, row.candidates || []);
+    search.message = candidates.length
+      ? `Added ${candidates.length} result(s) from ${search.provider}. Select a card below, then approve it.`
+      : `No results from ${search.provider}. Try fewer title words, clear the author, or choose another provider.`;
+    showToast(candidates.length ? `Found ${candidates.length} additional candidate(s)` : "No additional candidates found");
+  } catch (error) {
+    search.error = `${error.message}. Try broader terms or another provider.`;
+    throw error;
+  } finally {
+    search.loading = false;
+    renderReviewDesk();
+  }
 }
 
 async function connect() {
@@ -722,6 +858,12 @@ function wireEvents() {
     if (button.dataset.reviewAction === "reject") {
       rejectReview(row).catch((error) => showToast(error.message));
     }
+  });
+  $("reviewDesk").addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-review-search-form]");
+    if (!form) return;
+    event.preventDefault();
+    searchReview(Number(form.dataset.row), form).catch((error) => showToast(error.message));
   });
   ["logSearch", "logLevel", "logSort", "logDirection", "logPageSize"].forEach((id) => {
     $(id).addEventListener("input", () => {

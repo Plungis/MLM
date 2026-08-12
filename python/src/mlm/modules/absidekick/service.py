@@ -22,6 +22,7 @@ from .core import (
     reject_review_item,
     save_settings,
     scan_review_items,
+    search_review_candidates,
     utc_now,
 )
 
@@ -165,6 +166,19 @@ class ABSidekickService:
             "review": rows,
             "jobReviewQueue": (self.job_snapshot() or {}).get("reviewQueue", []),
         }
+
+    def search_review(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings, token = self._incoming(payload)
+        item_id = str(payload.get("itemId") or "").strip()
+        if not item_id:
+            raise ValueError("itemId is required")
+        result = search_review_candidates(
+            self.client(settings, token),
+            item_id,
+            payload.get("query") or {},
+            settings,
+        )
+        return {"ok": True, **result}
 
     def _mark_review_decision(
         self,
