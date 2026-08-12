@@ -38,6 +38,7 @@ const checkboxIds = [
   "skipInvalidItems",
   "overwriteMetadata",
   "adaptiveSearch",
+  "automaticFallbackProviders",
   "strictAutoMatch",
   "quickMatchFirstResultOnly",
   "requireAuthor",
@@ -175,7 +176,7 @@ function setForm(settings) {
   $("minimumAuthorScore").value = matching.minimumAuthorScore ?? 78;
   $("minimumWinnerMargin").value = matching.minimumWinnerMargin ?? 6;
   $("minimumStrongSignals").value = matching.minimumStrongSignals ?? 2;
-  $("fallbackProviders").value = arrayToCsv(matching.fallbackProviders || ["google", "openlibrary"]);
+  $("fallbackProviders").value = arrayToCsv(matching.fallbackProviders || ["google"]);
   $("applyMode").value = matching.applyMode || "metadata_patch";
   $("coverMode").value = matching.coverMode || "if_missing";
 
@@ -184,6 +185,8 @@ function setForm(settings) {
   $("pageSize").value = run.pageSize ?? 100;
   $("requestDelayMs").value = run.requestDelayMs ?? 150;
   $("maxRetries").value = run.maxRetries ?? 2;
+  $("timeoutSeconds").value = run.timeoutSeconds ?? 30;
+  $("searchTimeoutSeconds").value = run.searchTimeoutSeconds ?? 12;
 
   $("weightTitle").value = weights.title ?? 50;
   $("weightAuthor").value = weights.author ?? 25;
@@ -222,7 +225,8 @@ function getSettingsFromForm() {
       sort: $("sort").value,
       sortDesc: $("sortDesc").checked,
       requestDelayMs: Number($("requestDelayMs").value || 0),
-      timeoutSeconds: 30,
+      timeoutSeconds: Number($("timeoutSeconds").value || 30),
+      searchTimeoutSeconds: Number($("searchTimeoutSeconds").value || 12),
       maxRetries: Number($("maxRetries").value || 0),
       stopOnError: $("stopOnError").checked,
     },
@@ -247,6 +251,7 @@ function getSettingsFromForm() {
       reviewFloor: Number($("reviewFloor").value || 65),
       candidateLimit: Number($("candidateLimit").value || 8),
       adaptiveSearch: $("adaptiveSearch").checked,
+      automaticFallbackProviders: $("automaticFallbackProviders").checked,
       fallbackProviders: csvToArray($("fallbackProviders").value),
       strictAutoMatch: $("strictAutoMatch").checked,
       minimumTitleScore: Number($("minimumTitleScore").value || 86),
@@ -403,6 +408,7 @@ function renderPreview(preview) {
                 : "<div>No candidates returned</div>"
             }
             <div class="confidence-line ${escapeHtml(decision.confidence || "none")}">${escapeHtml(decision.action || "unmatched")} · margin ${escapeHtml(decision.margin ?? 0)}${decision.reasons?.length ? ` · ${escapeHtml(decision.reasons.join("; "))}` : ""}</div>
+            ${row.searchDiagnostics?.length ? `<div class="conflict-line">Provider warning: ${escapeHtml(row.searchDiagnostics.map((entry) => entry.message).join("; "))}</div>` : ""}
             ${best?.parts ? `<div class="meta">Title ${best.parts.title} | Author ${best.parts.author} | Year ${best.parts.year} | Duration ${best.parts.duration}</div>` : ""}
           </div>
         `;
@@ -633,6 +639,7 @@ function renderReviewDesk() {
             </div>
           </div>
           ${renderMatchDecision(row.decision)}
+          ${row.searchDiagnostics?.length ? `<div class="provider-warning">${escapeHtml(row.searchDiagnostics.map((entry) => `${entry.provider}: ${entry.error}`).join(" · "))}</div>` : ""}
           ${renderReviewSearch(row, rowIndex)}
           <div class="compare-grid">
             ${renderCurrentBookCard(item)}

@@ -212,7 +212,7 @@
               </div>
               <label class="field">
                 <span>Fallback Providers</span>
-                <input id="fallbackProviders" placeholder="google, openlibrary" />
+                <input id="fallbackProviders" placeholder="google" />
               </label>
               <div class="grid three">
                 <label class="field">
@@ -243,7 +243,8 @@
               </div>
               <div class="checks">
                 <label class="check"><input id="strictAutoMatch" type="checkbox" /><span>High-precision automatic matching</span></label>
-                <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Try broader searches and fallback providers when needed</span></label>
+                <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Clean track numbers and retry only when the precise search is empty</span></label>
+                <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Automatically query fallback providers (slower; off by default)</span></label>
                 <label class="check"><input id="overwriteMetadata" type="checkbox" /><span>Overwrite existing metadata fields</span></label>
                 <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
                 <label class="check"><input id="requireAuthor" type="checkbox" /><span>Require a solid author score</span></label>
@@ -294,12 +295,15 @@
                   <button type="button" id="startBtn">Start</button>
                 </div>
               </div>
-              <div class="grid four">
+              <div class="grid three">
                 <label class="field"><span>Run Limit</span><input id="limit" type="number" min="0" /></label>
                 <label class="field"><span>Page Size</span><input id="pageSize" type="number" min="1" max="500" /></label>
                 <label class="field"><span>Delay ms</span><input id="requestDelayMs" type="number" min="0" max="10000" /></label>
                 <label class="field"><span>Retries</span><input id="maxRetries" type="number" min="0" max="10" /></label>
+                <label class="field"><span>ABS API Timeout</span><input id="timeoutSeconds" type="number" min="3" max="300" /></label>
+                <label class="field"><span>Metadata Search Timeout</span><input id="searchTimeoutSeconds" type="number" min="3" max="60" /></label>
               </div>
+              <div class="note">Metadata searches never use the general retry count. A timed-out provider is disabled for the remainder of that run so it cannot stall every book.</div>
               <div class="checks">
                 <label class="check"><input id="dryRun" type="checkbox" /><span>Dry run: score and log only</span></label>
                 <label class="check"><input id="stopOnError" type="checkbox" /><span>Stop on first error</span></label>

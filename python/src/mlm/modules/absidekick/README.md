@@ -32,12 +32,18 @@ author, and metadata provider. Manual results are rescored by `core.py` against
 the canonical Audiobookshelf item and use the normal review approval path.
 
 The automatic matcher is intentionally evidence-aware. It performs a precise
-title-and-author search first, broadens the query only when necessary, and can
-consult configured fallback providers. Missing provider fields are excluded
+title-and-author search first, broadens the query only after an empty result,
+and can optionally consult configured fallback providers. Missing provider fields are excluded
 from the weighted score. Contradictory identifiers, authors, series positions,
 collection status, duration, or a close runner-up prevent automatic writes and
 are recorded as explicit Review Desk reasons. This policy and its thresholds
 live under the module's `matching` settings rather than in shared suite code.
+
+Search execution is deliberately bounded: numbering prefixes are cleaned,
+additional queries run only after zero results, automatic fallback providers
+are opt-in, and search requests use a short no-retry timeout. A timed-out
+provider is disabled on that `ABSClient` for the rest of the job. Provider
+failures are attached to preview/review rows and written to the module log.
 
 ## Boundaries
 

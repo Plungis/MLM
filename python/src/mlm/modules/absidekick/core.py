@@ -50,6 +50,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "sortDesc": False,
         "requestDelayMs": 150,
         "timeoutSeconds": 30,
+        "searchTimeoutSeconds": 12,
         "maxRetries": 2,
         "stopOnError": False,
     },
@@ -74,7 +75,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "reviewFloor": 65,
         "candidateLimit": 8,
         "adaptiveSearch": True,
-        "fallbackProviders": ["google", "openlibrary"],
+        "automaticFallbackProviders": False,
+        "fallbackProviders": ["google"],
         "strictAutoMatch": True,
         "minimumTitleScore": 86,
         "minimumAuthorScore": 78,
@@ -989,6 +991,7 @@ class ABSClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.request_delay_ms = request_delay_ms
+        self.disabled_search_providers: dict[str, str] = {}
 
     def url(self, path: str, params: dict[str, Any] | None = None) -> str:
         if not path.startswith("/"):
@@ -1009,6 +1012,8 @@ class ABSClient:
         path: str,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        timeout_seconds: int | None = None,
+        max_retries: int | None = None,
     ) -> Any:
         url = self.url(path, params)
         data = None
@@ -1020,8 +1025,10 @@ class ABSClient:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
+        request_timeout = max(1, int(timeout_seconds or self.timeout_seconds))
+        retry_count = self.max_retries if max_retries is None else max(0, max_retries)
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retry_count + 1):
             if self.request_delay_ms > 0:
                 time.sleep(self.request_delay_ms / 1000.0)
             request = urllib.request.Request(
@@ -1029,7 +1036,7 @@ class ABSClient:
             )
             try:
                 with urllib.request.urlopen(
-                    request, timeout=self.timeout_seconds
+                    request, timeout=request_timeout
                 ) as response:
                     raw = response.read()
                     if not raw:
@@ -1040,10 +1047,7 @@ class ABSClient:
                     return raw.decode("utf-8", errors="replace")
             except urllib.error.HTTPError as error:
                 body_text = error.read().decode("utf-8", errors="replace")
-                if (
-                    error.code in {429, 500, 502, 503, 504}
-                    and attempt < self.max_retries
-                ):
+                if error.code in {429, 500, 502, 503, 504} and attempt < retry_count:
                     time.sleep(min(8, 2**attempt))
                     last_error = error
                     continue
@@ -1060,7 +1064,7 @@ class ABSClient:
                         "speaks http://. Try changing the ABS URL to http://...",
                     ) from error
                 last_error = error
-                if attempt < self.max_retries:
+                if attempt < retry_count:
                     time.sleep(min(8, 2**attempt))
                     continue
                 raise ABSAPIError(
@@ -1070,6 +1074,27 @@ class ABSClient:
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return self.request("GET", path, params=params)
+
+    def search_books(
+        self, params: dict[str, Any], timeout_seconds: int
+    ) -> list[dict[str, Any]]:
+        """Run one fail-fast metadata search without generic API retries."""
+
+        provider = str(params.get("provider") or "")
+        if provider in self.disabled_search_providers:
+            return []
+        try:
+            result = self.request(
+                "GET",
+                "/api/search/books",
+                params=params,
+                timeout_seconds=timeout_seconds,
+                max_retries=0,
+            )
+        except ABSAPIError as error:
+            self.disabled_search_providers[provider] = str(error)
+            raise
+        return result if isinstance(result, list) else []
 
     def post(
         self,
@@ -1137,9 +1162,58 @@ def fetch_library_items(
     return items
 
 
+class CandidateResults(list[dict[str, Any]]):
+    def __init__(
+        self,
+        values: list[dict[str, Any]] | None = None,
+        diagnostics: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(values or [])
+        self.diagnostics = diagnostics or []
+
+
+def clean_search_title(value: Any) -> str:
+    title = html.unescape(str(value or "")).strip()
+    # Track/disc numbering is common in folder names but poisons ABS provider
+    # searches (for example, "01 Northern Lights"). Do not touch titles that
+    # are themselves a number, such as "1984".
+    cleaned = re.sub(
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?0*\d{1,3}\s*[-_.:]?\s+",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or title
+
+
+def _search_books_once(
+    client: ABSClient,
+    params: dict[str, Any],
+    timeout_seconds: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    provider = str(params.get("provider") or "unknown")
+    if isinstance(client, ABSClient):
+        if provider in client.disabled_search_providers:
+            return [], None
+        try:
+            return client.search_books(params, timeout_seconds), None
+        except ABSAPIError as error:
+            return [], str(error)
+    try:
+        results = client.get("/api/search/books", params=params)
+    except Exception as error:  # noqa: BLE001 - provider failure is recoverable
+        return [], str(error)
+    return (
+        [candidate for candidate in results if isinstance(candidate, dict)]
+        if isinstance(results, list)
+        else [],
+        None,
+    )
+
+
 def search_candidates(
     client: ABSClient, item: dict[str, Any], settings: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> CandidateResults:
     connection = settings.get("connection", {})
     matching = settings.get("matching", {})
     title = item_title(item)
@@ -1147,24 +1221,38 @@ def search_candidates(
     candidate_limit = max(1, int(matching.get("candidateLimit", 8)))
     primary_provider = str(connection.get("provider") or "audible")
     adaptive = bool(matching.get("adaptiveSearch", True))
+    automatic_fallbacks = bool(matching.get("automaticFallbackProviders", False))
+    search_timeout = max(
+        3, min(60, int(settings.get("run", {}).get("searchTimeoutSeconds", 12)))
+    )
 
-    queries: list[tuple[str, str, str, str]] = [
-        (primary_provider, title, author, "precise title + author"),
+    clean_title = clean_search_title(title)
+    title_was_cleaned = normalize_title(clean_title) != normalize_title(title)
+    queries: list[tuple[str, str, str, str, bool]] = [
+        (
+            primary_provider,
+            clean_title if title_was_cleaned else title,
+            author,
+            "number-cleaned title + author"
+            if title_was_cleaned
+            else "precise title + author",
+            False,
+        ),
     ]
     if adaptive:
-        queries.append((primary_provider, title, "", "title only"))
-        clean_title = normalize_title(title)
-        if clean_title and clean_title != normalize_text(title):
+        if title_was_cleaned:
             queries.append(
-                (primary_provider, clean_title, author, "normalized title + author")
-            )
-        source_titles = title_values(item)
-        if len(source_titles) > 1:
-            path_title = source_titles[-1]
-            if normalize_title(path_title) != normalize_title(title):
-                queries.append(
-                    (primary_provider, path_title, author, "folder title + author")
+                (
+                    primary_provider,
+                    title,
+                    author,
+                    "original numbered title + author",
+                    True,
                 )
+            )
+        queries.append((primary_provider, clean_title, "", "clean title only", True))
+
+    if adaptive and automatic_fallbacks:
         fallback_providers = matching.get("fallbackProviders") or []
         if isinstance(fallback_providers, str):
             fallback_providers = [
@@ -1175,16 +1263,16 @@ def search_candidates(
         for provider in fallback_providers:
             provider = str(provider).strip()
             if provider in PROVIDERS and provider != primary_provider:
-                queries.extend(
-                    [
-                        (provider, title, author, "fallback title + author"),
-                        (provider, title, "", "fallback title only"),
-                    ]
+                queries.append(
+                    (provider, clean_title, author, "fallback title + author", True)
                 )
 
     candidates: dict[str, dict[str, Any]] = {}
+    diagnostics: list[dict[str, Any]] = []
     seen_queries: set[tuple[str, str, str]] = set()
-    for provider, query_title, query_author, strategy in queries:
+    for provider, query_title, query_author, strategy, only_if_empty in queries:
+        if only_if_empty and candidates:
+            continue
         query_key = (
             provider,
             normalize_title(query_title),
@@ -1193,17 +1281,26 @@ def search_candidates(
         if query_key in seen_queries or not query_key[1]:
             continue
         seen_queries.add(query_key)
-        results = client.get(
-            "/api/search/books",
-            params={
-                "title": query_title,
-                "author": query_author,
-                "provider": provider,
-                "limit": candidate_limit,
-            },
-        )
-        if not isinstance(results, list):
-            results = []
+        params = {
+            "title": query_title,
+            "author": query_author,
+            "provider": provider,
+            "limit": candidate_limit,
+        }
+        results, error = _search_books_once(client, params, search_timeout)
+        if error:
+            diagnostics.append(
+                {
+                    "provider": provider,
+                    "strategy": strategy,
+                    "error": error,
+                    "message": (
+                        f"{provider} metadata search failed; disabled for the "
+                        "rest of this run"
+                    ),
+                }
+            )
+            continue
         for provider_rank, candidate in enumerate(results[:candidate_limit]):
             if not isinstance(candidate, dict):
                 continue
@@ -1222,12 +1319,13 @@ def search_candidates(
             if identity not in candidates:
                 candidates[identity] = candidate
 
-        ranked = rank_candidates(item, list(candidates.values()), settings)
-        if match_decision(ranked, settings)["action"] == "auto":
+        if candidates:
             break
 
     ranked = rank_candidates(item, list(candidates.values()), settings)
-    return [row["candidate"] for row in ranked[:candidate_limit]]
+    return CandidateResults(
+        [row["candidate"] for row in ranked[:candidate_limit]], diagnostics
+    )
 
 
 def candidate_identity(candidate: dict[str, Any]) -> str:
@@ -1277,17 +1375,24 @@ def search_review_candidates(
         raise ValueError("manual search limit must be between 1 and 30")
 
     item = get_library_item(client, item_id)
-    results = client.get(
-        "/api/search/books",
-        params={
+    results, search_error = _search_books_once(
+        client,
+        {
             "title": title,
             "author": author,
             "provider": provider,
             "limit": limit,
         },
+        max(
+            3,
+            min(
+                60,
+                int(settings.get("run", {}).get("searchTimeoutSeconds", 12)),
+            ),
+        ),
     )
-    if not isinstance(results, list):
-        results = []
+    if search_error:
+        raise ValueError(f"{provider} metadata search failed: {search_error}")
     ranked = rank_candidates(
         item,
         [candidate for candidate in results if isinstance(candidate, dict)][:limit],
@@ -1353,7 +1458,10 @@ def summarize_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_review_row(
-    item: dict[str, Any], ranked: list[dict[str, Any]], settings: dict[str, Any]
+    item: dict[str, Any],
+    ranked: list[dict[str, Any]],
+    settings: dict[str, Any],
+    search_diagnostics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     review_settings = settings.get("review", {})
     candidate_limit = max(1, int(review_settings.get("candidateLimit", 6)))
@@ -1361,6 +1469,7 @@ def build_review_row(
         "item": summarize_item(item),
         "candidates": ranked[:candidate_limit],
         "decision": match_decision(ranked, settings),
+        "searchDiagnostics": search_diagnostics or [],
         "createdAt": utc_now(),
     }
 
@@ -1390,7 +1499,18 @@ def scan_review_items(
             continue
         candidates = search_candidates(client, item, scan_settings)
         ranked = rank_candidates(item, candidates, scan_settings)
-        rows.append(build_review_row(item, ranked, scan_settings))
+        rows.append(
+            build_review_row(item, ranked, scan_settings, candidates.diagnostics)
+        )
+        primary_provider = str(
+            scan_settings.get("connection", {}).get("provider") or "audible"
+        )
+        if (
+            isinstance(client, ABSClient)
+            and primary_provider in client.disabled_search_providers
+            and not ranked
+        ):
+            break
         if len(rows) >= scan_limit:
             break
     return {"totalReviewItems": len(items), "rows": rows}
@@ -1667,10 +1787,47 @@ class MatchJob:
 
                 try:
                     candidates = search_candidates(self.client, item, self.settings)
+                    for diagnostic in candidates.diagnostics:
+                        self.log(
+                            "warning",
+                            diagnostic["message"],
+                            itemId=item.get("id"),
+                            title=title,
+                            provider=diagnostic["provider"],
+                            strategy=diagnostic["strategy"],
+                            error=diagnostic["error"],
+                        )
                     ranked = rank_candidates(item, candidates, self.settings)
                     best = ranked[0] if ranked else None
                     best_score = float(best["score"]) if best else 0.0
                     decision = match_decision(ranked, self.settings)
+                    primary_provider = str(
+                        self.settings.get("connection", {}).get("provider") or "audible"
+                    )
+                    if (
+                        isinstance(self.client, ABSClient)
+                        and primary_provider in self.client.disabled_search_providers
+                        and not best
+                    ):
+                        with self.lock:
+                            self.stats["errors"] += 1
+                            self.stats["processed"] += 1
+                            self.status = "failed"
+                        self.log(
+                            "error",
+                            (
+                                f"Matching stopped: primary provider "
+                                f"{primary_provider} is unavailable. No remaining "
+                                "items were changed."
+                            ),
+                            itemId=item.get("id"),
+                            title=title,
+                            provider=primary_provider,
+                            error=self.client.disabled_search_providers[
+                                primary_provider
+                            ],
+                        )
+                        return
 
                     if best and decision["action"] == "auto":
                         apply_result = apply_match(
@@ -1697,7 +1854,12 @@ class MatchJob:
                         with self.lock:
                             self.stats["review"] += 1
                             self.review_items.append(
-                                build_review_row(item, ranked, self.settings)
+                                build_review_row(
+                                    item,
+                                    ranked,
+                                    self.settings,
+                                    candidates.diagnostics,
+                                )
                             )
                         self.log(
                             "warning",
@@ -1779,6 +1941,16 @@ def preview_matches(
                 "best": ranked[0] if ranked else None,
                 "candidateCount": len(candidates),
                 "decision": match_decision(ranked, preview_settings),
+                "searchDiagnostics": candidates.diagnostics,
             }
         )
+        primary_provider = str(
+            preview_settings.get("connection", {}).get("provider") or "audible"
+        )
+        if (
+            isinstance(client, ABSClient)
+            and primary_provider in client.disabled_search_providers
+            and not ranked
+        ):
+            break
     return {"totalEligible": len(items), "rows": rows}

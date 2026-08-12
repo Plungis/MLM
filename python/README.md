@@ -99,10 +99,19 @@ punctuation, file formats, edition labels, and recognized series packaging;
 compares only metadata present on both sides; treats exact ASIN/ISBN matches as
 strong evidence; and blocks automatic writes on contradictory identifiers,
 authors, series positions, collection status, duration, or an ambiguous
-runner-up. Adaptive search retries title-only and normalized queries, then the
-configured fallback providers. Every decision, evidence signal, search source,
-and conflict is visible in previews, logs, and the Review Desk. These safeguards
-and their thresholds can be changed live on the Matching screen.
+runner-up. Adaptive search cleans common filename numbering and retries a
+title-only query only when the precise query is empty. Every decision, evidence
+signal, search source, and conflict is visible in previews, logs, and the Review
+Desk. These safeguards and their thresholds can be changed live on the Matching
+screen.
+
+For speed and rate-limit safety, automatic fallback providers are disabled by
+default. The primary provider gets one precise search; only an empty response
+can trigger a cleaned/title-only retry. Leading track/disc numbers are removed
+before the first query. Metadata search timeout is separate from the general ABS
+API timeout and never uses general API retries. When a provider times out, it is
+quarantined for the remainder of that run and the item follows the normal
+review/unmatched path.
 
 ## Publish the request portal on a custom domain
 

@@ -3,6 +3,9 @@ from copy import deepcopy
 
 from mlm.modules.absidekick.core import (
     DEFAULT_SETTINGS,
+    ABSAPIError,
+    ABSClient,
+    MatchJob,
     add_remove_tags,
     build_review_row,
     candidate_metadata_payload,
@@ -261,7 +264,7 @@ class ScoringTests(unittest.TestCase):
 
             def get(self, path, params=None):
                 self.queries.append(dict(params or {}))
-                if params["provider"] == "google" and not params.get("author"):
+                if params["provider"] == "google":
                     return [
                         {
                             "title": "Wizard's First Rule",
@@ -273,16 +276,117 @@ class ScoringTests(unittest.TestCase):
         client = AdaptiveClient()
         settings = deepcopy(DEFAULT_SETTINGS)
         settings["connection"]["provider"] = "audible"
+        settings["matching"]["automaticFallbackProviders"] = True
         candidates = search_candidates(client, sample_item(), settings)
 
         self.assertEqual(candidates[0]["title"], "Wizard's First Rule")
-        self.assertTrue(
-            any(
-                query["provider"] == "audible" and not query.get("author")
-                for query in client.queries
-            )
-        )
+        self.assertTrue(any(query["provider"] == "audible" for query in client.queries))
         self.assertTrue(any(query["provider"] == "google" for query in client.queries))
+
+    def test_automatic_fallback_providers_are_disabled_by_default(self):
+        class EmptyClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return []
+
+        client = EmptyClient()
+        search_candidates(client, sample_item(), DEFAULT_SETTINGS)
+
+        self.assertTrue(client.queries)
+        self.assertEqual({query["provider"] for query in client.queries}, {"audible"})
+
+    def test_candidate_stops_broader_searches(self):
+        class PreciseClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return [{"title": "Wizard's First Rule", "author": "Terry Goodkind"}]
+
+        client = PreciseClient()
+        candidates = search_candidates(client, sample_item(), DEFAULT_SETTINGS)
+
+        self.assertEqual(len(client.queries), 1)
+        self.assertEqual(candidates[0]["title"], "Wizard's First Rule")
+
+    def test_track_number_is_removed_after_empty_precise_search(self):
+        class NumberedClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["title"] == "Northern Lights":
+                    return [{"title": "Northern Lights", "author": "Philip Pullman"}]
+                return []
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "01 Northern Lights"
+        item["media"]["metadata"]["authorName"] = "Philip Pullman"
+        client = NumberedClient()
+        candidates = search_candidates(client, item, DEFAULT_SETTINGS)
+
+        self.assertEqual(
+            [query["title"] for query in client.queries],
+            ["Northern Lights"],
+        )
+        self.assertEqual(candidates[0]["title"], "Northern Lights")
+
+    def test_timed_out_provider_is_disabled_without_retries(self):
+        client = ABSClient("http://localhost:13378", "token", max_retries=5)
+        calls = []
+
+        def fail_request(*args, **kwargs):
+            calls.append(kwargs)
+            raise ABSAPIError("timed out")
+
+        client.request = fail_request
+        first = search_candidates(client, sample_item(), DEFAULT_SETTINGS)
+        second = search_candidates(client, sample_item(), DEFAULT_SETTINGS)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["max_retries"], 0)
+        self.assertEqual(calls[0]["timeout_seconds"], 12)
+        self.assertEqual(first.diagnostics[0]["provider"], "audible")
+        self.assertEqual(second.diagnostics, [])
+
+    def test_primary_provider_timeout_stops_job_without_tagging_remaining_items(self):
+        class DownClient(ABSClient):
+            def __init__(self):
+                super().__init__("http://localhost:13378", "token")
+                self.search_calls = 0
+
+            def get(self, path, params=None):
+                if path.endswith("/items"):
+                    first = sample_item()
+                    second = sample_item()
+                    second["id"] = "li_second"
+                    return {"results": [first, second], "total": 2}
+                raise AssertionError(path)
+
+            def request(self, *args, **kwargs):
+                self.search_calls += 1
+                raise ABSAPIError("timed out")
+
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["connection"]["libraryId"] = "library"
+        client = DownClient()
+        job = MatchJob("test", client, settings)
+
+        job.run()
+
+        snapshot = job.snapshot()
+        self.assertEqual(snapshot["status"], "failed")
+        self.assertEqual(snapshot["stats"]["processed"], 1)
+        self.assertEqual(snapshot["stats"]["errors"], 1)
+        self.assertEqual(client.search_calls, 1)
+        self.assertIn(
+            "No remaining items were changed", snapshot["logs"][-1]["message"]
+        )
 
     def test_manual_review_search_uses_custom_terms_and_rescores_results(self):
         class SearchClient:

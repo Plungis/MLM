@@ -123,6 +123,12 @@ query is uncertain, and sends conflicts or close runner-up results to the
 Review Desk instead of writing them automatically. Missing provider fields are
 unknown evidence rather than automatic score penalties.
 
+Automatic metadata searches are bounded and fail fast. Common track-number
+prefixes are removed before searching, broader primary-provider queries run
+only after an empty result, and cross-provider fallbacks are opt-in. Metadata
+searches do not inherit general ABS retry counts; a timed-out provider is
+disabled for the rest of the run so it cannot stall every remaining book.
+
 ## Migrate legacy data
 
 The Python migrator imports the versioned JSON export into SQLite while
