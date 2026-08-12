@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import difflib
+import html
 import json
+import re
 import threading
 import time
 import traceback
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -70,6 +73,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "threshold": 80,
         "reviewFloor": 65,
         "candidateLimit": 8,
+        "adaptiveSearch": True,
+        "fallbackProviders": ["google", "openlibrary"],
+        "strictAutoMatch": True,
+        "minimumTitleScore": 86,
+        "minimumAuthorScore": 78,
+        "minimumWinnerMargin": 6,
+        "minimumStrongSignals": 2,
         "applyMode": "metadata_patch",
         "overwriteMetadata": False,
         "coverMode": "if_missing",
@@ -104,6 +114,50 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "rejectClearsReviewTag": True,
     },
 }
+
+TITLE_NOISE = {
+    "audiobook",
+    "audio",
+    "book",
+    "edition",
+    "retail",
+    "unabridged",
+    "abridged",
+    "complete",
+    "download",
+    "epub",
+    "m4a",
+    "m4b",
+    "mobi",
+    "mp3",
+    "pdf",
+}
+GENERIC_WORDS = {"a", "an", "the", "book", "audiobook"}
+ROMAN_NUMERALS = {
+    "ii": "2",
+    "iii": "3",
+    "iv": "4",
+    "v": "5",
+    "vi": "6",
+    "vii": "7",
+    "viii": "8",
+    "ix": "9",
+    "x": "10",
+    "xi": "11",
+    "xii": "12",
+    "xiii": "13",
+    "xiv": "14",
+    "xv": "15",
+    "xvi": "16",
+    "xvii": "17",
+    "xviii": "18",
+    "xix": "19",
+    "xx": "20",
+}
+COLLECTION_PATTERN = re.compile(
+    r"\b(?:box(?:ed)?\s+set|omnibus|complete\s+series|collection|books?\s+\d+\s*[-–]\s*\d+)\b",
+    re.IGNORECASE,
+)
 
 
 def utc_now() -> str:
@@ -156,33 +210,47 @@ def public_settings(settings: dict[str, Any], has_token: bool) -> dict[str, Any]
 def normalize_text(value: Any) -> str:
     if value is None:
         return ""
-    value = str(value).lower()
-    replacements = {
-        "&": " and ",
-        "+": " and ",
-        "'": "",
-        "`": "",
-        "-": " ",
-        "_": " ",
-        ".": " ",
-        ",": " ",
-        ":": " ",
-        ";": " ",
-        "(": " ",
-        ")": " ",
-        "[": " ",
-        "]": " ",
-        "{": " ",
-        "}": " ",
-    }
-    for old, new in replacements.items():
-        value = value.replace(old, new)
-    words = [
-        word
-        for word in value.split()
-        if word not in {"a", "an", "the", "book", "audiobook"}
-    ]
+    value = (
+        html.unescape(str(value)).lower().replace("&", " and ").replace("+", " and ")
+    )
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(
+        character for character in value if not unicodedata.combining(character)
+    )
+    value = re.sub(r"['’`]", "", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    words = [ROMAN_NUMERALS.get(word, word) for word in value.split()]
+    words = [word for word in words if word not in GENERIC_WORDS]
     return " ".join(words)
+
+
+def normalize_identifier(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def normalize_title(value: Any) -> str:
+    return " ".join(
+        word for word in normalize_text(value).split() if word not in TITLE_NOISE
+    )
+
+
+def title_tokens(value: Any) -> set[str]:
+    return {word for word in normalize_title(value).split() if word}
+
+
+def token_similarity(left: Any, right: Any) -> float:
+    left_tokens = title_tokens(left)
+    right_tokens = title_tokens(right)
+    if not left_tokens and not right_tokens:
+        return 100.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    precision = intersection / len(right_tokens)
+    recall = intersection / len(left_tokens)
+    return (
+        100.0 * (2 * precision * recall / (precision + recall)) if intersection else 0.0
+    )
 
 
 def split_people(value: Any) -> list[str]:
@@ -210,13 +278,41 @@ def first_present(*values: Any) -> Any:
 
 
 def ratio(a: Any, b: Any) -> float:
-    a_norm = normalize_text(a)
-    b_norm = normalize_text(b)
+    a_norm = normalize_title(a)
+    b_norm = normalize_title(b)
     if not a_norm and not b_norm:
         return 100.0
     if not a_norm or not b_norm:
         return 0.0
     return difflib.SequenceMatcher(None, a_norm, b_norm).ratio() * 100.0
+
+
+def title_similarity(left: Any, right: Any) -> float:
+    # Do not reward pure containment here. A short title such as "Dune" is fully
+    # contained in "Dune Messiah", but they are different books. Known packaging
+    # suffixes are handled explicitly by title_match_variants instead.
+    return max(ratio(left, right), token_similarity(left, right))
+
+
+def title_match_variants(value: Any) -> list[str]:
+    raw = html.unescape(str(value or "")).strip()
+    if not raw:
+        return []
+    variants = [raw]
+    suffix_marker = re.compile(
+        r"\b(?:audio(?:book)?|abridged|unabridged|book|edition|series|saga|"
+        r"trilogy|vol(?:ume)?|narrated)\b",
+        re.IGNORECASE,
+    )
+    for match in re.finditer(r"\s*(?::|\s(?:-|\||\u2013|\u2014)\s)\s*", raw):
+        head = raw[: match.start()].strip()
+        tail = raw[match.end() :].strip()
+        if len(title_tokens(head)) >= 2 and suffix_marker.search(tail):
+            variants.append(head)
+    parenthetical = re.match(r"^(.*?)\s*[\(\[]([^\)\]]+)[\)\]]\s*$", raw)
+    if parenthetical and suffix_marker.search(parenthetical.group(2)):
+        variants.append(parenthetical.group(1).strip())
+    return list(dict.fromkeys(variant for variant in variants if variant))
 
 
 def best_people_ratio(left: Any, right: Any) -> float:
@@ -226,7 +322,11 @@ def best_people_ratio(left: Any, right: Any) -> float:
         return 100.0
     if not left_people or not right_people:
         return 0.0
-    return max(ratio(a, b) for a in left_people for b in right_people)
+    return max(
+        max(ratio(a, b), token_similarity(a, b))
+        for a in left_people
+        for b in right_people
+    )
 
 
 def year_score(left: Any, right: Any) -> float:
@@ -292,8 +392,10 @@ def item_title(item: dict[str, Any]) -> str:
 
 def item_author(item: dict[str, Any]) -> str:
     metadata = item_metadata(item)
-    return str(
-        first_present(metadata.get("authorName"), metadata.get("authors"), "") or ""
+    return ", ".join(
+        split_people(
+            first_present(metadata.get("authorName"), metadata.get("authors"), "")
+        )
     )
 
 
@@ -318,9 +420,134 @@ def candidate_series(candidate: dict[str, Any]) -> Any:
     return series
 
 
+def _series_entries(value: Any) -> list[tuple[str, str]]:
+    if not value:
+        return []
+    if not isinstance(value, list):
+        value = [value]
+    entries: list[tuple[str, str]] = []
+    for entry in value:
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or entry.get("series") or "").strip()
+            sequence = str(
+                entry.get("sequence") or entry.get("seq") or entry.get("number") or ""
+            ).strip()
+        else:
+            name = str(entry).strip()
+            sequence = ""
+        if name:
+            entries.append((name, normalize_identifier(sequence)))
+    return entries
+
+
+def item_series_entries(item: dict[str, Any]) -> list[tuple[str, str]]:
+    metadata = item_metadata(item)
+    entries = _series_entries(metadata.get("series"))
+    if entries:
+        return entries
+    name = first_present(metadata.get("seriesName"), metadata.get("series"))
+    sequence = first_present(
+        metadata.get("seriesSequence"),
+        metadata.get("sequence"),
+        metadata.get("seriesNumber"),
+    )
+    return _series_entries({"name": name, "sequence": sequence})
+
+
+def candidate_series_entries(candidate: dict[str, Any]) -> list[tuple[str, str]]:
+    return _series_entries(candidate.get("series"))
+
+
+def best_series_score(
+    left: list[tuple[str, str]], right: list[tuple[str, str]]
+) -> float | None:
+    if not left or not right:
+        return None
+    return max(title_similarity(a[0], b[0]) for a in left for b in right)
+
+
+def series_sequence_conflict(
+    left: list[tuple[str, str]], right: list[tuple[str, str]]
+) -> bool:
+    for left_name, left_sequence in left:
+        for right_name, right_sequence in right:
+            if (
+                left_sequence
+                and right_sequence
+                and title_similarity(left_name, right_name) >= 80
+                and left_sequence != right_sequence
+            ):
+                return True
+    return False
+
+
+def item_identifier(item: dict[str, Any], name: str) -> str:
+    metadata = item_metadata(item)
+    return normalize_identifier(
+        first_present(
+            metadata.get(name),
+            metadata.get(f"{name}13"),
+            metadata.get(f"{name}10"),
+        )
+    )
+
+
+def candidate_identifier(candidate: dict[str, Any], name: str) -> str:
+    return normalize_identifier(
+        first_present(
+            candidate.get(name),
+            candidate.get(f"{name}13"),
+            candidate.get(f"{name}10"),
+        )
+    )
+
+
+def title_values(item: dict[str, Any]) -> list[str]:
+    metadata = item_metadata(item)
+    title = item_title(item)
+    subtitle = str(metadata.get("subtitle") or "").strip()
+    values = [title]
+    if subtitle:
+        values.append(f"{title} {subtitle}")
+    raw_path = str(first_present(item.get("path"), item.get("relPath"), "") or "")
+    path_title = re.split(r"[/\\]", raw_path.rstrip("/\\"))[-1].strip()
+    if path_title and normalize_title(path_title) != normalize_title(title):
+        values.append(path_title)
+    return list(
+        dict.fromkeys(
+            variant
+            for value in values
+            for variant in title_match_variants(value)
+            if variant
+        )
+    )
+
+
+def candidate_title_values(candidate: dict[str, Any]) -> list[str]:
+    title = str(candidate.get("title") or "").strip()
+    subtitle = str(candidate.get("subtitle") or "").strip()
+    values = [title, f"{title} {subtitle}" if subtitle else title]
+    return list(
+        dict.fromkeys(
+            variant
+            for value in values
+            for variant in title_match_variants(value)
+            if variant
+        )
+    )
+
+
+def best_title_score(item: dict[str, Any], candidate: dict[str, Any]) -> float:
+    return max(
+        title_similarity(left, right)
+        for left in title_values(item)
+        for right in candidate_title_values(candidate)
+    )
+
+
 def title_token_gate(item_title_value: str, candidate_title_value: str) -> bool:
-    item_words = set(normalize_text(item_title_value).split())
-    candidate_words = set(normalize_text(candidate_title_value).split())
+    item_words = title_tokens(item_title_value)
+    candidate_words = title_tokens(candidate_title_value)
     if not item_words or not candidate_words:
         return True
     important = {word for word in item_words if len(word) >= 4}
@@ -341,41 +568,65 @@ def score_candidate(
 
     title = item_title(item)
     author = item_author(item)
-    series = first_present(metadata.get("seriesName"), metadata.get("series"))
     narrator = first_present(metadata.get("narratorName"), metadata.get("narrators"))
 
     candidate_title = candidate.get("title") or ""
-    parts = {
-        "title": ratio(title, candidate_title),
-        "author": best_people_ratio(author, candidate_author(candidate)),
-        "series": ratio(series, candidate_series(candidate))
-        if series or candidate_series(candidate)
-        else 100.0,
-        "narrator": best_people_ratio(narrator, candidate_narrator(candidate))
-        if narrator or candidate_narrator(candidate)
-        else 100.0,
-        "year": year_score(
-            metadata.get("publishedYear"), candidate.get("publishedYear")
+    candidate_author_value = candidate_author(candidate)
+    candidate_narrator_value = candidate_narrator(candidate)
+    item_series = item_series_entries(item)
+    result_series = candidate_series_entries(candidate)
+    item_year = metadata.get("publishedYear")
+    candidate_year = candidate.get("publishedYear")
+    item_duration = item.get("media", {}).get("duration")
+    candidate_duration = candidate.get("duration")
+    title_score = best_title_score(item, candidate)
+    parts: dict[str, float | None] = {
+        "title": title_score,
+        "author": (
+            best_people_ratio(author, candidate_author_value)
+            if author and candidate_author_value
+            else None
         ),
-        "duration": duration_score(
-            item.get("media", {}).get("duration"),
-            candidate.get("duration"),
-            int(matching.get("durationToleranceMinutes", 7)),
+        "series": best_series_score(item_series, result_series),
+        "narrator": (
+            best_people_ratio(narrator, candidate_narrator_value)
+            if narrator and candidate_narrator_value
+            else None
+        ),
+        "year": (
+            year_score(item_year, candidate_year)
+            if item_year and candidate_year
+            else None
+        ),
+        "duration": (
+            duration_score(
+                item_duration,
+                candidate_duration,
+                int(matching.get("durationToleranceMinutes", 7)),
+            )
+            if item_duration and candidate_duration
+            else None
         ),
     }
 
     if matching.get("requireTitleToken", True) and not title_token_gate(
         title, str(candidate_title)
     ):
-        parts["title"] = min(parts["title"], 35.0)
+        parts["title"] = min(float(parts["title"] or 0), 35.0)
 
-    if matching.get("requireAuthor", False) and parts["author"] < 70:
+    if (
+        matching.get("requireAuthor", False)
+        and parts["author"] is not None
+        and parts["author"] < 70
+    ):
         parts["author"] = 0.0
-        parts["title"] = min(parts["title"], 60.0)
+        parts["title"] = min(float(parts["title"] or 0), 60.0)
 
     total_weight = 0.0
     weighted = 0.0
     for key, value in parts.items():
+        if value is None:
+            continue
         weight = float(weights.get(key, 0) or 0)
         if weight <= 0:
             continue
@@ -383,10 +634,64 @@ def score_candidate(
         weighted += value * weight
     score = weighted / total_weight if total_weight else 0.0
 
+    exact_identifiers: list[str] = []
+    conflicts: list[str] = []
+    for name in ("asin", "isbn"):
+        left_identifier = item_identifier(item, name)
+        right_identifier = candidate_identifier(candidate, name)
+        if left_identifier and right_identifier:
+            if left_identifier == right_identifier:
+                exact_identifiers.append(name.upper())
+            else:
+                conflicts.append(f"{name.upper()} differs")
+    if exact_identifiers:
+        score = max(score, 99.0)
+
+    primary_title_score = max(
+        title_similarity(item_title(item), result_title)
+        for result_title in candidate_title_values(candidate)
+    )
+    if primary_title_score < 55 <= title_score:
+        conflicts.append("folder title and current ABS title disagree")
+    if series_sequence_conflict(item_series, result_series):
+        conflicts.append("series sequence differs")
+    item_collection = bool(COLLECTION_PATTERN.search(" ".join(title_values(item))))
+    candidate_collection = bool(
+        COLLECTION_PATTERN.search(" ".join(candidate_title_values(candidate)))
+    )
+    if item_collection != candidate_collection:
+        conflicts.append("collection/box-set status differs")
+    if parts["duration"] == 0.0:
+        conflicts.append("duration differs substantially")
+
+    signals: list[str] = []
+    if exact_identifiers:
+        signals.append("exact identifier")
+    for name, minimum in (
+        ("title", 92),
+        ("author", 90),
+        ("series", 90),
+        ("narrator", 90),
+        ("year", 80),
+        ("duration", 75),
+    ):
+        value = parts.get(name)
+        if value is not None and value >= minimum:
+            signals.append(name)
+
     return {
         "index": index,
         "score": round(score, 2),
-        "parts": {key: round(value, 2) for key, value in parts.items()},
+        "parts": {
+            key: round(value, 2) if value is not None else None
+            for key, value in parts.items()
+        },
+        "evidenceCount": sum(value is not None for value in parts.values()),
+        "strongSignals": signals,
+        "exactIdentifiers": exact_identifiers,
+        "conflicts": conflicts,
+        "search": deepcopy(candidate.get("_absidekickSearch") or {}),
+        "source": {"title": title, "author": author},
         "candidate": candidate,
     }
 
@@ -402,6 +707,77 @@ def rank_candidates(
     ]
     scored.sort(key=lambda row: row["score"], reverse=True)
     return scored
+
+
+def match_decision(
+    ranked: list[dict[str, Any]], settings: dict[str, Any]
+) -> dict[str, Any]:
+    matching = settings.get("matching", {})
+    if not ranked:
+        return {
+            "action": "unmatched",
+            "confidence": "none",
+            "margin": 0.0,
+            "reasons": ["no metadata candidates returned"],
+        }
+
+    best = ranked[0]
+    runner_score = float(ranked[1]["score"]) if len(ranked) > 1 else 0.0
+    margin = round(float(best["score"]) - runner_score, 2)
+    threshold = float(matching.get("threshold", 80))
+    review_floor = float(matching.get("reviewFloor", 65))
+    strict = bool(matching.get("strictAutoMatch", True))
+    title_minimum = float(matching.get("minimumTitleScore", 86))
+    author_minimum = float(matching.get("minimumAuthorScore", 78))
+    margin_minimum = float(matching.get("minimumWinnerMargin", 4))
+    signal_minimum = int(matching.get("minimumStrongSignals", 2))
+    parts = best.get("parts") or {}
+    reasons = list(best.get("conflicts") or [])
+
+    exact_identifier = bool(best.get("exactIdentifiers"))
+    if float(parts.get("title") or 0) < title_minimum and not exact_identifier:
+        reasons.append(f"title evidence is below {title_minimum:g}")
+    author_value = parts.get("author")
+    item_has_author = bool(item_author_from_scored(best))
+    candidate_has_author = bool(candidate_author(best.get("candidate") or {}))
+    if (
+        item_has_author
+        and candidate_has_author
+        and float(author_value or 0) < author_minimum
+    ):
+        reasons.append(f"author evidence is below {author_minimum:g}")
+    elif item_has_author and not candidate_has_author and not exact_identifier:
+        reasons.append("candidate has no author evidence")
+    if margin < margin_minimum and not exact_identifier:
+        reasons.append(f"winner margin is below {margin_minimum:g}")
+    if len(best.get("strongSignals") or []) < signal_minimum and not exact_identifier:
+        reasons.append(f"fewer than {signal_minimum} strong corroborating signals")
+
+    auto_allowed = float(best["score"]) >= threshold and (not strict or not reasons)
+    if auto_allowed:
+        return {
+            "action": "auto",
+            "confidence": "high",
+            "margin": margin,
+            "reasons": [],
+        }
+    if float(best["score"]) >= review_floor or exact_identifier:
+        return {
+            "action": "review",
+            "confidence": "review",
+            "margin": margin,
+            "reasons": list(dict.fromkeys(reasons)) or ["below automatic threshold"],
+        }
+    return {
+        "action": "unmatched",
+        "confidence": "low",
+        "margin": margin,
+        "reasons": list(dict.fromkeys(reasons)) or ["insufficient matching evidence"],
+    }
+
+
+def item_author_from_scored(scored: dict[str, Any]) -> str:
+    return str((scored.get("source") or {}).get("author") or "")
 
 
 def has_any(haystack: list[str], needles: list[str]) -> bool:
@@ -768,22 +1144,105 @@ def search_candidates(
     matching = settings.get("matching", {})
     title = item_title(item)
     author = item_author(item)
-    results = client.get(
-        "/api/search/books",
-        params={
-            "title": title,
-            "author": author,
-            "provider": connection.get("provider") or "google",
-        },
-    )
-    if not isinstance(results, list):
-        return []
     candidate_limit = max(1, int(matching.get("candidateLimit", 8)))
-    return [
-        candidate
-        for candidate in results[:candidate_limit]
-        if isinstance(candidate, dict)
+    primary_provider = str(connection.get("provider") or "audible")
+    adaptive = bool(matching.get("adaptiveSearch", True))
+
+    queries: list[tuple[str, str, str, str]] = [
+        (primary_provider, title, author, "precise title + author"),
     ]
+    if adaptive:
+        queries.append((primary_provider, title, "", "title only"))
+        clean_title = normalize_title(title)
+        if clean_title and clean_title != normalize_text(title):
+            queries.append(
+                (primary_provider, clean_title, author, "normalized title + author")
+            )
+        source_titles = title_values(item)
+        if len(source_titles) > 1:
+            path_title = source_titles[-1]
+            if normalize_title(path_title) != normalize_title(title):
+                queries.append(
+                    (primary_provider, path_title, author, "folder title + author")
+                )
+        fallback_providers = matching.get("fallbackProviders") or []
+        if isinstance(fallback_providers, str):
+            fallback_providers = [
+                value.strip()
+                for value in fallback_providers.split(",")
+                if value.strip()
+            ]
+        for provider in fallback_providers:
+            provider = str(provider).strip()
+            if provider in PROVIDERS and provider != primary_provider:
+                queries.extend(
+                    [
+                        (provider, title, author, "fallback title + author"),
+                        (provider, title, "", "fallback title only"),
+                    ]
+                )
+
+    candidates: dict[str, dict[str, Any]] = {}
+    seen_queries: set[tuple[str, str, str]] = set()
+    for provider, query_title, query_author, strategy in queries:
+        query_key = (
+            provider,
+            normalize_title(query_title),
+            normalize_text(query_author),
+        )
+        if query_key in seen_queries or not query_key[1]:
+            continue
+        seen_queries.add(query_key)
+        results = client.get(
+            "/api/search/books",
+            params={
+                "title": query_title,
+                "author": query_author,
+                "provider": provider,
+                "limit": candidate_limit,
+            },
+        )
+        if not isinstance(results, list):
+            results = []
+        for provider_rank, candidate in enumerate(results[:candidate_limit]):
+            if not isinstance(candidate, dict):
+                continue
+            candidate = deepcopy(candidate)
+            candidate["_absidekickSearch"] = {
+                "provider": provider,
+                "strategy": strategy,
+                "providerRank": provider_rank + 1,
+                "quickMatchEligible": (
+                    provider == primary_provider
+                    and strategy == "precise title + author"
+                    and provider_rank == 0
+                ),
+            }
+            identity = candidate_identity(candidate)
+            if identity not in candidates:
+                candidates[identity] = candidate
+
+        ranked = rank_candidates(item, list(candidates.values()), settings)
+        if match_decision(ranked, settings)["action"] == "auto":
+            break
+
+    ranked = rank_candidates(item, list(candidates.values()), settings)
+    return [row["candidate"] for row in ranked[:candidate_limit]]
+
+
+def candidate_identity(candidate: dict[str, Any]) -> str:
+    for name in ("asin", "isbn", "id", "bookId", "audibleId"):
+        value = normalize_identifier(candidate.get(name))
+        if value:
+            return f"{name}:{value}"
+    return "|".join(
+        (
+            normalize_title(candidate.get("title")),
+            normalize_text(candidate_author(candidate)),
+            normalize_identifier(candidate.get("publishedYear")),
+            normalize_identifier(candidate.get("duration")),
+        )
+    )
 
 
 def search_review_candidates(
@@ -852,6 +1311,7 @@ def search_review_candidates(
         },
         "candidates": candidates,
         "resultCount": len(candidates),
+        "decision": match_decision(ranked, settings),
     }
 
 
@@ -900,6 +1360,7 @@ def build_review_row(
     return {
         "item": summarize_item(item),
         "candidates": ranked[:candidate_limit],
+        "decision": match_decision(ranked, settings),
         "createdAt": utc_now(),
     }
 
@@ -1014,9 +1475,13 @@ def apply_match(
         return {"updated": False, "dryRun": True, "tags": new_tags}
 
     if apply_mode == "quick_match":
-        if matching.get("quickMatchFirstResultOnly", True) and scored.get("index") != 0:
+        search = candidate.get("_absidekickSearch") or {}
+        if matching.get("quickMatchFirstResultOnly", True) and not search.get(
+            "quickMatchEligible"
+        ):
             raise ABSAPIError(
-                "Quick match mode is limited to ABS's first provider result for safety"
+                "Quick match mode is limited to the first result from the exact "
+                "primary-provider search for safety"
             )
         client.post(
             f"/api/items/{item_id}/match",
@@ -1183,11 +1648,6 @@ class MatchJob:
                 self.stats["total"] = len(items)
             self.log("info", f"Loaded {len(items)} eligible item(s)")
 
-            threshold = float(self.settings.get("matching", {}).get("threshold", 80))
-            review_floor = float(
-                self.settings.get("matching", {}).get("reviewFloor", 65)
-            )
-
             for item in items:
                 self.wait_if_paused()
                 if self.cancel_event.is_set():
@@ -1210,8 +1670,9 @@ class MatchJob:
                     ranked = rank_candidates(item, candidates, self.settings)
                     best = ranked[0] if ranked else None
                     best_score = float(best["score"]) if best else 0.0
+                    decision = match_decision(ranked, self.settings)
 
-                    if best and best_score >= threshold:
+                    if best and decision["action"] == "auto":
                         apply_result = apply_match(
                             self.client, item, best, self.settings
                         )
@@ -1225,9 +1686,13 @@ class MatchJob:
                             author=author,
                             score=best_score,
                             candidate=best["candidate"].get("title"),
+                            confidence=decision["confidence"],
+                            margin=decision["margin"],
+                            signals=best.get("strongSignals", []),
+                            search=best.get("search", {}),
                             result=apply_result,
                         )
-                    elif best and best_score >= review_floor:
+                    elif best and decision["action"] == "review":
                         mark_unmatched(self.client, item, self.settings, review=True)
                         with self.lock:
                             self.stats["review"] += 1
@@ -1242,6 +1707,10 @@ class MatchJob:
                             author=author,
                             score=best_score,
                             candidate=best["candidate"].get("title"),
+                            reasons=decision["reasons"],
+                            margin=decision["margin"],
+                            signals=best.get("strongSignals", []),
+                            search=best.get("search", {}),
                         )
                     else:
                         mark_unmatched(self.client, item, self.settings, review=False)
@@ -1255,6 +1724,8 @@ class MatchJob:
                             author=author,
                             score=best_score,
                             candidate=best["candidate"].get("title") if best else None,
+                            reasons=decision["reasons"],
+                            margin=decision["margin"],
                         )
                     with self.lock:
                         self.stats["processed"] += 1
@@ -1307,6 +1778,7 @@ def preview_matches(
                 "tags": item_tags(item),
                 "best": ranked[0] if ranked else None,
                 "candidateCount": len(candidates),
+                "decision": match_decision(ranked, preview_settings),
             }
         )
     return {"totalEligible": len(items), "rows": rows}

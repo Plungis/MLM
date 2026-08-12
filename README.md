@@ -1,8 +1,8 @@
 # MyAnonaSuite
 
 MyAnonaSuite is a shared terminal-style home for MyAnonamouse and audiobook
-library tools. HeavyMLM and MAM-Spender are active modules; the ABSidekick
-workspace remains reserved for its future port.
+library tools. HeavyMLM, MAM-Spender, and ABSidekick are active, separately
+maintained modules inside one suite process.
 
 The suite shell and the three tools stay separated at the code boundary. Shared
 code is limited to navigation, theming, and explicit cross-module interfaces.
@@ -115,6 +115,13 @@ The suite switcher also includes the complete ABSidekick Audiobookshelf
 organizer. Its connection/config, targeting, weighted matching, dry-run and
 write modes, run controls, live logs, and review desk run inside the shared UI
 while remaining isolated under `mlm/modules/absidekick/`.
+
+ABSidekick uses high-precision, evidence-aware matching. It normalizes edition
+and format noise, uses identifiers and available author/series/narrator/year/
+duration evidence, searches broader terms and fallback providers when the first
+query is uncertain, and sends conflicts or close runner-up results to the
+Review Desk instead of writing them automatically. Missing provider fields are
+unknown evidence rather than automatic score penalties.
 
 ## Migrate legacy data
 

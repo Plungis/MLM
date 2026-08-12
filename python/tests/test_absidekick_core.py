@@ -1,11 +1,16 @@
 import unittest
+from copy import deepcopy
 
 from mlm.modules.absidekick.core import (
     DEFAULT_SETTINGS,
     add_remove_tags,
     build_review_row,
     candidate_metadata_payload,
+    match_decision,
+    normalize_title,
     rank_candidates,
+    score_candidate,
+    search_candidates,
     search_review_candidates,
     should_process_item,
     summarize_item,
@@ -37,6 +42,12 @@ def sample_item(tags=None):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_title_normalization_handles_edition_noise_unicode_and_roman_numbers(self):
+        self.assertEqual(
+            normalize_title("The Café—Book IV (Unabridged Audiobook Edition)"),
+            "cafe 4",
+        )
+
     def test_best_candidate_wins(self):
         candidates = [
             {
@@ -119,6 +130,159 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("title", payload)
         self.assertNotIn("authors", payload)
         self.assertEqual(payload["asin"], "B000123")
+
+    def test_sparse_provider_metadata_does_not_penalize_obvious_match(self):
+        ranked = rank_candidates(
+            sample_item(),
+            [{"title": "Wizard's First Rule", "author": "Terry Goodkind"}],
+            DEFAULT_SETTINGS,
+        )
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(ranked[0]["parts"]["year"], None)
+        self.assertEqual(ranked[0]["parts"]["duration"], None)
+        self.assertGreaterEqual(ranked[0]["score"], 99)
+        self.assertEqual(decision["action"], "auto")
+
+    def test_title_subtitle_and_unabridged_noise_still_match(self):
+        candidate = {
+            "title": "Wizard's First Rule: Sword of Truth, Book I",
+            "author": "Terry Goodkind",
+            "narrator": "Sam Tsoutsouvas",
+        }
+        scored = score_candidate(sample_item(), candidate, DEFAULT_SETTINGS)
+
+        self.assertGreaterEqual(scored["parts"]["title"], 92)
+        self.assertEqual(match_decision([scored], DEFAULT_SETTINGS)["action"], "auto")
+
+    def test_contained_but_different_title_is_not_automatched(self):
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "Dune Messiah"
+        item["media"]["metadata"]["authorName"] = "Frank Herbert"
+        ranked = rank_candidates(
+            item,
+            [{"title": "Dune", "author": "Frank Herbert"}],
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertLess(ranked[0]["parts"]["title"], 86)
+        self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "review")
+
+    def test_author_contradiction_forces_review_even_with_exact_title(self):
+        ranked = rank_candidates(
+            sample_item(),
+            [{"title": "Wizard's First Rule", "author": "A Different Author"}],
+            DEFAULT_SETTINGS,
+        )
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertTrue(
+            any("author evidence" in reason for reason in decision["reasons"])
+        )
+
+    def test_close_runner_up_blocks_automatic_write(self):
+        candidates = [
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "publishedYear": "1994",
+            },
+            {
+                "title": "Wizards First Rule: Special Edition",
+                "author": "Terry Goodkind",
+                "publishedYear": "1994",
+            },
+        ]
+        ranked = rank_candidates(sample_item(), candidates, DEFAULT_SETTINGS)
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertTrue(
+            any("winner margin" in reason for reason in decision["reasons"])
+        )
+
+    def test_exact_identifier_can_confirm_sparse_candidate(self):
+        item = sample_item()
+        item["media"]["metadata"]["asin"] = "B00-ABC-123"
+        ranked = rank_candidates(
+            item,
+            [{"title": "Wizards First Rule", "asin": "B00ABC123"}],
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertEqual(ranked[0]["exactIdentifiers"], ["ASIN"])
+        self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "auto")
+
+    def test_identifier_conflict_blocks_automatic_write(self):
+        item = sample_item()
+        item["media"]["metadata"]["asin"] = "B00ABC123"
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "asin": "B00WRONG",
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("ASIN differs", decision["reasons"])
+
+    def test_series_sequence_conflict_blocks_automatic_write(self):
+        item = sample_item()
+        item["media"]["metadata"]["series"] = [
+            {"name": "Sword of Truth", "sequence": "1"}
+        ]
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "series": [{"name": "Sword of Truth", "sequence": "2"}],
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("series sequence differs", decision["reasons"])
+
+    def test_adaptive_search_broadens_and_uses_fallback_provider(self):
+        class AdaptiveClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["provider"] == "google" and not params.get("author"):
+                    return [
+                        {
+                            "title": "Wizard's First Rule",
+                            "author": "Terry Goodkind",
+                        }
+                    ]
+                return []
+
+        client = AdaptiveClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["connection"]["provider"] = "audible"
+        candidates = search_candidates(client, sample_item(), settings)
+
+        self.assertEqual(candidates[0]["title"], "Wizard's First Rule")
+        self.assertTrue(
+            any(
+                query["provider"] == "audible" and not query.get("author")
+                for query in client.queries
+            )
+        )
+        self.assertTrue(any(query["provider"] == "google" for query in client.queries))
 
     def test_manual_review_search_uses_custom_terms_and_rescores_results(self):
         class SearchClient:

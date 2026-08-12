@@ -94,6 +94,16 @@ pause/resume/cancel, retries, live searchable logs, cover comparisons, and
 manual approve/reject workflow. Its state is stored in an `absidekick` folder
 beside the configured SQLite database, separate from HeavyMLM and MAM-Spender.
 
+High-precision matching is enabled by default. The engine normalizes Unicode,
+punctuation, file formats, edition labels, and recognized series packaging;
+compares only metadata present on both sides; treats exact ASIN/ISBN matches as
+strong evidence; and blocks automatic writes on contradictory identifiers,
+authors, series positions, collection status, duration, or an ambiguous
+runner-up. Adaptive search retries title-only and normalized queries, then the
+configured fallback providers. Every decision, evidence signal, search source,
+and conflict is visible in previews, logs, and the Review Desk. These safeguards
+and their thresholds can be changed live on the Matching screen.
+
 ## Publish the request portal on a custom domain
 
 The Configuration screen can enable a separate request portal without exposing

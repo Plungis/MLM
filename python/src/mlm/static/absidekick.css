@@ -542,6 +542,49 @@ select:focus {
   text-transform: uppercase;
 }
 
+.evidence-line,
+.conflict-line,
+.confidence-line {
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.evidence-line,
+.confidence-line.high {
+  color: var(--accent);
+}
+
+.conflict-line,
+.confidence-line.review,
+.confidence-line.low {
+  color: var(--warning);
+}
+
+.match-decision {
+  align-items: center;
+  background: rgba(3, 16, 8, 0.72);
+  border-left: 3px solid var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  margin-bottom: 0.85rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.match-decision.high {
+  border-left-color: var(--accent);
+}
+
+.match-decision.review,
+.match-decision.low {
+  border-left-color: var(--warning);
+}
+
+.match-decision span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .card-label,
 .candidate-pick span,
 .source-score,

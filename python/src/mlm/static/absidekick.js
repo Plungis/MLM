@@ -37,6 +37,8 @@ const checkboxIds = [
   "skipMissingItems",
   "skipInvalidItems",
   "overwriteMetadata",
+  "adaptiveSearch",
+  "strictAutoMatch",
   "quickMatchFirstResultOnly",
   "requireAuthor",
   "requireTitleToken",
@@ -169,6 +171,11 @@ function setForm(settings) {
   $("reviewFloor").value = matching.reviewFloor ?? 65;
   $("candidateLimit").value = matching.candidateLimit ?? 8;
   $("durationToleranceMinutes").value = matching.durationToleranceMinutes ?? 7;
+  $("minimumTitleScore").value = matching.minimumTitleScore ?? 86;
+  $("minimumAuthorScore").value = matching.minimumAuthorScore ?? 78;
+  $("minimumWinnerMargin").value = matching.minimumWinnerMargin ?? 6;
+  $("minimumStrongSignals").value = matching.minimumStrongSignals ?? 2;
+  $("fallbackProviders").value = arrayToCsv(matching.fallbackProviders || ["google", "openlibrary"]);
   $("applyMode").value = matching.applyMode || "metadata_patch";
   $("coverMode").value = matching.coverMode || "if_missing";
 
@@ -239,6 +246,13 @@ function getSettingsFromForm() {
       threshold: Number($("threshold").value || 80),
       reviewFloor: Number($("reviewFloor").value || 65),
       candidateLimit: Number($("candidateLimit").value || 8),
+      adaptiveSearch: $("adaptiveSearch").checked,
+      fallbackProviders: csvToArray($("fallbackProviders").value),
+      strictAutoMatch: $("strictAutoMatch").checked,
+      minimumTitleScore: Number($("minimumTitleScore").value || 86),
+      minimumAuthorScore: Number($("minimumAuthorScore").value || 78),
+      minimumWinnerMargin: Number($("minimumWinnerMargin").value || 6),
+      minimumStrongSignals: Number($("minimumStrongSignals").value || 2),
       applyMode: $("applyMode").value,
       overwriteMetadata: $("overwriteMetadata").checked,
       coverMode: $("coverMode").value,
@@ -379,6 +393,7 @@ function renderPreview(preview) {
       .map((row) => {
         const best = row.best;
         const candidate = best?.candidate || {};
+        const decision = row.decision || {};
         return `
           <div class="preview-row">
             <div><strong>${escapeHtml(row.title)}</strong> <span class="meta">${escapeHtml(row.author || "")}</span></div>
@@ -387,6 +402,7 @@ function renderPreview(preview) {
                 ? `<div><span class="score">${best.score}</span> | ${escapeHtml(candidate.title || "Untitled")} | ${escapeHtml(candidate.author || "")}</div>`
                 : "<div>No candidates returned</div>"
             }
+            <div class="confidence-line ${escapeHtml(decision.confidence || "none")}">${escapeHtml(decision.action || "unmatched")} · margin ${escapeHtml(decision.margin ?? 0)}${decision.reasons?.length ? ` · ${escapeHtml(decision.reasons.join("; "))}` : ""}</div>
             ${best?.parts ? `<div class="meta">Title ${best.parts.title} | Author ${best.parts.author} | Year ${best.parts.year} | Duration ${best.parts.duration}</div>` : ""}
           </div>
         `;
@@ -475,6 +491,8 @@ function renderCandidateCard(scored, rowIndex, candidateIndex) {
         ${authorInfo.matches ? `<strong>Author match ${Math.round(authorInfo.score)}</strong>` : `<em>Author ${Math.round(authorInfo.score)}</em>`}
       </div>
       <div class="match-score"><span class="score">${scored.score}</span> match score</div>
+      ${scored.strongSignals?.length ? `<div class="evidence-line">Strong: ${escapeHtml(scored.strongSignals.join(", "))}</div>` : ""}
+      ${scored.conflicts?.length ? `<div class="conflict-line">Check: ${escapeHtml(scored.conflicts.join("; "))}</div>` : ""}
       <details>
         <summary>More match info</summary>
         ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}
@@ -501,6 +519,18 @@ function renderScoreParts(parts) {
       <span>Narrator ${parts.narrator ?? "-"}</span>
       <span>Year ${parts.year ?? "-"}</span>
       <span>Duration ${parts.duration ?? "-"}</span>
+    </div>
+  `;
+}
+
+function renderMatchDecision(decision) {
+  if (!decision) return "";
+  const reasons = decision.reasons || [];
+  return `
+    <div class="match-decision ${escapeHtml(decision.confidence || "none")}">
+      <strong>${decision.action === "auto" ? "High-confidence match" : decision.action === "review" ? "Human review required" : "Insufficient evidence"}</strong>
+      <span>Winner margin ${escapeHtml(decision.margin ?? 0)}</span>
+      ${reasons.length ? `<span>${escapeHtml(reasons.join(" · "))}</span>` : ""}
     </div>
   `;
 }
@@ -602,6 +632,7 @@ function renderReviewDesk() {
               <button type="button" class="danger" data-review-action="reject" data-row="${rowIndex}">Reject</button>
             </div>
           </div>
+          ${renderMatchDecision(row.decision)}
           ${renderReviewSearch(row, rowIndex)}
           <div class="compare-grid">
             ${renderCurrentBookCard(item)}
@@ -719,6 +750,7 @@ async function searchReview(rowIndex, form) {
     const candidates = payload.candidates || [];
     row.item = payload.item || row.item;
     row.candidates = mergeReviewCandidates(candidates, row.candidates || []);
+    row.decision = payload.decision || row.decision;
     search.message = candidates.length
       ? `Added ${candidates.length} result(s) from ${search.provider}. Select a card below, then approve it.`
       : `No results from ${search.provider}. Try fewer title words, clear the author, or choose another provider.`;
