@@ -97,3 +97,5 @@ def test_absidekick_review_search_uses_normal_service_connection(
     assert result["resultCount"] == 1
     assert result["query"]["limit"] == 12
     assert result["candidates"][0]["candidate"]["title"] == "The Book"
+    assert result["manualMatch"]["bestCandidate"]["candidate"]["title"] == "The Book"
+    assert result["manualMatch"]["status"] == result["decision"]["action"]

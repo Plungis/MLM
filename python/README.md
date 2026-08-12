@@ -105,6 +105,13 @@ signal, search source, and conflict is visible in previews, logs, and the Review
 Desk. These safeguards and their thresholds can be changed live on the Matching
 screen.
 
+Within the Review Desk, expand **Research this match manually**, edit the title,
+author, provider, or result limit, and select **Search Now**. The row remains
+open while searching and reports whether the edited fields produced a confident
+match, review-only candidates, no results, or an error. Candidates can be
+selected and approved directly, or the item can be rejected without leaving the
+review.
+
 For speed and rate-limit safety, automatic fallback providers are disabled by
 default. The primary provider gets one precise search; only an empty response
 can trigger a cleaned/title-only retry. Leading track/disc numbers are removed

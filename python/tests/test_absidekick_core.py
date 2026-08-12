@@ -438,6 +438,70 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(result["candidates"][0]["searchSource"], "manual")
         self.assertEqual(result["candidates"][0]["searchProvider"], "openlibrary")
         self.assertEqual(result["item"]["id"], "li_test")
+        self.assertEqual(result["manualMatch"]["status"], result["decision"]["action"])
+        self.assertIs(
+            result["manualMatch"]["isConfidentMatch"],
+            result["decision"]["action"] == "auto",
+        )
+        self.assertEqual(
+            result["manualMatch"]["bestCandidate"]["candidate"]["title"],
+            "Wizards First Rule",
+        )
+
+    def test_manual_review_search_explicitly_reports_no_match(self):
+        class EmptySearchClient:
+            def get(self, path, params=None):
+                if path == "/api/items/li_test":
+                    return sample_item(["ABSidekick: Needs Review"])
+                if path == "/api/search/books":
+                    return []
+                raise AssertionError(path)
+
+        result = search_review_candidates(
+            EmptySearchClient(),
+            "li_test",
+            {"title": "missing book", "provider": "google"},
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertEqual(result["resultCount"], 0)
+        self.assertEqual(result["manualMatch"]["status"], "unmatched")
+        self.assertFalse(result["manualMatch"]["isConfidentMatch"])
+        self.assertTrue(result["manualMatch"]["requiresReview"])
+        self.assertIsNone(result["manualMatch"]["bestCandidate"])
+        self.assertIn("No metadata candidates", result["manualMatch"]["message"])
+
+    def test_manual_review_search_scores_against_edited_fields(self):
+        class EditedSearchClient:
+            def get(self, path, params=None):
+                if path == "/api/items/li_test":
+                    return sample_item(["ABSidekick: Needs Review"])
+                if path == "/api/search/books":
+                    return [
+                        {"title": "A Completely Different Book", "author": "New Author"},
+                        {"title": "Wizard's First Rule", "author": "Terry Goodkind"},
+                    ]
+                raise AssertionError(path)
+
+        result = search_review_candidates(
+            EditedSearchClient(),
+            "li_test",
+            {
+                "title": "A Completely Different Book",
+                "author": "New Author",
+                "provider": "google",
+            },
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertEqual(
+            result["candidates"][0]["candidate"]["title"],
+            "A Completely Different Book",
+        )
+        self.assertEqual(
+            result["manualMatch"]["scoredAgainst"],
+            {"title": "A Completely Different Book", "author": "New Author"},
+        )
 
     def test_manual_review_search_rejects_unknown_provider(self):
         with self.assertRaisesRegex(ValueError, "unknown Audiobookshelf"):

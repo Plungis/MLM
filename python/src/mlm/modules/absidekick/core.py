@@ -1393,8 +1393,20 @@ def search_review_candidates(
     )
     if search_error:
         raise ValueError(f"{provider} metadata search failed: {search_error}")
+    scoring_item = deepcopy(item)
+    scoring_media = scoring_item.setdefault("media", {})
+    if not isinstance(scoring_media, dict):
+        scoring_media = {}
+        scoring_item["media"] = scoring_media
+    scoring_metadata = scoring_media.setdefault("metadata", {})
+    if not isinstance(scoring_metadata, dict):
+        scoring_metadata = {}
+        scoring_media["metadata"] = scoring_metadata
+    scoring_metadata["title"] = title
+    scoring_metadata["authorName"] = author
+    scoring_metadata.pop("authors", None)
     ranked = rank_candidates(
-        item,
+        scoring_item,
         [candidate for candidate in results if isinstance(candidate, dict)][:limit],
         settings,
     )
@@ -1406,6 +1418,20 @@ def search_review_candidates(
         }
         for scored in ranked
     ]
+    decision = match_decision(ranked, settings)
+    best_candidate = candidates[0] if candidates else None
+    if decision["action"] == "auto":
+        outcome_message = "This result passes the automatic matching policy."
+    elif candidates:
+        outcome_message = (
+            "No result passed the automatic matching policy. Review the candidates "
+            "and approve one manually, or reject this item."
+        )
+    else:
+        outcome_message = (
+            "No metadata candidates were returned. Change the search terms or "
+            "provider, or reject this item."
+        )
     return {
         "item": summarize_item(item),
         "query": {
@@ -1416,7 +1442,15 @@ def search_review_candidates(
         },
         "candidates": candidates,
         "resultCount": len(candidates),
-        "decision": match_decision(ranked, settings),
+        "decision": decision,
+        "manualMatch": {
+            "status": decision["action"],
+            "isConfidentMatch": decision["action"] == "auto",
+            "requiresReview": decision["action"] != "auto",
+            "message": outcome_message,
+            "bestCandidate": best_candidate,
+            "scoredAgainst": {"title": title, "author": author},
+        },
     }
 
 

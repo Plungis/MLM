@@ -478,9 +478,9 @@ function authorMatchInfo(scored) {
   };
 }
 
-function renderCandidateCard(scored, rowIndex, candidateIndex) {
+function renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex = 0) {
   const candidate = scored.candidate || {};
-  const checked = candidateIndex === 0 ? "checked" : "";
+  const checked = candidateIndex === selectedIndex ? "checked" : "";
   const meta = [candidateSeries(candidate), candidateNarrator(candidate), candidate.publishedYear].filter(Boolean).join(" | ");
   const author = candidateAuthor(candidate) || "Unknown author";
   const authorInfo = authorMatchInfo(scored);
@@ -550,11 +550,68 @@ function reviewSearchState(row) {
       limit: 20,
       open: false,
       loading: false,
-      message: "",
       error: "",
+      result: null,
     };
   }
   return row.manualSearch;
+}
+
+function renderManualSearchOutcome(row, rowIndex) {
+  const search = reviewSearchState(row);
+  if (search.loading) {
+    return `
+      <div class="manual-search-outcome searching" data-manual-search-outcome role="status" aria-live="polite">
+        <div>
+          <strong><span class="search-pulse" aria-hidden="true"></span>SEARCHING NOW</strong>
+          <span>Checking ${escapeHtml(search.provider)} for “${escapeHtml(search.title || "all titles")}”. This review stays open while results load.</span>
+        </div>
+      </div>
+    `;
+  }
+  if (search.error) {
+    return `
+      <div class="manual-search-outcome error" data-manual-search-outcome role="alert">
+        <div><strong>SEARCH FAILED</strong><span>${escapeHtml(search.error)}</span></div>
+        <div class="manual-search-actions"><button type="button" class="danger" data-review-action="reject" data-row="${rowIndex}">Reject Item</button></div>
+      </div>
+    `;
+  }
+  const result = search.result;
+  if (!result) {
+    return `
+      <div class="manual-search-outcome idle" data-manual-search-outcome aria-live="polite">
+        <div><strong>READY TO RESEARCH</strong><span>The search runs here. This row will remain open and report whether it found a confident match.</span></div>
+      </div>
+    `;
+  }
+
+  const resultCount = Number(result.resultCount || 0);
+  const confident = Boolean(result.isConfidentMatch);
+  const hasCandidates = resultCount > 0;
+  const heading = confident ? "MATCH FOUND" : hasCandidates ? "NO CONFIDENT MATCH — REVIEW RESULTS" : "NO MATCH FOUND";
+  const className = confident ? "match" : hasCandidates ? "review" : "unmatched";
+  const best = result.bestCandidate || null;
+  const candidate = best?.candidate || {};
+  const bestLine = best
+    ? `<span class="manual-best">Best result: <b>${escapeHtml(candidate.title || "Untitled")}</b>${candidateAuthor(candidate) ? ` by ${escapeHtml(candidateAuthor(candidate))}` : ""} · score ${escapeHtml(best.score ?? "-")}</span>`
+    : "";
+  const reasons = result.decision?.reasons || [];
+  return `
+    <div class="manual-search-outcome ${className}" data-manual-search-outcome role="status" aria-live="polite">
+      <div>
+        <strong>${heading}</strong>
+        <span>${escapeHtml(result.message || "Search completed.")}</span>
+        ${bestLine}
+        ${reasons.length ? `<span class="manual-reasons">Policy: ${escapeHtml(reasons.join(" · "))}</span>` : ""}
+        <span class="manual-result-meta">${resultCount} result${resultCount === 1 ? "" : "s"} returned by ${escapeHtml(search.provider)}</span>
+      </div>
+      <div class="manual-search-actions">
+        ${hasCandidates ? `<button type="button" data-review-action="approve" data-row="${rowIndex}">Approve Selected Match</button>` : ""}
+        <button type="button" class="danger" data-review-action="reject" data-row="${rowIndex}">Reject Item</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderReviewSearch(row, rowIndex) {
@@ -562,15 +619,11 @@ function renderReviewSearch(row, rowIndex) {
   const options = REVIEW_PROVIDERS.map(
     (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${provider}</option>`,
   ).join("");
-  const feedback = search.error
-    ? `<div class="review-search-feedback error">${escapeHtml(search.error)}</div>`
-    : search.message
-      ? `<div class="review-search-feedback success">${escapeHtml(search.message)}</div>`
-      : "";
+  const keepOpen = search.open || search.loading || search.result || search.error;
   return `
-    <details class="review-search"${search.open ? " open" : ""}>
-      <summary>Search for another match</summary>
-      <p class="meta">Simplify the title, clear the author, or switch providers to broaden the Audiobookshelf metadata search. New results are added ahead of the original suggestions.</p>
+    <details class="review-search"${keepOpen ? " open" : ""}>
+      <summary>Research this match manually</summary>
+      <p class="meta">Edit the fields and search now. Results appear here without closing the review; a confident result is identified, while uncertain results remain available for your decision.</p>
       <form class="review-search-form" data-review-search-form data-row="${rowIndex}">
         <label class="field">
           <span>Title</span>
@@ -588,9 +641,9 @@ function renderReviewSearch(row, rowIndex) {
           <span>Results</span>
           <input type="number" name="limit" value="${Number(search.limit) || 20}" min="1" max="30" />
         </label>
-        <button type="submit"${search.loading ? " disabled" : ""}>${search.loading ? "Searching…" : "Search ABS"}</button>
+        <button type="submit"${search.loading ? " disabled" : ""}>${search.loading ? "Searching…" : "Search Now"}</button>
       </form>
-      ${feedback}
+      ${renderManualSearchOutcome(row, rowIndex)}
     </details>
   `;
 }
@@ -614,8 +667,17 @@ function mergeReviewCandidates(manualCandidates, existingCandidates) {
   });
 }
 
-function renderReviewDesk() {
+function selectedCandidateIndex(row) {
+  const candidates = row.candidates || [];
+  if (!row.selectedCandidateIdentity) return 0;
+  const index = candidates.findIndex((candidate) => candidateIdentity(candidate) === row.selectedCandidateIdentity);
+  return index >= 0 ? index : 0;
+}
+
+function renderReviewDesk({ preserveRow = null } = {}) {
   const root = $("reviewDesk");
+  const oldRow = preserveRow === null ? null : root.querySelector(`[data-review-row="${preserveRow}"]`);
+  const oldTop = oldRow?.getBoundingClientRect().top;
   const rows = appState.reviewRows || [];
   if (!rows.length) {
     root.innerHTML = '<div class="note">No review items loaded. Scan review tags or run automatch to build this queue.</div>';
@@ -625,8 +687,9 @@ function renderReviewDesk() {
     .map((row, rowIndex) => {
       const item = row.item || {};
       const candidates = row.candidates || [];
+      const selectedIndex = selectedCandidateIndex(row);
       return `
-        <article class="review-item">
+        <article class="review-item" data-review-row="${rowIndex}">
           <div class="review-item-head">
             <div>
               <p class="eyebrow">Review #${rowIndex + 1}</p>
@@ -645,14 +708,18 @@ function renderReviewDesk() {
             ${renderCurrentBookCard(item)}
             ${
               candidates.length
-                ? candidates.map((scored, candidateIndex) => renderCandidateCard(scored, rowIndex, candidateIndex)).join("")
-                : '<div class="note">No candidates came back for this item. Reject it or adjust search settings and scan again.</div>'
+                ? candidates.map((scored, candidateIndex) => renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex)).join("")
+                : '<div class="note">No candidates are available yet. Use the manual research fields above now, or reject this item.</div>'
             }
           </div>
         </article>
       `;
     })
     .join("");
+  if (oldTop !== undefined) {
+    const newRow = root.querySelector(`[data-review-row="${preserveRow}"]`);
+    if (newRow) window.scrollBy(0, newRow.getBoundingClientRect().top - oldTop);
+  }
 }
 
 async function scanReview() {
@@ -736,9 +803,19 @@ async function searchReview(rowIndex, form) {
   search.limit = Number(formData.get("limit") || 20);
   search.open = true;
   search.loading = true;
-  search.message = "";
   search.error = "";
-  renderReviewDesk();
+  search.result = null;
+  const searchPanel = form.closest(".review-search");
+  if (searchPanel) {
+    searchPanel.open = true;
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Searching…";
+    }
+    const outcome = searchPanel.querySelector("[data-manual-search-outcome]");
+    if (outcome) outcome.outerHTML = renderManualSearchOutcome(row, rowIndex);
+  }
   try {
     const payload = await api("/api/review/search", {
       method: "POST",
@@ -758,16 +835,28 @@ async function searchReview(rowIndex, form) {
     row.item = payload.item || row.item;
     row.candidates = mergeReviewCandidates(candidates, row.candidates || []);
     row.decision = payload.decision || row.decision;
-    search.message = candidates.length
-      ? `Added ${candidates.length} result(s) from ${search.provider}. Select a card below, then approve it.`
-      : `No results from ${search.provider}. Try fewer title words, clear the author, or choose another provider.`;
-    showToast(candidates.length ? `Found ${candidates.length} additional candidate(s)` : "No additional candidates found");
+    if (candidates.length) {
+      row.selectedCandidateIdentity = candidateIdentity(candidates[0]);
+    }
+    search.result = {
+      ...(payload.manualMatch || {}),
+      decision: payload.decision || null,
+      resultCount: Number(payload.resultCount ?? candidates.length),
+      bestCandidate: payload.manualMatch?.bestCandidate || candidates[0] || null,
+    };
+    const verdict = search.result.isConfidentMatch
+      ? "Confident match found"
+      : candidates.length
+        ? "Results need your review"
+        : "No match found";
+    showToast(verdict);
   } catch (error) {
     search.error = `${error.message}. Try broader terms or another provider.`;
-    throw error;
+    search.result = null;
+    showToast("Manual search failed — details remain open below");
   } finally {
     search.loading = false;
-    renderReviewDesk();
+    renderReviewDesk({ preserveRow: rowIndex });
   }
 }
 
@@ -903,6 +992,14 @@ function wireEvents() {
     if (!form) return;
     event.preventDefault();
     searchReview(Number(form.dataset.row), form).catch((error) => showToast(error.message));
+  });
+  $("reviewDesk").addEventListener("change", (event) => {
+    const radio = event.target.closest('input[type="radio"][name^="review-"]');
+    if (!radio) return;
+    const rowIndex = Number(radio.name.slice("review-".length));
+    const row = appState.reviewRows[rowIndex];
+    const candidate = row?.candidates?.[Number(radio.value)];
+    if (row && candidate) row.selectedCandidateIdentity = candidateIdentity(candidate);
   });
   ["logSearch", "logLevel", "logSort", "logDirection", "logPageSize"].forEach((id) => {
     $(id).addEventListener("input", () => {

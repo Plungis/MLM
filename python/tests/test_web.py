@@ -136,14 +136,20 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Beta V.91.1 integrated" in absidekick.text
     assert "Run Controls" in absidekick.text
     assert "Live Log" in absidekick.text
-    assert "Search for another match" in absidekick.text
+    assert "manual search" in absidekick.text.lower()
+    assert '<div id="settingsForm">' in absidekick.text
+    assert '<form id="settingsForm">' not in absidekick.text
     assert 'id="searchTimeoutSeconds"' in absidekick.text
     assert 'id="automaticFallbackProviders"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b33"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b33"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b34"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b34"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
+    assert "MATCH FOUND" in absidekick_script.text
+    assert "NO CONFIDENT MATCH" in absidekick_script.text
+    assert "NO MATCH FOUND" in absidekick_script.text
+    assert "data-manual-search-outcome" in absidekick_script.text
     for page in (
         "run",
         "review",
@@ -197,7 +203,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b33" in spender_config.text
+    assert "0.5.0b34" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text

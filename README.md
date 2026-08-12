@@ -123,6 +123,11 @@ query is uncertain, and sends conflicts or close runner-up results to the
 Review Desk instead of writing them automatically. Missing provider fields are
 unknown evidence rather than automatic score penalties.
 
+Manual Review Desk searches stay open and report a clear verdict in place:
+confident match, candidates requiring review, no match, or search failure. The
+verdict is scored against the reviewer-edited title and author, and returned
+candidates remain selectable with explicit approve and reject actions.
+
 Automatic metadata searches are bounded and fail fast. Common track-number
 prefixes are removed before searching, broader primary-provider queries run
 only after an empty result, and cross-provider fallbacks are opt-in. Metadata

@@ -446,6 +446,103 @@ select:focus {
   color: var(--accent);
 }
 
+.manual-search-outcome {
+  align-items: center;
+  background: rgba(2, 15, 8, 0.72);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--muted);
+  border-radius: var(--radius);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.manual-search-outcome > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.manual-search-outcome strong {
+  color: var(--text);
+  letter-spacing: 0.045em;
+}
+
+.manual-search-outcome span {
+  color: var(--muted);
+  display: block;
+  font-size: 0.84rem;
+}
+
+.manual-search-outcome.match {
+  background: color-mix(in srgb, var(--accent) 10%, rgba(2, 15, 8, 0.9));
+  border-left-color: var(--accent);
+}
+
+.manual-search-outcome.match strong,
+.manual-search-outcome.match .manual-best b {
+  color: var(--accent);
+}
+
+.manual-search-outcome.review,
+.manual-search-outcome.unmatched {
+  border-left-color: var(--warning);
+}
+
+.manual-search-outcome.review strong,
+.manual-search-outcome.unmatched strong {
+  color: var(--warning);
+}
+
+.manual-search-outcome.error {
+  border-left-color: var(--danger);
+}
+
+.manual-search-outcome.error strong {
+  color: var(--danger);
+}
+
+.manual-search-outcome.searching {
+  border-left-color: #54c7e6;
+}
+
+.manual-search-outcome.searching strong {
+  color: #9eeeff;
+}
+
+.manual-best {
+  color: var(--text) !important;
+  margin-top: 0.2rem;
+}
+
+.manual-reasons,
+.manual-result-meta {
+  font-size: 0.76rem !important;
+}
+
+.manual-search-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.search-pulse {
+  animation: search-pulse 1s ease-in-out infinite;
+  background: #9eeeff;
+  border-radius: 999px;
+  display: inline-block !important;
+  height: 0.55rem;
+  margin-right: 0.5rem;
+  width: 0.55rem;
+}
+
+@keyframes search-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(158, 238, 255, 0.42); opacity: 0.7; }
+  50% { box-shadow: 0 0 0 0.35rem rgba(158, 238, 255, 0); opacity: 1; }
+}
+
 .compare-grid {
   display: grid;
   gap: 0.75rem;
@@ -723,7 +820,7 @@ select:focus {
   z-index: 10;
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 1400px) {
   .status-grid,
   .grid.four,
   .grid.six {
@@ -781,6 +878,15 @@ select:focus {
 
   .review-search-form {
     grid-template-columns: 1fr;
+  }
+
+  .manual-search-outcome {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .manual-search-actions {
+    flex-wrap: wrap;
   }
 }
 }
