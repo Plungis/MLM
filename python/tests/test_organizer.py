@@ -74,22 +74,6 @@ class NestedJsonMam(FakeMam):
         return row
 
 
-class CollectionQbit(FakeQbit):
-    async def files(self, _: str) -> list[dict]:
-        return [
-            {"name": "Complete Collection/Book One/one.m4b"},
-            {"name": "Complete Collection/Book Two/two.m4b"},
-        ]
-
-
-class CollectionMam(FakeMam):
-    async def get_torrent_info(self, torrent_hash: str) -> dict:
-        row = await super().get_torrent_info(torrent_hash)
-        row["title"] = "Complete Collection"
-        row["numfiles"] = 2
-        return row
-
-
 class MixedQbit(FakeQbit):
     async def torrents(self, *, category: str | None = None) -> list[dict]:
         self.requested_categories.append(category)
@@ -272,147 +256,65 @@ def test_organizer_reports_already_existing_library_items(tmp_path: Path) -> Non
     assert final_context["already_existing"] == 1
 
 
-def test_organizer_splits_collection_into_individual_books(tmp_path: Path) -> None:
+def test_organizer_does_not_reprocess_beta_29_collection_records(
+    tmp_path: Path,
+) -> None:
     downloads = tmp_path / "downloads"
-    for relative, contents in (
-        ("Complete Collection/Book One/one.m4b", b"book one"),
-        ("Complete Collection/Book Two/two.m4b", b"book two"),
-    ):
-        source = downloads / relative
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_bytes(contents)
+    downloads.mkdir()
     database = tmp_path / "data.sqlite3"
     ensure_database(database)
     repository = Repository(database)
-    library_root = tmp_path / "library"
+    repository.record_linked(
+        {
+            "id": "abc123",
+            "mam_id": 88,
+            "title_search": "collection",
+            "created_at": "2026-08-10T00:00:00+00:00",
+            "library_path": None,
+            "library_files": [],
+            "collection_items": [
+                {"title": "Book One", "library_path": "E:/Books/Book One"},
+                {"title": "Book Two", "library_path": "E:/Books/Book Two"},
+            ],
+            "meta": {"title": "Collection", "authors": ["An Author"]},
+        },
+        88,
+    )
     config = Config(
         mam_id="cookie",
         qbittorrent=(QbitConfig(url="http://qbit"),),
         libraries=(
             {
                 "category": "Audiobooks",
-                "library_dir": str(library_root),
+                "library_dir": str(tmp_path / "library"),
                 "method": "copy",
             },
         ),
     )
     progress: list[tuple[str, str, dict | None]] = []
-    qbit = CollectionQbit(downloads)
 
-    first = asyncio.run(
+    result = asyncio.run(
         organize_completed(
             config,
             repository,
             config.qbittorrent[0],
-            qbit,
-            CollectionMam(),
+            FakeQbit(downloads),
+            FakeMam(),
             progress=lambda message, level, context: progress.append(
                 (message, level, context)
             ),
         )
     )
 
-    first_path = library_root / "An Author" / "Book One {A Narrator}" / "one.m4b"
-    second_path = library_root / "An Author" / "Book Two {A Narrator}" / "two.m4b"
-    assert first.linked == 2
-    assert first.collections == 1
-    assert first_path.read_bytes() == b"book one"
-    assert second_path.read_bytes() == b"book two"
-    stored = repository.torrent("abc123")
-    assert stored is not None
-    assert stored["library_path"] is None
-    assert [item["title"] for item in stored["collection_items"]] == [
-        "Book One",
-        "Book Two",
-    ]
+    assert result.linked == 0
+    assert result.already_existing == 1
+    assert not (tmp_path / "library").exists()
     assert any(
-        message == "Collection detected: 2 individual books from folders"
-        for message, _, _ in progress
-    )
-    assert any(message.startswith("[Book 2/2]") for message, _, _ in progress)
-
-    second = asyncio.run(
-        organize_completed(
-            config,
-            repository,
-            config.qbittorrent[0],
-            qbit,
-            CollectionMam(),
-        )
-    )
-    assert second.linked == 0
-    assert second.already_existing == 2
-    assert second.collections == 1
-
-
-def test_organizer_reprocesses_legacy_combined_collection(tmp_path: Path) -> None:
-    downloads = tmp_path / "downloads"
-    for relative in (
-        "Complete Collection/Book One/one.m4b",
-        "Complete Collection/Book Two/two.m4b",
-    ):
-        source = downloads / relative
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_bytes(relative.encode())
-    database = tmp_path / "data.sqlite3"
-    ensure_database(database)
-    repository = Repository(database)
-    library_root = tmp_path / "library"
-    library = {
-        "category": "Audiobooks",
-        "library_dir": str(library_root),
-        "method": "copy",
-    }
-    legacy_config = Config(
-        mam_id="cookie",
-        split_collections=False,
-        qbittorrent=(QbitConfig(url="http://qbit"),),
-        libraries=(library,),
-    )
-    qbit = CollectionQbit(downloads)
-
-    legacy = asyncio.run(
-        organize_completed(
-            legacy_config,
-            repository,
-            legacy_config.qbittorrent[0],
-            qbit,
-            CollectionMam(),
-        )
-    )
-    legacy_path = library_root / "An Author" / "Complete Collection {A Narrator}"
-    assert legacy.linked == 1
-    assert legacy_path.exists()
-    assert repository.torrent("abc123")["collection_checked"] is False
-
-    upgraded_config = Config(
-        mam_id="cookie",
-        split_collections=True,
-        qbittorrent=(QbitConfig(url="http://qbit"),),
-        libraries=(library,),
-    )
-    progress: list[tuple[str, str, dict | None]] = []
-    upgraded = asyncio.run(
-        organize_completed(
-            upgraded_config,
-            repository,
-            upgraded_config.qbittorrent[0],
-            qbit,
-            CollectionMam(),
-            progress=lambda message, level, context: progress.append(
-                (message, level, context)
-            ),
-        )
-    )
-
-    assert upgraded.linked == 2
-    assert upgraded.collections == 1
-    assert not legacy_path.exists()
-    assert (library_root / "An Author" / "Book One {A Narrator}").exists()
-    assert (library_root / "An Author" / "Book Two {A Narrator}").exists()
-    assert any(
-        message.startswith("Replaced legacy collection folder")
-        for message, _, _ in progress
+        message.startswith("Already processed by beta 29")
+        and level == "warning"
+        and context is not None
+        and context["collection_books"] == 2
+        for message, level, context in progress
     )
 
 

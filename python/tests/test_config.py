@@ -66,6 +66,18 @@ import_interval = 60
     assert config.import_interval == 60
 
 
+def test_beta_29_collection_setting_is_accepted_but_disabled(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'mam_id = "secret"\nsplit_collections = true\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert not hasattr(config, "split_collections")
+
+
 def test_saves_editable_root_values_without_touching_nested_secrets(
     tmp_path: Path,
 ) -> None:

@@ -38,7 +38,6 @@ class Config:
     grab_both_formats: bool = False
     add_torrents_stopped: bool = False
     exclude_narrator_in_library_dir: bool = False
-    split_collections: bool = True
     search_interval: int = 30
     link_interval: int = 10
     import_interval: int = 135
@@ -102,6 +101,9 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
     raw.update(
         _environment_overrides(os.environ if environment is None else environment)
     )
+    # Beta 29 briefly exposed this option. Accept and discard it so those config
+    # files still start after collection splitting was removed in beta 30.
+    raw.pop("split_collections", None)
 
     allowed = set(Config.__dataclass_fields__)
     unknown = sorted(set(raw) - allowed)

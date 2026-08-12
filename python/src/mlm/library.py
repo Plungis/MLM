@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -13,7 +12,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .collection import CollectionBook, detect_collection_books
 from .config import Config, QbitConfig
 from .mam import MamClient
 from .qbittorrent import QbitClient
@@ -33,7 +31,6 @@ class OrganizerRun:
     scanned: int = 0
     linked: int = 0
     already_existing: int = 0
-    collections: int = 0
     incomplete: int = 0
     skipped: int = 0
     failed: int = 0
@@ -43,13 +40,6 @@ class OrganizerRun:
     def skip(self, reason: str) -> None:
         self.skipped += 1
         self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
-
-
-@dataclass(frozen=True)
-class OrganizeOutcome:
-    status: str
-    books: int = 0
-    collection: bool = False
 
 
 class FilePlacementError(RuntimeError):
@@ -392,7 +382,6 @@ def _organizer_progress(
         "total": total,
         "organized": result.linked,
         "already_existing": result.already_existing,
-        "collections": result.collections,
         "downloading": result.incomplete,
         "skipped": result.skipped,
         "errors": result.failed,
@@ -402,210 +391,12 @@ def _organizer_progress(
         (
             f"Progress {current}/{total} | {result.linked} organized | "
             f"{result.already_existing} already existed | "
-            f"{result.collections} collections | "
             f"{result.incomplete} downloading | {result.skipped} skipped | "
             f"{result.failed} errors"
         ),
         level="warning" if result.failed else "info",
         context=counts,
     )
-
-
-async def _place_library_book(
-    *,
-    target_dir: Path,
-    selected_files: list[tuple[Path, Path]],
-    method: str,
-    metadata: dict[str, Any],
-    progress: ProgressCallback | None,
-    context: dict[str, object],
-    prefix: str = "",
-) -> list[str]:
-    if not selected_files:
-        raise FilePlacementError(
-            "no files remained after selecting the preferred format",
-            destination=target_dir,
-            method=method,
-            remediation=(
-                "Review the preferred audio and ebook extensions for this library, "
-                "then run the organizer again."
-            ),
-        )
-
-    planned: list[tuple[Path, Path, int]] = []
-    destinations: set[Path] = set()
-    for file_index, (source, relative) in enumerate(selected_files, start=1):
-        destination = target_dir / relative
-        if relative in destinations:
-            raise FilePlacementError(
-                f"multiple torrent files resolve to the same library path: {relative}",
-                source=source,
-                destination=destination,
-                method=method,
-                remediation=(
-                    "Review the torrent's file layout and Disc folder names, then "
-                    "organize this release manually if needed."
-                ),
-            )
-        destinations.add(relative)
-        _progress(
-            progress,
-            f"{prefix}Preflight file {file_index}/{len(selected_files)}: {relative}",
-            context={
-                **context,
-                "method": method,
-                "source": str(source),
-                "destination": str(destination),
-            },
-        )
-        source_size = await asyncio.to_thread(_source_size, source, destination, method)
-        planned.append((source, relative, source_size))
-
-    _progress(
-        progress,
-        f"{prefix}Staging {len(planned)} file(s) for: {target_dir}",
-        context={
-            **context,
-            "method": method,
-            "target": str(target_dir),
-            "files": len(planned),
-        },
-    )
-    library_files: list[str] = []
-    staging_dir: Path | None = None
-    try:
-        staging_dir = await asyncio.to_thread(_prepare_staging_directory, target_dir)
-        for file_index, (source, relative, source_size) in enumerate(planned, start=1):
-            staging_destination = staging_dir / relative
-            final_destination = target_dir / relative
-            _progress(
-                progress,
-                f"{prefix}Placing file {file_index}/{len(planned)}: {relative}",
-                context={
-                    **context,
-                    "method": method,
-                    "source": str(source),
-                    "destination": str(final_destination),
-                    "source_bytes": source_size,
-                },
-            )
-            await asyncio.to_thread(
-                staging_destination.parent.mkdir, parents=True, exist_ok=True
-            )
-            try:
-                await asyncio.to_thread(
-                    _place_file, source, staging_destination, method
-                )
-                await asyncio.to_thread(
-                    _validate_placed_file,
-                    source,
-                    staging_destination,
-                    method,
-                    source_size,
-                )
-            except FilePlacementError:
-                raise
-            except OSError as error:
-                raise FilePlacementError(
-                    f"file placement failed: {error}",
-                    source=source,
-                    destination=final_destination,
-                    method=method,
-                    remediation=(
-                        "Check the library drive's free space and Windows "
-                        "permissions. For different drives, use method = "
-                        '"hardlink_or_copy" or "copy".'
-                    ),
-                ) from error
-            library_files.append(str(relative))
-            _progress(
-                progress,
-                f"{prefix}Verified: {relative} ({source_size} bytes)",
-                level="success",
-                context={
-                    **context,
-                    "source": str(source),
-                    "destination": str(final_destination),
-                    "bytes": source_size,
-                },
-            )
-        try:
-            await asyncio.to_thread(
-                _write_metadata,
-                staging_dir / "metadata.json",
-                metadata,
-            )
-        except OSError as error:
-            raise FilePlacementError(
-                f"could not write library metadata: {error}",
-                destination=target_dir / "metadata.json",
-                method=method,
-                remediation=(
-                    "Check the library drive's free space and Windows write "
-                    "permissions, then run the organizer again."
-                ),
-            ) from error
-        await asyncio.to_thread(_publish_staging_directory, staging_dir, target_dir)
-        staging_dir = None
-        _progress(
-            progress,
-            f"{prefix}Published complete library folder: {target_dir}",
-            level="success",
-            context={
-                **context,
-                "destination": str(target_dir),
-                "files": len(library_files),
-            },
-        )
-        return library_files
-    finally:
-        if staging_dir is not None:
-            await asyncio.to_thread(shutil.rmtree, staging_dir, True)
-            _progress(
-                progress,
-                f"{prefix}Rolled back incomplete library copy: {target_dir}",
-                level="warning",
-                context={**context, "target": str(target_dir)},
-            )
-
-
-def _rollback_published_book(target_dir: Path, library_files: list[str]) -> None:
-    for relative in library_files:
-        path = target_dir / relative
-        path.unlink(missing_ok=True)
-        parent = path.parent
-        while parent != target_dir:
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-            parent = parent.parent
-    (target_dir / "metadata.json").unlink(missing_ok=True)
-    (target_dir / "cover.jpg").unlink(missing_ok=True)
-    with contextlib.suppress(OSError):
-        target_dir.rmdir()
-
-
-def _legacy_library_is_managed(
-    library_root: Path,
-    target_dir: Path,
-    library_files: list[str],
-) -> bool:
-    if target_dir == library_root or library_root not in target_dir.parents:
-        return False
-    if not target_dir.exists() or not target_dir.is_dir():
-        return True
-    expected = {Path(value) for value in library_files}
-    expected.update({Path("metadata.json"), Path("cover.jpg")})
-    try:
-        actual = {
-            path.relative_to(target_dir)
-            for path in target_dir.rglob("*")
-            if path.is_file()
-        }
-    except OSError:
-        return False
-    return actual.issubset(expected)
 
 
 async def _library_scope_torrents(
@@ -666,7 +457,7 @@ async def _organize_torrent(
     library: dict[str, Any],
     *,
     progress: ProgressCallback | None,
-) -> OrganizeOutcome:
+) -> str:
     torrent_name = str(qbit_torrent.get("name") or qbit_torrent.get("hash"))
     torrent_hash = str(qbit_torrent["hash"])
     context: dict[str, object] = {
@@ -676,6 +467,29 @@ async def _organize_torrent(
         "save_path": qbit_torrent.get("save_path"),
     }
     existing = repository.torrent(torrent_hash)
+    if existing and existing.get("collection_items"):
+        compatibility_context = {
+            **context,
+            "collection_books": len(existing.get("collection_items") or []),
+            "remediation": (
+                "Collection splitting was removed in beta 30. Existing beta 29 "
+                "library folders were left unchanged to avoid deleting or moving "
+                "files automatically. Review those folders manually if needed."
+            ),
+        }
+        repository.log_activity(
+            "organizer",
+            f"Left beta 29 collection unchanged: {torrent_name}",
+            level="warning",
+            context=compatibility_context,
+        )
+        _progress(
+            progress,
+            f"Already processed by beta 29; collection left unchanged: {torrent_name}",
+            level="warning",
+            context=compatibility_context,
+        )
+        return "already_organized"
     if existing and not existing.get("client_status"):
         _progress(
             progress,
@@ -688,34 +502,14 @@ async def _organize_torrent(
             for tracker in trackers
         ):
             repository.mark_removed_from_mam(existing)
-    needs_collection_check = bool(
-        existing
-        and existing.get("library_path")
-        and not existing.get("collection_items")
-        and config.split_collections
-        and existing.get("collection_checked") is not True
-    )
-    if (
-        existing
-        and (existing.get("library_path") or existing.get("collection_items"))
-        and not needs_collection_check
-    ):
-        existing_books = len(existing.get("collection_items") or []) or 1
+    if existing and existing.get("library_path"):
         _progress(
             progress,
             f"Already organized: {torrent_name}",
             level="debug",
-            context={
-                **context,
-                "library_path": existing.get("library_path"),
-                "books": existing_books,
-            },
+            context={**context, "library_path": existing.get("library_path")},
         )
-        return OrganizeOutcome(
-            "already_organized",
-            books=existing_books,
-            collection=bool(existing.get("collection_items")),
-        )
+        return "already_organized"
 
     _progress(progress, f"Inspecting files: {torrent_name}", context=context)
     files = await qbit.files(torrent_hash)
@@ -739,7 +533,7 @@ async def _organize_torrent(
             level="warning",
             context={**context, "files": len(files)},
         )
-        return OrganizeOutcome("no_preferred_files")
+        return "no_preferred_files"
 
     _progress(
         progress,
@@ -760,251 +554,204 @@ async def _organize_torrent(
             level="warning",
             context=context,
         )
-        return OrganizeOutcome("missing_mam_metadata")
+        return "missing_mam_metadata"
 
     meta = torrent_meta(mam_row)
     method = str(library.get("method", "hardlink"))
-    download_root = map_path(qbit_config.path_mapping, str(qbit_torrent["save_path"]))
-    collection_books: list[CollectionBook] = []
-    if config.split_collections and method != "no_link":
-        collection_books = await asyncio.to_thread(
-            detect_collection_books,
-            files,
-            download_root=download_root,
-            parent_meta=meta,
-            audio_types=tuple(library.get("audio_types") or config.audio_types),
-            ebook_types=tuple(library.get("ebook_types") or config.ebook_types),
+    target_dir = (
+        None
+        if method == "no_link"
+        else library_directory(config.exclude_narrator_in_library_dir, library, meta)
+    )
+    if method != "no_link" and target_dir is None:
+        author_diagnostics = {
+            **context,
+            "author_info_type": type(mam_row.get("author_info")).__name__,
+            "author_info": mam_row.get("author_info"),
+            "decoded_authors": meta.get("authors", []),
+            "metadata_keys": sorted(str(key) for key in mam_row),
+        }
+        repository.log_activity(
+            "organizer",
+            f"Skipped {torrent_name}: metadata has no author for the library path",
+            level="warning",
+            context=author_diagnostics,
         )
-
-    if needs_collection_check and not collection_books:
-        existing["collection_checked"] = True
-        repository.update_torrent(existing)
         _progress(
             progress,
-            f"Collection scan complete; kept as one book: {torrent_name}",
-            level="debug",
-            context={**context, "collection_detected": False},
+            f"Skipped {torrent_name}: metadata has no author",
+            level="warning",
+            context=author_diagnostics,
         )
-        return OrganizeOutcome("already_organized", books=1)
+        return "missing_author"
 
-    target_dir = None
     library_files: list[str] = []
-    collection_items: list[dict[str, Any]] = []
-    if collection_books:
-        detection = collection_books[0].detection
-        _progress(
-            progress,
-            (
-                f"Collection detected: {len(collection_books)} individual books "
-                f"from {detection}"
-            ),
-            level="success",
-            context={
-                **context,
-                "books": len(collection_books),
-                "detection": detection,
-                "titles": [book.title for book in collection_books],
-            },
+    if target_dir is not None:
+        download_root = map_path(
+            qbit_config.path_mapping, str(qbit_torrent["save_path"])
         )
-        published: list[tuple[Path, list[str]]] = []
-        try:
-            for book_index, book in enumerate(collection_books, start=1):
-                book_target = library_directory(
-                    config.exclude_narrator_in_library_dir,
-                    library,
-                    book.meta,
-                )
-                if book_target is None:
-                    raise FilePlacementError(
-                        f"collection book has no usable author: {book.title}",
-                        method=method,
-                        remediation=(
-                            "Add author metadata to the book file or rename its folder "
-                            "to include an author known on the MaM torrent."
-                        ),
-                    )
-                book_context = {
-                    **context,
-                    "collection_book": book_index,
-                    "collection_total": len(collection_books),
-                    "book_title": book.title,
-                    "destination": str(book_target),
-                }
-                _progress(
-                    progress,
-                    f"[Book {book_index}/{len(collection_books)}] {book.title}",
-                    context=book_context,
-                )
-                selected_files = [
-                    (
-                        download_root
-                        / safe_torrent_path(str(torrent_path).replace("\\", "/")),
-                        relative,
-                    )
-                    for torrent_path, relative in book.files
-                ]
-                placed = await _place_library_book(
-                    target_dir=book_target,
-                    selected_files=selected_files,
-                    method=method,
-                    metadata={
-                        "mam": mam_row,
-                        "meta": book.meta,
-                        "collection": {
-                            "parent_title": meta.get("title"),
-                            "book": book_index,
-                            "total": len(collection_books),
-                            "detection": detection,
-                        },
-                    },
-                    progress=progress,
-                    context=book_context,
-                    prefix=f"[Book {book_index}/{len(collection_books)}] ",
-                )
-                published.append((book_target, placed))
-                collection_items.append(
-                    {
-                        "id": f"{torrent_hash}:{book_index}",
-                        "mam_id": meta["mam_id"],
-                        "title": book.title,
-                        "title_search": normalize_title(book.title),
-                        "library_path": str(book_target),
-                        "library_files": sorted(placed),
-                        "meta": book.meta,
-                        "abs_id": None,
-                    }
-                )
-        except BaseException:
-            for published_target, published_files in reversed(published):
-                await asyncio.to_thread(
-                    _rollback_published_book, published_target, published_files
-                )
-            if published:
-                _progress(
-                    progress,
-                    f"Rolled back {len(published)} published collection books",
-                    level="warning",
-                    context={**context, "rolled_back": len(published)},
-                )
-            raise
-        if needs_collection_check and existing and existing.get("library_path"):
-            legacy_target = Path(str(existing["library_path"]))
-            library_root = Path(str(library["library_dir"]))
-            legacy_files = list(existing.get("library_files") or [])
-            source_paths = [
-                download_root / safe_torrent_path(str(row["name"])) for row in files
-            ]
-            contains_source = any(
-                path == legacy_target or legacy_target in path.parents
-                for path in source_paths
-            )
-            if contains_source:
-                _progress(
-                    progress,
-                    (
-                        "Retained legacy collection folder because it contains "
-                        f"qBittorrent source files: {legacy_target}"
-                    ),
-                    level="warning",
-                    context={
-                        **context,
-                        "legacy_path": str(legacy_target),
-                        "remediation": (
-                            "Keep this folder while qBittorrent seeds it. The new "
-                            "individual library books were still published."
-                        ),
-                    },
-                )
-            elif _legacy_library_is_managed(
-                library_root,
-                legacy_target,
-                legacy_files,
+        selected_files: list[tuple[Path, Path]] = []
+        for content in files:
+            torrent_path = safe_torrent_path(str(content["name"]))
+            lower_name = torrent_path.name.lower()
+            if not (
+                (audio and lower_name.endswith(audio))
+                or (ebook and lower_name.endswith(ebook))
             ):
-                try:
-                    await asyncio.to_thread(
-                        _rollback_published_book,
-                        legacy_target,
-                        legacy_files,
-                    )
-                    _progress(
-                        progress,
-                        f"Replaced legacy collection folder: {legacy_target}",
-                        level="success",
-                        context={**context, "legacy_path": str(legacy_target)},
-                    )
-                except OSError as error:
-                    _progress(
-                        progress,
-                        f"Could not fully remove legacy collection folder: {error}",
-                        level="warning",
-                        context={**context, "legacy_path": str(legacy_target)},
-                    )
-            else:
-                _progress(
-                    progress,
-                    (
-                        "Retained legacy collection folder with unmanaged files: "
-                        f"{legacy_target}"
+                continue
+            relative = _destination_relative(torrent_path)
+            selected_files.append((download_root / torrent_path, relative))
+        if not selected_files:
+            raise FilePlacementError(
+                "no files remained after selecting the preferred format",
+                destination=target_dir,
+                method=method,
+                remediation=(
+                    "Review the preferred audio and ebook extensions for this "
+                    "library, then run the organizer again."
+                ),
+            )
+
+        planned: list[tuple[Path, Path, int]] = []
+        destinations: set[Path] = set()
+        for file_index, (source, relative) in enumerate(selected_files, start=1):
+            destination = target_dir / relative
+            if relative in destinations:
+                raise FilePlacementError(
+                    "multiple torrent files resolve to the same library path: "
+                    f"{relative}",
+                    source=source,
+                    destination=destination,
+                    method=method,
+                    remediation=(
+                        "Review the torrent's file layout and Disc folder names, then "
+                        "organize this release manually if needed."
                     ),
-                    level="warning",
-                    context={
-                        **context,
-                        "legacy_path": str(legacy_target),
-                        "remediation": (
-                            "Review and remove the old combined collection folder "
-                            "after confirming the individual book folders."
-                        ),
-                    },
                 )
-    else:
-        target_dir = (
-            None
-            if method == "no_link"
-            else library_directory(
-                config.exclude_narrator_in_library_dir, library, meta
-            )
-        )
-        if method != "no_link" and target_dir is None:
-            author_diagnostics = {
-                **context,
-                "author_info_type": type(mam_row.get("author_info")).__name__,
-                "author_info": mam_row.get("author_info"),
-                "decoded_authors": meta.get("authors", []),
-                "metadata_keys": sorted(str(key) for key in mam_row),
-            }
-            repository.log_activity(
-                "organizer",
-                f"Skipped {torrent_name}: metadata has no author for the library path",
-                level="warning",
-                context=author_diagnostics,
-            )
+            destinations.add(relative)
             _progress(
                 progress,
-                f"Skipped {torrent_name}: metadata has no author",
-                level="warning",
-                context=author_diagnostics,
+                f"Preflight file {file_index}/{len(selected_files)}: {relative}",
+                context={
+                    **context,
+                    "method": method,
+                    "source": str(source),
+                    "destination": str(destination),
+                },
             )
-            return OrganizeOutcome("missing_author")
-        if target_dir is not None:
-            selected_files: list[tuple[Path, Path]] = []
-            for content in files:
-                torrent_path = safe_torrent_path(str(content["name"]))
-                lower_name = torrent_path.name.lower()
-                if not (
-                    (audio and lower_name.endswith(audio))
-                    or (ebook and lower_name.endswith(ebook))
-                ):
-                    continue
-                relative = _destination_relative(torrent_path)
-                selected_files.append((download_root / torrent_path, relative))
-            library_files = await _place_library_book(
-                target_dir=target_dir,
-                selected_files=selected_files,
-                method=method,
-                metadata={"mam": mam_row, "meta": meta},
-                progress=progress,
-                context=context,
+            source_size = await asyncio.to_thread(
+                _source_size, source, destination, method
             )
+            planned.append((source, relative, source_size))
+
+        _progress(
+            progress,
+            f"Staging {len(planned)} file(s) for: {target_dir}",
+            context={
+                **context,
+                "method": method,
+                "target": str(target_dir),
+                "files": len(planned),
+            },
+        )
+        staging_dir: Path | None = None
+        try:
+            staging_dir = await asyncio.to_thread(
+                _prepare_staging_directory, target_dir
+            )
+            for file_index, (source, relative, source_size) in enumerate(
+                planned, start=1
+            ):
+                staging_destination = staging_dir / relative
+                final_destination = target_dir / relative
+                _progress(
+                    progress,
+                    f"Placing file {file_index}/{len(planned)}: {relative}",
+                    context={
+                        **context,
+                        "method": method,
+                        "source": str(source),
+                        "destination": str(final_destination),
+                        "source_bytes": source_size,
+                    },
+                )
+                await asyncio.to_thread(
+                    staging_destination.parent.mkdir, parents=True, exist_ok=True
+                )
+                try:
+                    await asyncio.to_thread(
+                        _place_file, source, staging_destination, method
+                    )
+                    await asyncio.to_thread(
+                        _validate_placed_file,
+                        source,
+                        staging_destination,
+                        method,
+                        source_size,
+                    )
+                except FilePlacementError:
+                    raise
+                except OSError as error:
+                    raise FilePlacementError(
+                        f"file placement failed: {error}",
+                        source=source,
+                        destination=final_destination,
+                        method=method,
+                        remediation=(
+                            "Check the library drive's free space and Windows "
+                            "permissions. For different drives, use method = "
+                            '"hardlink_or_copy" or "copy".'
+                        ),
+                    ) from error
+                library_files.append(str(relative))
+                _progress(
+                    progress,
+                    f"Verified: {relative} ({source_size} bytes)",
+                    level="success",
+                    context={
+                        **context,
+                        "source": str(source),
+                        "destination": str(final_destination),
+                        "bytes": source_size,
+                    },
+                )
+            try:
+                await asyncio.to_thread(
+                    _write_metadata,
+                    staging_dir / "metadata.json",
+                    {"mam": mam_row, "meta": meta},
+                )
+            except OSError as error:
+                raise FilePlacementError(
+                    f"could not write library metadata: {error}",
+                    destination=target_dir / "metadata.json",
+                    method=method,
+                    remediation=(
+                        "Check the library drive's free space and Windows write "
+                        "permissions, then run the organizer again."
+                    ),
+                ) from error
+            await asyncio.to_thread(_publish_staging_directory, staging_dir, target_dir)
+            staging_dir = None
+            _progress(
+                progress,
+                f"Published complete library folder: {target_dir}",
+                level="success",
+                context={
+                    **context,
+                    "destination": str(target_dir),
+                    "files": len(library_files),
+                },
+            )
+        finally:
+            if staging_dir is not None:
+                await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+                _progress(
+                    progress,
+                    f"Rolled back incomplete library copy: {target_dir}",
+                    level="warning",
+                    context={**context, "target": str(target_dir)},
+                )
 
     now = datetime.now(UTC).isoformat()
     torrent = {
@@ -1015,8 +762,6 @@ async def _organize_torrent(
         "goodreads_id": existing.get("goodreads_id") if existing else None,
         "library_path": str(target_dir) if target_dir else None,
         "library_files": sorted(library_files),
-        "collection_items": collection_items,
-        "collection_checked": config.split_collections,
         "linker": library.get("name"),
         "category": qbit_torrent.get("category") or None,
         "selected_audio_format": audio.lstrip(".") if audio else None,
@@ -1037,7 +782,6 @@ async def _organize_torrent(
             **context,
             "library_path": str(target_dir) if target_dir else None,
             "files": sorted(library_files),
-            "collection_books": len(collection_items),
             "method": method,
         },
     )
@@ -1048,17 +792,11 @@ async def _organize_torrent(
         context={
             **context,
             "library_path": str(target_dir) if target_dir else None,
-            "files": len(library_files)
-            or sum(len(item["library_files"]) for item in collection_items),
-            "collection_books": len(collection_items),
+            "files": len(library_files),
             "method": method,
         },
     )
-    return OrganizeOutcome(
-        "linked",
-        books=len(collection_items) or 1,
-        collection=bool(collection_items),
-    )
+    return "linked"
 
 
 async def organize_completed(
@@ -1128,14 +866,12 @@ async def organize_completed(
                 library,
                 progress=progress,
             )
-            if outcome.collection:
-                result.collections += 1
-            if outcome.status == "linked":
-                result.linked += outcome.books
-            elif outcome.status == "already_organized":
-                result.already_existing += outcome.books
+            if outcome == "linked":
+                result.linked += 1
+            elif outcome == "already_organized":
+                result.already_existing += 1
             else:
-                result.skip(outcome.status)
+                result.skip(outcome)
         except asyncio.CancelledError:
             raise
         except Exception as error:  # noqa: BLE001 - isolate failures per torrent
@@ -1179,7 +915,6 @@ async def organize_completed(
             f"Organizer finished: {result.scanned}/{len(scoped_torrents)} checked | "
             f"{result.linked} organized | "
             f"{result.already_existing} already existed | "
-            f"{result.collections} collections | "
             f"{result.incomplete} downloading | {result.skipped} skipped | "
             f"{result.failed} errors"
         ),
@@ -1188,7 +923,6 @@ async def organize_completed(
             "scanned": result.scanned,
             "linked": result.linked,
             "already_existing": result.already_existing,
-            "collections": result.collections,
             "incomplete": result.incomplete,
             "skipped": result.skipped,
             "failed": result.failed,

@@ -842,7 +842,6 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         download_on_wedge_failure: str | None = Form(None),
         grab_both_formats: str | None = Form(None),
         add_torrents_stopped: str | None = Form(None),
-        split_collections: str | None = Form(None),
         request_portal_enabled: str | None = Form(None),
         request_portal_domains: str = Form(""),
         request_portal_title: str = Form("Library Requests"),
@@ -872,7 +871,6 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "download_on_wedge_failure": (download_on_wedge_failure is not None),
                 "grab_both_formats": grab_both_formats is not None,
                 "add_torrents_stopped": add_torrents_stopped is not None,
-                "split_collections": split_collections is not None,
                 "request_portal_enabled": request_portal_enabled is not None,
                 "request_portal_domains": tuple(
                     domain.strip()

@@ -51,7 +51,7 @@ This allows you to automatically download for example bookmarks and have them ha
 
 The auto downloader can both use configured searches similar to RSS, and Goodreads lists as input. It keeps track of your unsat slots and will by default always leave at least 10 open. You can also set a direct filled-slot ceiling, reserve freeleech wedges, and prefer wedges before ratio downloads. Operational policy and scheduler settings can be saved and applied live from the Configuration screen. List imports can optionally track and grab both audiobook and ebook editions independently. It also keeps track of your library and avoids downloading e.g. an mp3 torrent if you already have the m4b.
 
-The library organizer links one preferred audio format and one preferred ebook format per book. With `split_collections = true`, collection torrents that contain distinct book folders, flat ebook files, or flat single-container audiobooks (M4B/M4A/MP4) are published as individual library books. Embedded EPUB and audio tags are preferred for title/author metadata. Ambiguous disc, chapter, track, and flat MP3 layouts stay together rather than risking a bad split.
+The library organizer will only link one audio file type and one ebook file type per torrent. So e.g. an audiobook torrent with both m4b and pdf files will have both linked, but an ebook torrent with both and epub and mobi will only have the epub linked.
 
 Organizer runs expose a live, expandable background trace on the dashboard,
 including completion checks, category routing, metadata lookups, source and
@@ -78,7 +78,7 @@ offers retry, diagnostics, configuration, and dismiss actions.
 Limitations:
 
 - At the moment HeavyMLM only works with qbittorrent
-- Collection splitting is deliberately conservative. Folder-based collections and independently packaged files are supported; ambiguous chapter/track layouts remain one book and are reported in the organizer trace.
+- HeavyMLM works with torrents, meaning collections (multiple books in a single torrents) will be treated as one book (however if you link these with [booktree](https://github.com/myxdvz/booktree), HeavyMLM will not touch those files)
 - HeavyMLM works with torrents from MaM, meaning files not via a torrent from here can not be handled (however if you link these with [booktree](https://github.com/myxdvz/booktree), HeavyMLM will not touch those files)
 
 The application runtime is now Python 3.11+ and is available as a Docker

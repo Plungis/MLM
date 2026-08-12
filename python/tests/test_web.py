@@ -120,7 +120,6 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert config_page.status_code == 200
     assert "Complete configuration" in config_page.text
     assert "Download if wedge fails" in config_page.text
-    assert "Split collection torrents" in config_page.text
     assert "Enable request portal" in config_page.text
     assert 'name="request_portal_domains"' in config_page.text
     assert 'name="request_portal_username"' in config_page.text
@@ -137,8 +136,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Beta V.91.1 integrated" in absidekick.text
     assert "Run Controls" in absidekick.text
     assert "Live Log" in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b29"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b29"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b30"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b30"' in absidekick.text
     for page in (
         "run",
         "review",
@@ -192,7 +191,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b29" in spender_config.text
+    assert "0.5.0b30" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -235,7 +234,6 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "prefer_wedges": "true",
             "download_on_wedge_failure": "true",
             "grab_both_formats": "true",
-            "split_collections": "true",
             "request_portal_enabled": "true",
             "request_portal_domains": "requests.example.test",
             "request_portal_title": "Family Requests",
@@ -256,7 +254,6 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.prefer_wedges is True
     assert updated.download_on_wedge_failure is True
     assert updated.grab_both_formats is True
-    assert updated.split_collections is True
     assert updated.request_portal_enabled is True
     assert updated.request_portal_domains == ("requests.example.test",)
     assert updated.request_portal_title == "Family Requests"
@@ -464,59 +461,6 @@ def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(
     assert destination in errors.text
     assert "Free space on the library drive" in errors.text
     assert "/operations?view=diagnostics&component=organizer" in errors.text
-
-
-def test_processed_library_expands_collection_books(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text('mam_id = ""\n', encoding="utf-8")
-    database = tmp_path / "data.sqlite3"
-    ensure_database(database)
-    repository = Repository(database)
-    collection_items = [
-        {
-            "id": "collection:1",
-            "mam_id": 88,
-            "title": "Book One",
-            "title_search": "book one",
-            "library_path": "E:\\MLM Audio\\An Author\\Book One",
-            "library_files": ["one.m4b"],
-            "meta": {"title": "Book One", "authors": ["An Author"]},
-            "abs_id": "abs-one",
-        },
-        {
-            "id": "collection:2",
-            "mam_id": 88,
-            "title": "Book Two",
-            "title_search": "book two",
-            "library_path": "E:\\MLM Audio\\An Author\\Book Two",
-            "library_files": ["two.m4b"],
-            "meta": {"title": "Book Two", "authors": ["An Author"]},
-            "abs_id": None,
-        },
-    ]
-    repository.record_linked(
-        {
-            "id": "collection",
-            "mam_id": 88,
-            "title_search": "complete collection",
-            "created_at": "2026-08-10T00:00:00+00:00",
-            "meta": {"title": "Complete Collection", "authors": ["An Author"]},
-            "library_path": None,
-            "library_files": [],
-            "collection_items": collection_items,
-        },
-        None,
-    )
-    app = create_app(config_path, database)
-    app.state.services = FakeServices(load_config(config_path))
-
-    page = TestClient(app).get("/library")
-
-    assert page.status_code == 200
-    assert "Collection · 2 books" in page.text
-    assert "Book One" in page.text
-    assert "Book Two" in page.text
-    assert "ABS matched" in page.text
 
 
 def test_search_renders_rich_heavymlm_release_cards(tmp_path: Path) -> None:

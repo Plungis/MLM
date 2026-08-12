@@ -4,7 +4,6 @@ A good basic configuration would look something like this:
 
 ```toml
 mam_id = "set mam_id here"
-split_collections = true # publish recognized collection books individually
 
 [[qbittorrent]]
 url = "http://localhost:8011" # update this to your qbit web ui URL
