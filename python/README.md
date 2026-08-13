@@ -120,6 +120,14 @@ API timeout and never uses general API retries. When a provider times out, it is
 quarantined for the remainder of that run and the item follows the normal
 review/unmatched path.
 
+Series-number folder prefixes are parsed separately from real titles. For
+example, `Pern 17 - The Masterharper of Pern` searches as
+`The Masterharper of Pern`. Series metadata or a repeated distinctive series
+word makes that cleanup immediate; otherwise the unmodified title is tried
+first and the parsed title is only a fallback. Candidate cards display the
+strategy that produced them, and quick-match mode uses an evidence-backed
+parsed title when applicable.
+
 ## Publish the request portal on a custom domain
 
 The Configuration screen can enable a separate request portal without exposing

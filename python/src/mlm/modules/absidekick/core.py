@@ -540,9 +540,15 @@ def candidate_title_values(candidate: dict[str, Any]) -> list[str]:
 
 
 def best_title_score(item: dict[str, Any], candidate: dict[str, Any]) -> float:
+    source_titles = title_values(item)
+    searched_title = str(
+        (candidate.get("_absidekickSearch") or {}).get("queryTitle") or ""
+    ).strip()
+    if searched_title:
+        source_titles = list(dict.fromkeys([*source_titles, searched_title]))
     return max(
         title_similarity(left, right)
-        for left in title_values(item)
+        for left in source_titles
         for right in candidate_title_values(candidate)
     )
 
@@ -611,8 +617,11 @@ def score_candidate(
         ),
     }
 
+    searched_title = str(
+        (candidate.get("_absidekickSearch") or {}).get("queryTitle") or title
+    )
     if matching.get("requireTitleToken", True) and not title_token_gate(
-        title, str(candidate_title)
+        searched_title, str(candidate_title)
     ):
         parts["title"] = min(float(parts["title"] or 0), 35.0)
 
@@ -650,7 +659,8 @@ def score_candidate(
         score = max(score, 99.0)
 
     primary_title_score = max(
-        title_similarity(item_title(item), result_title)
+        title_similarity(source_title, result_title)
+        for source_title in {item_title(item), searched_title}
         for result_title in candidate_title_values(candidate)
     )
     if primary_title_score < 55 <= title_score:
@@ -1172,18 +1182,83 @@ class CandidateResults(list[dict[str, Any]]):
         self.diagnostics = diagnostics or []
 
 
-def clean_search_title(value: Any) -> str:
+def _series_prefix_title(
+    value: Any,
+    series_entries: list[tuple[str, str]] | None = None,
+    *,
+    require_evidence: bool,
+) -> str:
+    def normalized_sequence(value: Any) -> str:
+        normalized = normalize_text(value)
+        if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+            whole, dot, fraction = normalized.partition(".")
+            fraction = fraction.rstrip("0")
+            return f"{int(whole)}{dot}{fraction}" if fraction else str(int(whole))
+        return normalized
+
+    title = html.unescape(str(value or "")).strip()
+    match = re.match(
+        r"^\s*(?P<series>.{1,80}?)\s+"
+        r"(?:(?:book|volume|vol)\s*#?\s*|#\s*)?"
+        r"(?P<sequence>\d{1,3}(?:\.\d+)?|[ivxlcdm]{1,8})\s*"
+        r"(?:-|–|—|:|\|)\s*(?P<title>.+?)\s*$",
+        title,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return title
+
+    series_name = match.group("series").strip()
+    sequence = normalized_sequence(match.group("sequence"))
+    remainder = match.group("title").strip()
+    remainder_tokens = title_tokens(remainder)
+    if not remainder_tokens:
+        return title
+
+    metadata_match = False
+    for known_name, known_sequence in series_entries or []:
+        normalized_known_sequence = normalized_sequence(known_sequence)
+        name_matches = title_similarity(series_name, known_name) >= 88
+        sequence_matches = (
+            not normalized_known_sequence or normalized_known_sequence == sequence
+        )
+        if name_matches and sequence_matches:
+            metadata_match = True
+            break
+
+    series_words = {
+        word
+        for word in title_tokens(series_name)
+        if len(word) >= 4 and word not in {"saga", "series", "volume"}
+    }
+    repeated_series_word = bool(series_words & title_tokens(remainder))
+    if len(remainder_tokens) < 2 and not metadata_match:
+        return title
+    if require_evidence and not (metadata_match or repeated_series_word):
+        return title
+    return remainder
+
+
+def clean_search_title(
+    value: Any, series_entries: list[tuple[str, str]] | None = None
+) -> str:
     title = html.unescape(str(value or "")).strip()
     # Track/disc numbering is common in folder names but poisons ABS provider
     # searches (for example, "01 Northern Lights"). Do not touch titles that
     # are themselves a number, such as "1984".
-    cleaned = re.sub(
+    number_cleaned = re.sub(
         r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?0*\d{1,3}\s*[-_.:]?\s+",
         "",
         title,
         flags=re.IGNORECASE,
     ).strip()
-    return cleaned or title
+    if number_cleaned and number_cleaned != title:
+        return number_cleaned
+    return _series_prefix_title(
+        title,
+        series_entries,
+        require_evidence=True,
+    )
 
 
 def _search_books_once(
@@ -1226,16 +1301,24 @@ def search_candidates(
         3, min(60, int(settings.get("run", {}).get("searchTimeoutSeconds", 12)))
     )
 
-    clean_title = clean_search_title(title)
+    series_entries = item_series_entries(item)
+    clean_title = clean_search_title(title, series_entries)
+    possible_series_title = _series_prefix_title(
+        title,
+        series_entries,
+        require_evidence=False,
+    )
     title_was_cleaned = normalize_title(clean_title) != normalize_title(title)
+    has_series_prefix_fallback = not title_was_cleaned and normalize_title(
+        possible_series_title
+    ) != normalize_title(title)
+    broad_title = possible_series_title if has_series_prefix_fallback else clean_title
     queries: list[tuple[str, str, str, str, bool]] = [
         (
             primary_provider,
             clean_title if title_was_cleaned else title,
             author,
-            "number-cleaned title + author"
-            if title_was_cleaned
-            else "precise title + author",
+            "parsed title + author" if title_was_cleaned else "precise title + author",
             False,
         ),
     ]
@@ -1246,11 +1329,21 @@ def search_candidates(
                     primary_provider,
                     title,
                     author,
-                    "original numbered title + author",
+                    "original unparsed title + author",
                     True,
                 )
             )
-        queries.append((primary_provider, clean_title, "", "clean title only", True))
+        elif has_series_prefix_fallback:
+            queries.append(
+                (
+                    primary_provider,
+                    possible_series_title,
+                    author,
+                    "possible series-prefix title + author",
+                    True,
+                )
+            )
+        queries.append((primary_provider, broad_title, "", "parsed title only", True))
 
     if adaptive and automatic_fallbacks:
         fallback_providers = matching.get("fallbackProviders") or []
@@ -1264,7 +1357,7 @@ def search_candidates(
             provider = str(provider).strip()
             if provider in PROVIDERS and provider != primary_provider:
                 queries.append(
-                    (provider, clean_title, author, "fallback title + author", True)
+                    (provider, broad_title, author, "fallback title + author", True)
                 )
 
     candidates: dict[str, dict[str, Any]] = {}
@@ -1308,10 +1401,12 @@ def search_candidates(
             candidate["_absidekickSearch"] = {
                 "provider": provider,
                 "strategy": strategy,
+                "queryTitle": query_title,
+                "originalTitle": title,
                 "providerRank": provider_rank + 1,
                 "quickMatchEligible": (
                     provider == primary_provider
-                    and strategy == "precise title + author"
+                    and strategy in {"precise title + author", "parsed title + author"}
                     and provider_rank == 0
                 ),
             }
@@ -1634,14 +1729,14 @@ def apply_match(
             "quickMatchEligible"
         ):
             raise ABSAPIError(
-                "Quick match mode is limited to the first result from the exact "
-                "primary-provider search for safety"
+                "Quick match mode is limited to the first result from an exact "
+                "or evidence-backed parsed primary-provider search for safety"
             )
         client.post(
             f"/api/items/{item_id}/match",
             params={
                 "provider": settings.get("connection", {}).get("provider") or "google",
-                "title": item_title(item),
+                "title": search.get("queryTitle") or item_title(item),
                 "author": item_author(item),
                 "overrideDefaults": "true"
                 if matching.get("overwriteMetadata")

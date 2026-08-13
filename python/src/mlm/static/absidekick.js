@@ -484,13 +484,18 @@ function renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex = 0
   const meta = [candidateSeries(candidate), candidateNarrator(candidate), candidate.publishedYear].filter(Boolean).join(" | ");
   const author = candidateAuthor(candidate) || "Unknown author";
   const authorInfo = authorMatchInfo(scored);
+  const searchOrigin = scored.searchSource === "manual"
+    ? `Manual search · ${scored.searchProvider || "provider"}`
+    : scored.search?.strategy
+      ? `Automated search · ${scored.search.strategy}`
+      : "";
   return `
     <article class="compare-card candidate-card ${authorInfo.matches ? "author-match-card" : ""}" ${cssCoverStyle(candidate.cover)}>
       <label class="candidate-pick">
         <input type="radio" name="review-${rowIndex}" value="${candidateIndex}" ${checked} />
         <span>Use This</span>
       </label>
-      ${scored.searchSource === "manual" ? `<div class="candidate-origin">Manual search · ${escapeHtml(scored.searchProvider || "provider")}</div>` : ""}
+      ${searchOrigin ? `<div class="candidate-origin">${escapeHtml(searchOrigin)}</div>` : ""}
       <div class="candidate-title">${escapeHtml(candidate.title || "Untitled")}</div>
       <div class="candidate-author ${authorInfo.matches ? "author-match" : ""}">
         <span>${escapeHtml(author)}</span>

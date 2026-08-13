@@ -7,8 +7,10 @@ from mlm.modules.absidekick.core import (
     ABSClient,
     MatchJob,
     add_remove_tags,
+    apply_match,
     build_review_row,
     candidate_metadata_payload,
+    clean_search_title,
     match_decision,
     normalize_title,
     rank_candidates,
@@ -335,6 +337,133 @@ class ScoringTests(unittest.TestCase):
             ["Northern Lights"],
         )
         self.assertEqual(candidates[0]["title"], "Northern Lights")
+
+    def test_series_sequence_prefix_is_removed_before_searching(self):
+        class PernClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["title"] == "The Masterharper of Pern":
+                    return [
+                        {
+                            "title": "The Masterharper of Pern",
+                            "author": "Anne McCaffrey",
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "Pern 17 - The Masterharper of Pern"
+        item["media"]["metadata"]["authorName"] = "Anne McCaffrey"
+        client = PernClient()
+
+        candidates = search_candidates(client, item, DEFAULT_SETTINGS)
+        ranked = rank_candidates(item, candidates, DEFAULT_SETTINGS)
+
+        self.assertEqual(
+            [query["title"] for query in client.queries],
+            ["The Masterharper of Pern"],
+        )
+        self.assertEqual(candidates[0]["title"], "The Masterharper of Pern")
+        self.assertEqual(
+            candidates[0]["_absidekickSearch"]["strategy"],
+            "parsed title + author",
+        )
+        self.assertTrue(candidates[0]["_absidekickSearch"]["quickMatchEligible"])
+        self.assertEqual(ranked[0]["parts"]["title"], 100.0)
+        self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "auto")
+
+    def test_quick_match_uses_the_evidence_backed_parsed_title(self):
+        class RecordingClient:
+            def __init__(self):
+                self.posts = []
+
+            def post(self, path, params=None, body=None):
+                self.posts.append((path, params, body))
+                return {"ok": True}
+
+            def patch(self, path, body):
+                return {"ok": True, "path": path, "body": body}
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "Pern 17 - The Masterharper of Pern"
+        item["media"]["metadata"]["authorName"] = "Anne McCaffrey"
+        candidate = {
+            "title": "The Masterharper of Pern",
+            "author": "Anne McCaffrey",
+            "_absidekickSearch": {
+                "strategy": "parsed title + author",
+                "queryTitle": "The Masterharper of Pern",
+                "quickMatchEligible": True,
+            },
+        }
+        scored = score_candidate(item, candidate, DEFAULT_SETTINGS)
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["run"]["dryRun"] = False
+        settings["matching"]["applyMode"] = "quick_match"
+        client = RecordingClient()
+
+        apply_match(client, item, scored, settings)
+
+        self.assertEqual(client.posts[0][1]["title"], "The Masterharper of Pern")
+
+    def test_abs_series_metadata_can_confirm_a_non_repeating_prefix(self):
+        entries = [("Discworld", "4")]
+
+        self.assertEqual(
+            clean_search_title("Discworld 04 - Mort", entries),
+            "Mort",
+        )
+
+    def test_numbered_real_title_is_tried_before_weak_prefix_fallback(self):
+        class CatchClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return [{"title": "Catch 22 - A Novel", "author": "Joseph Heller"}]
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "Catch 22 - A Novel"
+        item["media"]["metadata"]["authorName"] = "Joseph Heller"
+        client = CatchClient()
+
+        candidates = search_candidates(client, item, DEFAULT_SETTINGS)
+
+        self.assertEqual(len(client.queries), 1)
+        self.assertEqual(client.queries[0]["title"], "Catch 22 - A Novel")
+        self.assertEqual(candidates[0]["title"], "Catch 22 - A Novel")
+
+    def test_unconfirmed_series_prefix_is_used_only_after_original_is_empty(self):
+        class FallbackClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["title"] == "The Hidden Star":
+                    return [{"title": "The Hidden Star", "author": "A. Writer"}]
+                return []
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "Galaxy 07 - The Hidden Star"
+        item["media"]["metadata"]["authorName"] = "A. Writer"
+        client = FallbackClient()
+
+        candidates = search_candidates(client, item, DEFAULT_SETTINGS)
+
+        self.assertEqual(
+            [query["title"] for query in client.queries],
+            ["Galaxy 07 - The Hidden Star", "The Hidden Star"],
+        )
+        self.assertEqual(
+            candidates[0]["_absidekickSearch"]["strategy"],
+            "possible series-prefix title + author",
+        )
+        self.assertFalse(candidates[0]["_absidekickSearch"]["quickMatchEligible"])
 
     def test_timed_out_provider_is_disabled_without_retries(self):
         client = ABSClient("http://localhost:13378", "token", max_retries=5)

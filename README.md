@@ -128,6 +128,13 @@ confident match, candidates requiring review, no match, or search failure. The
 verdict is scored against the reviewer-edited title and author, and returned
 candidates remain selectable with explicit approve and reject actions.
 
+Automatic matching also parses library-style series prefixes such as
+`Pern 17 - The Masterharper of Pern`. A prefix confirmed by ABS series metadata
+or repeated title evidence is removed before the first provider search. Less
+certain `Series 7 - Title` patterns are used only as a fallback after the
+original title returns no results, and the Review Desk shows which search
+strategy found each candidate.
+
 Automatic metadata searches are bounded and fail fast. Common track-number
 prefixes are removed before searching, broader primary-provider queries run
 only after an empty result, and cross-provider fallbacks are opt-in. Metadata
