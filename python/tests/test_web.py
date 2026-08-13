@@ -171,9 +171,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     absidekick_state = client.get("/api/absidekick/state")
     assert absidekick_state.status_code == 200
     assert absidekick_state.json()["version"] == "Beta V.91.1"
-    missing_google_key = client.post(
-        "/api/absidekick/provider/google/test", json={}
-    )
+    missing_google_key = client.post("/api/absidekick/provider/google/test", json={})
     assert missing_google_key.status_code == 400
     assert "Enter a Google Books API key" in missing_google_key.json()["error"]
     assert 'api("/api/provider/google/test"' in absidekick_script.text
