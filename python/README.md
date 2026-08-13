@@ -88,6 +88,15 @@ Tags & Actions, and Config. Config stores the Audiobookshelf URL, library,
 provider, and optional remembered API token; all policy changes apply to the
 next preview or run without restarting MyAnonaSuite.
 
+Config also includes an optional native Google Books provider. Create a Google
+Cloud project, enable the Books API, create an API key, restrict that key to
+the Books API, paste it into **Google Books API Key**, and choose **Test &
+Enable**. The in-app guide links directly to each Google Cloud screen and
+explains optional stable-IP restrictions. A pasted key is saved privately but
+Google remains disabled until the live test succeeds; when no tested key is
+present, MyAnonaSuite sends no request to Google. The key itself is never
+returned to the browser or sent to Audiobookshelf.
+
 ABSidekick retains the source project's dry-run preview, weighted scoring,
 metadata-patch, ABS quick-match and tags-only modes, author/tag/path targeting,
 pause/resume/cancel, retries, live searchable logs, cover comparisons, and

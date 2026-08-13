@@ -141,6 +141,12 @@ only after an empty result, and cross-provider fallbacks are opt-in. Metadata
 searches do not inherit general ABS retry counts; a timed-out provider is
 disabled for the rest of the run so it cannot stall every remaining book.
 
+Google Books is available as a native, optional ABSidekick provider. Its Config
+screen includes API-key setup and restriction instructions plus a live
+validation control. Google searching is fail-closed: the suite does not contact
+Google unless the currently saved key has passed that test, and the private key
+is never exposed through the web settings API.
+
 ## Migrate legacy data
 
 The Python migrator imports the versioned JSON export into SQLite while

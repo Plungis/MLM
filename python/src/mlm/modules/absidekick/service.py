@@ -11,11 +11,13 @@ from typing import Any
 
 from .core import (
     APP_VERSION,
+    ABSAPIError,
     ABSClient,
     MatchJob,
     approve_review_candidate,
     create_client,
     deep_merge,
+    google_books_key_fingerprint,
     load_settings,
     preview_matches,
     public_settings,
@@ -23,6 +25,7 @@ from .core import (
     save_settings,
     scan_review_items,
     search_review_candidates,
+    test_google_books_api_key,
     utc_now,
 )
 
@@ -99,10 +102,36 @@ class ABSidekickService:
         incoming = payload.get("settings") or {}
         if not isinstance(incoming, dict):
             raise ValueError("settings must be an object")
+        incoming = json.loads(json.dumps(incoming))
+        incoming.pop("providers", None)
         settings = self.merged_settings(incoming)
         incoming_token = incoming.get("connection", {}).get("token", "")
         token = str(payload.get("token") or incoming_token or self.token)
         return settings, token
+
+    def _apply_google_key_input(
+        self, settings: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        if "googleBooksApiKey" not in payload:
+            return
+        api_key = str(payload.get("googleBooksApiKey") or "").strip()
+        if len(api_key) > 500:
+            raise ValueError("Google Books API key is too long")
+        providers = settings.setdefault("providers", {})
+        current = str(providers.get("googleBooksApiKey") or "")
+        if api_key == current:
+            return
+        providers.update(
+            {
+                "googleBooksApiKey": api_key,
+                "googleBooksApiKeyValidated": False,
+                "googleBooksApiKeyFingerprint": "",
+                "googleBooksApiKeyValidatedAt": "",
+                "googleBooksLastError": (
+                    "API key has not been tested." if api_key else ""
+                ),
+            }
+        )
 
     def _store(self, settings: dict[str, Any], token: str) -> None:
         with self._lock:
@@ -124,9 +153,68 @@ class ABSidekickService:
 
     def save(self, payload: dict[str, Any]) -> dict[str, Any]:
         settings, token = self._incoming(payload)
+        self._apply_google_key_input(settings, payload)
         self._store(settings, token)
         return {
             "ok": True,
+            "settings": public_settings(self.settings, bool(self.token)),
+        }
+
+    def test_google_books(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings, token = self._incoming(payload)
+        self._apply_google_key_input(settings, payload)
+        providers = settings.setdefault("providers", {})
+        api_key = str(providers.get("googleBooksApiKey") or "").strip()
+        if not api_key:
+            raise ValueError("Enter a Google Books API key before testing it")
+        try:
+            result = test_google_books_api_key(
+                api_key,
+                timeout_seconds=int(
+                    settings.get("run", {}).get("searchTimeoutSeconds", 12)
+                ),
+            )
+        except ABSAPIError as error:
+            providers.update(
+                {
+                    "googleBooksApiKeyValidated": False,
+                    "googleBooksApiKeyFingerprint": "",
+                    "googleBooksApiKeyValidatedAt": "",
+                    "googleBooksLastError": str(error),
+                }
+            )
+            self._store(settings, token)
+            raise
+        providers.update(
+            {
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(api_key),
+                "googleBooksApiKeyValidatedAt": utc_now(),
+                "googleBooksLastError": "",
+            }
+        )
+        self._store(settings, token)
+        return {
+            "ok": True,
+            **result,
+            "settings": public_settings(self.settings, bool(self.token)),
+        }
+
+    def clear_google_books(self) -> dict[str, Any]:
+        settings = self.merged_settings()
+        settings.setdefault("providers", {}).update(
+            {
+                "googleBooksApiKey": "",
+                "googleBooksApiKeyValidated": False,
+                "googleBooksApiKeyFingerprint": "",
+                "googleBooksApiKeyValidatedAt": "",
+                "googleBooksLastError": "",
+            }
+        )
+        self._store(settings, self.token)
+        return {
+            "ok": True,
+            "message": "Google Books API key removed; Google searches are disabled.",
             "settings": public_settings(self.settings, bool(self.token)),
         }
 

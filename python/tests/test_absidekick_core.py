@@ -1,5 +1,8 @@
+import json
 import unittest
+import urllib.parse
 from copy import deepcopy
+from unittest.mock import patch
 
 from mlm.modules.absidekick.core import (
     DEFAULT_SETTINGS,
@@ -11,8 +14,10 @@ from mlm.modules.absidekick.core import (
     build_review_row,
     candidate_metadata_payload,
     clean_search_title,
+    google_books_key_fingerprint,
     match_decision,
     normalize_title,
+    public_settings,
     rank_candidates,
     score_candidate,
     search_candidates,
@@ -44,6 +49,114 @@ def sample_item(tags=None):
             },
         },
     }
+
+
+class GoogleBooksProviderTests(unittest.TestCase):
+    def test_public_settings_hide_google_key_and_require_matching_validation(self):
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "private-google-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "private-google-key"
+                ),
+            }
+        )
+
+        public = public_settings(settings, has_token=False)
+
+        self.assertNotIn("googleBooksApiKey", public["providers"])
+        self.assertNotIn("googleBooksApiKeyFingerprint", public["providers"])
+        self.assertTrue(public["providers"]["hasGoogleBooksApiKey"])
+        self.assertTrue(public["providers"]["googleBooksReady"])
+
+        settings["providers"]["googleBooksApiKey"] = "replaced-without-test"
+        self.assertFalse(
+            public_settings(settings, has_token=False)["providers"]["googleBooksReady"]
+        )
+
+    @patch("mlm.modules.absidekick.core.urllib.request.urlopen")
+    def test_google_search_never_contacts_google_without_validated_key(self, urlopen):
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="saved-but-untested",
+            google_books_ready=False,
+        )
+
+        with self.assertRaisesRegex(ABSAPIError, "No Google request was sent"):
+            client.search_books(
+                {"provider": "google", "title": "The Hobbit", "limit": 5},
+                timeout_seconds=12,
+            )
+
+        urlopen.assert_not_called()
+
+    @patch("mlm.modules.absidekick.core.urllib.request.urlopen")
+    def test_validated_google_search_calls_native_api_and_maps_book(self, urlopen):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "google-volume-1",
+                                "volumeInfo": {
+                                    "title": "The Hobbit",
+                                    "subtitle": "There and Back Again",
+                                    "authors": ["J. R. R. Tolkien"],
+                                    "publishedDate": "1937-09-21",
+                                    "publisher": "George Allen & Unwin",
+                                    "industryIdentifiers": [
+                                        {
+                                            "type": "ISBN_13",
+                                            "identifier": "9780547928227",
+                                        }
+                                    ],
+                                    "imageLinks": {
+                                        "thumbnail": "http://books.google.com/cover.jpg"
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        urlopen.return_value = Response()
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="validated-key",
+            google_books_ready=True,
+        )
+
+        results = client.search_books(
+            {
+                "provider": "google",
+                "title": "The Hobbit",
+                "author": "Tolkien",
+                "limit": 5,
+            },
+            timeout_seconds=12,
+        )
+
+        request = urlopen.call_args.args[0]
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+        self.assertEqual(query["key"], ["validated-key"])
+        self.assertEqual(query["maxResults"], ["5"])
+        self.assertIn("intitle:The Hobbit", query["q"][0])
+        self.assertEqual(results[0]["title"], "The Hobbit")
+        self.assertEqual(results[0]["author"], "J. R. R. Tolkien")
+        self.assertEqual(results[0]["publishedYear"], "1937")
+        self.assertEqual(results[0]["isbn"], "9780547928227")
+        self.assertEqual(results[0]["cover"], "https://books.google.com/cover.jpg")
 
 
 class ScoringTests(unittest.TestCase):

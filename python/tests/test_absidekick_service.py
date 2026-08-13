@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import mlm.modules.absidekick.service as absidekick_service
 from mlm.modules.absidekick.service import ABSidekickService
 
 
@@ -57,6 +58,50 @@ def test_absidekick_does_not_persist_token_when_remember_is_disabled(
     saved = json.loads(service.settings_path.read_text(encoding="utf-8"))
     assert "token" not in saved["connection"]
     assert service.public_state()["settings"]["connection"]["hasToken"] is True
+
+
+def test_google_books_key_must_pass_live_test_and_is_never_returned(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+
+    saved_result = service.save(
+        {
+            "settings": {
+                "providers": {
+                    "googleBooksApiKeyValidated": True,
+                    "googleBooksApiKeyFingerprint": "browser-cannot-enable-this",
+                }
+            },
+            "googleBooksApiKey": "private-google-key",
+        }
+    )
+
+    assert saved_result["settings"]["providers"]["hasGoogleBooksApiKey"] is True
+    assert saved_result["settings"]["providers"]["googleBooksReady"] is False
+    assert "googleBooksApiKey" not in saved_result["settings"]["providers"]
+    assert "private-google-key" in service.settings_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        absidekick_service,
+        "test_google_books_api_key",
+        lambda api_key, timeout_seconds: {
+            "valid": True,
+            "sampleResults": 1,
+            "message": f"Live test accepted {len(api_key)} key characters.",
+        },
+    )
+    tested_result = service.test_google_books({})
+
+    assert tested_result["valid"] is True
+    assert tested_result["settings"]["providers"]["googleBooksReady"] is True
+    assert "googleBooksApiKey" not in tested_result["settings"]["providers"]
+    assert "googleBooksApiKeyFingerprint" not in tested_result["settings"]["providers"]
+
+    cleared_result = service.clear_google_books()
+    assert cleared_result["settings"]["providers"]["hasGoogleBooksApiKey"] is False
+    assert cleared_result["settings"]["providers"]["googleBooksReady"] is False
+    assert "private-google-key" not in service.settings_path.read_text(encoding="utf-8")
 
 
 def test_absidekick_review_search_uses_normal_service_connection(

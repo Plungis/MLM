@@ -147,6 +147,7 @@ function populateFilterData(filterData) {
 function setForm(settings) {
   appState.settings = settings;
   const connection = settings.connection || {};
+  const providers = settings.providers || {};
   const run = settings.run || {};
   const targeting = settings.targeting || {};
   const matching = settings.matching || {};
@@ -158,6 +159,8 @@ function setForm(settings) {
   $("provider").value = connection.provider || "audible";
   $("rememberConnection").checked = Boolean(connection.rememberConnection);
   $("libraryId").value = connection.libraryId || "";
+  $("googleBooksApiKey").value = "";
+  renderGoogleBooksStatus(providers);
 
   $("targetMode").value = targeting.mode || "unprocessed";
   $("titleContains").value = targeting.titleContains || "";
@@ -622,7 +625,7 @@ function renderManualSearchOutcome(row, rowIndex) {
 function renderReviewSearch(row, rowIndex) {
   const search = reviewSearchState(row);
   const options = REVIEW_PROVIDERS.map(
-    (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${provider}</option>`,
+    (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${provider === "google" ? "google (native)" : provider}</option>`,
   ).join("");
   const keepOpen = search.open || search.loading || search.result || search.error;
   return `
@@ -670,6 +673,49 @@ function mergeReviewCandidates(manualCandidates, existingCandidates) {
     seen.add(identity);
     return true;
   });
+}
+
+function renderGoogleBooksStatus(providers = {}) {
+  const status = $("googleBooksStatus");
+  const result = $("googleBooksResult");
+  const input = $("googleBooksApiKey");
+  const clearButton = $("clearGoogleBooksBtn");
+  const hasKey = Boolean(providers.hasGoogleBooksApiKey);
+  const ready = Boolean(providers.googleBooksReady);
+
+  status.className = `provider-state ${ready ? "ready" : hasKey ? "untested" : "missing"}`;
+  status.textContent = ready ? "Tested & enabled" : hasKey ? "Saved · test required" : "Not configured";
+  input.placeholder = hasKey
+    ? "Stored key is hidden — paste only to replace it"
+    : "Paste a new key, then test it";
+  clearButton.disabled = !hasKey;
+
+  result.className = "provider-test-result";
+  if (ready) {
+    const when = providers.googleBooksApiKeyValidatedAt
+      ? new Date(providers.googleBooksApiKeyValidatedAt).toLocaleString()
+      : "recently";
+    result.classList.add("success");
+    result.textContent = `Live Google Books test passed ${when}. Native Google searches are enabled.`;
+  } else if (hasKey) {
+    result.classList.add("warning");
+    result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
+  } else {
+    result.textContent = "Google is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
+  }
+}
+
+function googleKeyPayload() {
+  const key = $("googleBooksApiKey").value.trim();
+  return key ? { googleBooksApiKey: key } : {};
+}
+
+function ensureGoogleBooksReady(provider) {
+  if (provider !== "google") return;
+  if (appState.settings?.providers?.googleBooksReady) return;
+  throw new Error(
+    "Google Books is disabled. Open ABSidekick Config, add an API key, and select Test & Enable first. No Google request was sent.",
+  );
 }
 
 function selectedCandidateIndex(row) {
@@ -729,6 +775,7 @@ function renderReviewDesk({ preserveRow = null } = {}) {
 
 async function scanReview() {
   const settings = getSettingsFromForm();
+  ensureGoogleBooksReady(settings.connection.provider);
   const payload = await api("/api/review/scan", {
     method: "POST",
     body: JSON.stringify({ settings, limit: settings.review.scanLimit, ...tokenPayload() }),
@@ -805,6 +852,7 @@ async function searchReview(rowIndex, form) {
   search.title = String(formData.get("title") || "").trim();
   search.author = String(formData.get("author") || "").trim();
   search.provider = String(formData.get("provider") || "audible");
+  ensureGoogleBooksReady(search.provider);
   search.limit = Number(formData.get("limit") || 20);
   search.open = true;
   search.loading = true;
@@ -878,10 +926,53 @@ async function connect() {
 async function saveSettings() {
   const payload = await api("/api/settings", {
     method: "POST",
-    body: JSON.stringify({ settings: getSettingsFromForm(), ...tokenPayload() }),
+    body: JSON.stringify({ settings: getSettingsFromForm(), ...tokenPayload(), ...googleKeyPayload() }),
   });
   setForm(payload.settings);
   showToast("Settings saved");
+}
+
+async function testGoogleBooks() {
+  const button = $("testGoogleBooksBtn");
+  const result = $("googleBooksResult");
+  button.disabled = true;
+  button.textContent = "Testing live API…";
+  result.className = "provider-test-result testing";
+  result.textContent = "Sending one test query to the official Google Books API…";
+  try {
+    const payload = await api("/api/provider/google/test", {
+      method: "POST",
+      body: JSON.stringify({
+        settings: getSettingsFromForm(),
+        ...tokenPayload(),
+        ...googleKeyPayload(),
+      }),
+    });
+    setForm(payload.settings);
+    showToast(payload.message || "Google Books API key tested and enabled");
+  } catch (error) {
+    try {
+      await loadState();
+    } catch (_stateError) {
+      // Keep the provider's actionable test error visible even if state reload fails.
+    }
+    result.className = "provider-test-result error";
+    result.textContent = `${error.message} Google searches remain disabled.`;
+    showToast("Google Books test failed — see the configuration panel", 5200);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Test & Enable";
+  }
+}
+
+async function clearGoogleBooks() {
+  if (!window.confirm("Remove the saved Google Books API key and disable all Google searches?")) return;
+  const payload = await api("/api/provider/google/clear", {
+    method: "POST",
+    body: "{}",
+  });
+  setForm(payload.settings);
+  showToast(payload.message || "Google Books API key removed");
 }
 
 async function loadFilterData() {
@@ -895,6 +986,7 @@ async function loadFilterData() {
 }
 
 async function preview() {
+  ensureGoogleBooksReady($("provider").value);
   const payload = await api("/api/preview", {
     method: "POST",
     body: JSON.stringify({ settings: getSettingsFromForm(), limit: 10, ...tokenPayload() }),
@@ -905,6 +997,7 @@ async function preview() {
 
 async function startJob() {
   const settings = getSettingsFromForm();
+  ensureGoogleBooksReady(settings.connection.provider);
   if (!settings.run.dryRun) {
     const confirmed = window.confirm("This run will write metadata/tags to Audiobookshelf. Start anyway?");
     if (!confirmed) return;
@@ -972,6 +1065,8 @@ function wireEvents() {
   });
   $("connectBtn").addEventListener("click", () => connect().catch((error) => showToast(error.message)));
   $("saveSettingsBtn").addEventListener("click", () => saveSettings().catch((error) => showToast(error.message)));
+  $("testGoogleBooksBtn").addEventListener("click", () => testGoogleBooks());
+  $("clearGoogleBooksBtn").addEventListener("click", () => clearGoogleBooks().catch((error) => showToast(error.message)));
   $("loadFiltersBtn").addEventListener("click", () => loadFilterData().catch((error) => showToast(error.message)));
   $("previewBtn").addEventListener("click", () => preview().catch((error) => showToast(error.message)));
   $("startBtn").addEventListener("click", () => startJob().catch((error) => showToast(error.message)));

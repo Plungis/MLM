@@ -27,6 +27,22 @@ Runtime state lives beside the selected SQLite database in the
   **Remember URL/library/token** is enabled.
 - `review_state.json` remembers approved and rejected review items.
 
+## Native Google Books provider
+
+Google Books searches are made directly by `core.py`; they are not proxied
+through Audiobookshelf. The optional API key is stored only in this module's
+private `settings.json`. Public settings expose only whether a key exists,
+whether its fingerprint matches the last successful test, the validation time,
+and a safe error message. Neither the key nor its fingerprint is returned to
+the browser.
+
+The provider is fail-closed. Saving a key clears any previous validation, and
+the Google code path refuses to make an outbound request until **Test & Enable**
+receives a successful response from the official Books API. Removing or
+replacing the key disables the provider again. The Config screen contains the
+Google Cloud project, Books API enablement, credential, API restriction, and
+optional stable-IP restriction steps.
+
 The Review Desk also supports reviewer-controlled searches by title, optional
 author, and metadata provider. Manual results are rescored by `core.py` against
 the canonical Audiobookshelf item and use the normal review approval path.

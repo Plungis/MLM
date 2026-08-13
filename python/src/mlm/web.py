@@ -708,6 +708,18 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
         return await absidekick_call(request, absidekick.save, payload)
 
+    @app.post("/api/absidekick/provider/google/test")
+    async def absidekick_google_test(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.test_google_books, payload)
+
+    @app.post("/api/absidekick/provider/google/clear")
+    async def absidekick_google_clear(request: Request):
+        return await absidekick_call(request, absidekick.clear_google_books)
+
     @app.post("/api/absidekick/preview")
     async def absidekick_preview(request: Request):
         try:

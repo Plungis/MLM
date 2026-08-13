@@ -74,7 +74,7 @@
                   <span>Provider</span>
                   <select id="provider">
                     <option>audible</option>
-                    <option>google</option>
+                    <option value="google">google (native API key required)</option>
                     <option>openlibrary</option>
                     <option>itunes</option>
                     <option>audible.ca</option>
@@ -95,6 +95,42 @@
                 <span>Remember URL/library/token in the module's private data folder</span>
               </label>
               <div class="note" id="connectionNote">Token is never returned to the browser after save. ABSidekick controls are restricted to the machine running MyAnonaSuite.</div>
+
+              <section class="provider-config google-provider-config" aria-labelledby="googleBooksHeading">
+                <div class="section-head compact-head">
+                  <div>
+                    <p class="eyebrow">Native metadata provider</p>
+                    <h3 id="googleBooksHeading">Google Books API</h3>
+                  </div>
+                  <span id="googleBooksStatus" class="provider-state missing">Not configured</span>
+                </div>
+                <p class="meta">
+                  Google searches run directly from MyAnonaSuite and never through Audiobookshelf's anonymous Google provider. No Google request is sent until the key below passes a live test.
+                </p>
+                <div class="google-key-grid">
+                  <label class="field">
+                    <span>Google Books API Key</span>
+                    <input id="googleBooksApiKey" type="password" placeholder="Paste a new key, then test it" autocomplete="off" spellcheck="false" />
+                  </label>
+                  <div class="button-row google-key-actions">
+                    <button type="button" id="testGoogleBooksBtn">Test &amp; Enable</button>
+                    <button type="button" id="clearGoogleBooksBtn" class="danger">Remove Key</button>
+                  </div>
+                </div>
+                <div id="googleBooksResult" class="provider-test-result" role="status" aria-live="polite"></div>
+                <details class="setup-guide">
+                  <summary>How to create and secure a Google Books API key</summary>
+                  <ol>
+                    <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud: Create a project</a>, sign in, and create or select a project for MyAnonaSuite.</li>
+                    <li>Open the <a href="https://console.cloud.google.com/apis/library/books.googleapis.com" target="_blank" rel="noreferrer">Books API page</a> and select <strong>Enable</strong>.</li>
+                    <li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">APIs &amp; Services → Credentials</a>, choose <strong>Create credentials → API key</strong>, and copy the new key.</li>
+                    <li>Select <strong>Edit API key</strong>. Under API restrictions choose <strong>Restrict key</strong>, then select only <strong>Books API</strong>.</li>
+                    <li>Optional but recommended for a server with a stable public IP: set Application restrictions to <strong>IP addresses</strong> and add the public outbound IP of the computer running MyAnonaSuite. VPN users should leave this unrestricted unless the VPN provides a stable exit IP.</li>
+                    <li>Paste the key above and select <strong>Test &amp; Enable</strong>. A successful live Google response stores the key in the private ABSidekick settings file and enables Google searches.</li>
+                  </ol>
+                  <p class="meta">Do not use an HTTP referrer restriction: MyAnonaSuite calls Google from Python, not from the browser. The saved key is never returned to the web page or sent to Audiobookshelf.</p>
+                </details>
+              </section>
             </div>
 
             <div class="tab-panel" id="tab-targeting">

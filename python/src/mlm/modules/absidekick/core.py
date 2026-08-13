@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import html
 import json
 import re
@@ -41,6 +42,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "libraryId": "",
         "provider": "audible",
         "rememberConnection": False,
+    },
+    "providers": {
+        "googleBooksApiKey": "",
+        "googleBooksApiKeyValidated": False,
+        "googleBooksApiKeyFingerprint": "",
+        "googleBooksApiKeyValidatedAt": "",
+        "googleBooksLastError": "",
     },
     "run": {
         "dryRun": True,
@@ -206,7 +214,31 @@ def public_settings(settings: dict[str, Any], has_token: bool) -> dict[str, Any]
     token = data.get("connection", {}).pop("token", None)
     data.setdefault("connection", {})
     data["connection"]["hasToken"] = bool(has_token or token)
+    providers = data.setdefault("providers", {})
+    google_key = str(providers.pop("googleBooksApiKey", "") or "")
+    fingerprint = str(providers.pop("googleBooksApiKeyFingerprint", "") or "")
+    providers["hasGoogleBooksApiKey"] = bool(google_key)
+    providers["googleBooksReady"] = bool(
+        google_key
+        and providers.get("googleBooksApiKeyValidated")
+        and fingerprint == google_books_key_fingerprint(google_key)
+    )
     return data
+
+
+def google_books_key_fingerprint(api_key: str) -> str:
+    return hashlib.sha256(str(api_key or "").encode("utf-8")).hexdigest()
+
+
+def google_books_key_is_ready(settings: dict[str, Any]) -> bool:
+    providers = settings.get("providers", {})
+    api_key = str(providers.get("googleBooksApiKey") or "")
+    return bool(
+        api_key
+        and providers.get("googleBooksApiKeyValidated")
+        and str(providers.get("googleBooksApiKeyFingerprint") or "")
+        == google_books_key_fingerprint(api_key)
+    )
 
 
 def normalize_text(value: Any) -> str:
@@ -983,6 +1015,167 @@ class ABSAPIError(RuntimeError):
         self.body = body
 
 
+def _google_error_message(status: int, body: str) -> str:
+    detail = ""
+    try:
+        payload = json.loads(body)
+        detail = str((payload.get("error") or {}).get("message") or "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        detail = ""
+    if status in {401, 403}:
+        guidance = (
+            "Google rejected the API key. Enable the Books API and check the "
+            "key's API and IP restrictions."
+        )
+    elif status == 429:
+        guidance = "Google Books quota is exhausted or temporarily rate-limited."
+    elif status == 400:
+        guidance = "Google rejected the Books API request or API key."
+    else:
+        guidance = f"Google Books returned HTTP {status}."
+    return f"{guidance}{f' Google says: {detail}' if detail else ''}"
+
+
+def _google_books_payload(
+    api_key: str,
+    query: str,
+    *,
+    limit: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    if not api_key:
+        raise ABSAPIError(
+            "Native Google Books is disabled: add and test an API key in "
+            "ABSidekick Config before selecting Google."
+        )
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "key": api_key,
+            "maxResults": max(1, min(40, int(limit))),
+            "printType": "books",
+            "projection": "full",
+        }
+    )
+    request = urllib.request.Request(
+        f"https://www.googleapis.com/books/v1/volumes?{params}",
+        headers={"Accept": "application/json", "User-Agent": "MyAnonaSuite/ABSidekick"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=max(3, min(60, int(timeout_seconds)))
+        ) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise ABSAPIError(
+            _google_error_message(error.code, body), error.code
+        ) from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise ABSAPIError(f"Google Books request failed: {error}") from error
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ABSAPIError("Google Books returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise ABSAPIError("Google Books returned an invalid response")
+    if payload.get("error"):
+        raise ABSAPIError(_google_error_message(400, json.dumps(payload)), 400)
+    return payload
+
+
+def _google_image_url(image_links: Any) -> str | None:
+    if not isinstance(image_links, dict):
+        return None
+    for name in (
+        "extraLarge",
+        "large",
+        "medium",
+        "small",
+        "thumbnail",
+        "smallThumbnail",
+    ):
+        value = image_links.get(name)
+        if value:
+            return str(value).replace("http://", "https://", 1)
+    return None
+
+
+def _google_isbn(identifiers: Any) -> str | None:
+    if not isinstance(identifiers, list):
+        return None
+    by_type = {
+        str(row.get("type") or ""): str(row.get("identifier") or "")
+        for row in identifiers
+        if isinstance(row, dict)
+    }
+    return by_type.get("ISBN_13") or by_type.get("ISBN_10") or None
+
+
+def _google_candidate(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict) or not isinstance(item.get("volumeInfo"), dict):
+        return None
+    info = item["volumeInfo"]
+    title = str(info.get("title") or "").strip()
+    if not title:
+        return None
+    authors = info.get("authors") or []
+    return {
+        "id": item.get("id"),
+        "title": title,
+        "subtitle": info.get("subtitle"),
+        "author": ", ".join(str(author) for author in authors) if authors else None,
+        "publisher": info.get("publisher"),
+        "publishedYear": str(info.get("publishedDate") or "")[:4] or None,
+        "publishedDate": info.get("publishedDate"),
+        "description": info.get("description"),
+        "cover": _google_image_url(info.get("imageLinks")),
+        "genres": info.get("categories")
+        if isinstance(info.get("categories"), list)
+        else None,
+        "isbn": _google_isbn(info.get("industryIdentifiers")),
+        "language": info.get("language"),
+    }
+
+
+def search_google_books(
+    api_key: str,
+    title: str,
+    author: str = "",
+    *,
+    limit: int = 10,
+    timeout_seconds: int = 12,
+) -> list[dict[str, Any]]:
+    query_parts = [f"intitle:{title}"]
+    if author:
+        query_parts.append(f"inauthor:{author}")
+    payload = _google_books_payload(
+        api_key,
+        " ".join(query_parts),
+        limit=limit,
+        timeout_seconds=timeout_seconds,
+    )
+    candidates = [_google_candidate(item) for item in payload.get("items") or []]
+    return [candidate for candidate in candidates if candidate is not None]
+
+
+def test_google_books_api_key(
+    api_key: str, *, timeout_seconds: int = 12
+) -> dict[str, Any]:
+    payload = _google_books_payload(
+        api_key,
+        "isbn:9780547928227",
+        limit=1,
+        timeout_seconds=timeout_seconds,
+    )
+    return {
+        "valid": True,
+        "sampleResults": len(payload.get("items") or []),
+        "message": "Google Books API key tested successfully.",
+    }
+
+
 class ABSClient:
     def __init__(
         self,
@@ -991,6 +1184,8 @@ class ABSClient:
         timeout_seconds: int = 30,
         max_retries: int = 2,
         request_delay_ms: int = 150,
+        google_books_api_key: str = "",
+        google_books_ready: bool = False,
     ) -> None:
         if not base_url:
             raise ValueError("Audiobookshelf base URL is required")
@@ -1001,6 +1196,8 @@ class ABSClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.request_delay_ms = request_delay_ms
+        self.google_books_api_key = google_books_api_key
+        self.google_books_ready = google_books_ready
         self.disabled_search_providers: dict[str, str] = {}
 
     def url(self, path: str, params: dict[str, Any] | None = None) -> str:
@@ -1094,13 +1291,28 @@ class ABSClient:
         if provider in self.disabled_search_providers:
             return []
         try:
-            result = self.request(
-                "GET",
-                "/api/search/books",
-                params=params,
-                timeout_seconds=timeout_seconds,
-                max_retries=0,
-            )
+            if provider == "google":
+                if not self.google_books_ready:
+                    raise ABSAPIError(
+                        "Native Google Books is disabled: add and successfully "
+                        "test an API key in ABSidekick Config first. No Google "
+                        "request was sent."
+                    )
+                result = search_google_books(
+                    self.google_books_api_key,
+                    str(params.get("title") or ""),
+                    str(params.get("author") or ""),
+                    limit=int(params.get("limit") or 10),
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                result = self.request(
+                    "GET",
+                    "/api/search/books",
+                    params=params,
+                    timeout_seconds=timeout_seconds,
+                    max_retries=0,
+                )
         except ABSAPIError as error:
             self.disabled_search_providers[provider] = str(error)
             raise
@@ -1121,6 +1333,7 @@ class ABSClient:
 def create_client(settings: dict[str, Any], token: str | None = None) -> ABSClient:
     connection = settings.get("connection", {})
     run = settings.get("run", {})
+    providers = settings.get("providers", {})
     token = token or connection.get("token") or ""
     return ABSClient(
         base_url=connection.get("baseUrl", ""),
@@ -1128,6 +1341,8 @@ def create_client(settings: dict[str, Any], token: str | None = None) -> ABSClie
         timeout_seconds=int(run.get("timeoutSeconds", 30)),
         max_retries=int(run.get("maxRetries", 2)),
         request_delay_ms=int(run.get("requestDelayMs", 150)),
+        google_books_api_key=str(providers.get("googleBooksApiKey") or ""),
+        google_books_ready=google_books_key_is_ready(settings),
     )
 
 
