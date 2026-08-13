@@ -26,7 +26,17 @@ let appState = {
   reviewRows: [],
   logs: [],
   logPage: 1,
+  activity: {
+    sequence: 0,
+    activeId: 0,
+    startedAt: 0,
+    timer: null,
+    poll: null,
+    status: "idle",
+  },
 };
+
+const ACTION_CANCELLED = Symbol("action-cancelled");
 
 const checkboxIds = [
   "rememberConnection",
@@ -62,6 +72,181 @@ function showToast(message, timeout = 3200) {
   toast.classList.remove("hidden");
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => toast.classList.add("hidden"), timeout);
+}
+
+function elapsedLabel(startedAt) {
+  if (!startedAt) return "Idle";
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+  return minutes ? `${minutes}m ${seconds}s elapsed` : `${elapsedSeconds}s elapsed`;
+}
+
+function renderActivity(activity) {
+  const panel = $("activityPanel");
+  const progress = $("activityProgress");
+  const status = activity.status || "idle";
+  const current = Number(activity.current || 0);
+  const total = Number(activity.total || 0);
+  const startedAt = activity.startedAt
+    ? typeof activity.startedAt === "number"
+      ? activity.startedAt
+      : Date.parse(activity.startedAt)
+    : appState.activity.startedAt;
+
+  panel.className = `activity-panel ${status}`;
+  panel.setAttribute("aria-busy", status === "running" ? "true" : "false");
+  $("activityTitle").textContent = activity.title || "Ready";
+  $("activityDetail").textContent = activity.detail || "No ABSidekick operation is currently running.";
+  $("activityCount").textContent = total > 0 ? `${Math.min(current, total)} / ${total}` : status === "running" ? "Working…" : "—";
+  $("activityElapsed").textContent = startedAt
+    ? status === "running"
+      ? elapsedLabel(startedAt)
+      : `${elapsedLabel(startedAt).replace(" elapsed", "")} total`
+    : status === "success"
+      ? "Completed"
+      : status === "error"
+        ? "Stopped with error"
+        : "Idle";
+
+  if (status === "running" && total <= 0) {
+    progress.removeAttribute("value");
+    progress.max = 1;
+  } else {
+    progress.max = Math.max(1, total);
+    progress.value = total > 0 ? Math.min(current, total) : status === "success" ? 1 : 0;
+  }
+}
+
+function setButtonBusy(button, busy, busyText = "Working…") {
+  if (!button) return;
+  if (busy) {
+    button.dataset.activityLabel = button.textContent;
+    button.dataset.activityWasDisabled = button.disabled ? "true" : "false";
+    button.disabled = true;
+    button.classList.add("is-busy");
+    button.setAttribute("aria-busy", "true");
+    button.textContent = busyText;
+    return;
+  }
+  button.disabled = button.dataset.activityWasDisabled === "true";
+  button.classList.remove("is-busy");
+  button.removeAttribute("aria-busy");
+  if (button.dataset.activityLabel) button.textContent = button.dataset.activityLabel;
+  delete button.dataset.activityLabel;
+  delete button.dataset.activityWasDisabled;
+}
+
+function beginVisibleActivity(button, options) {
+  const activity = appState.activity;
+  activity.sequence += 1;
+  activity.activeId = activity.sequence;
+  activity.startedAt = Date.now();
+  activity.status = "running";
+  activity.source = "action";
+  window.clearInterval(activity.timer);
+  window.clearInterval(activity.poll);
+  setButtonBusy(button, true, options.busyText);
+  renderActivity({
+    status: "running",
+    title: options.title,
+    detail: options.detail,
+    startedAt: activity.startedAt,
+  });
+  activity.timer = window.setInterval(() => {
+    if (activity.status === "running") {
+      $("activityElapsed").textContent = elapsedLabel(activity.startedAt);
+    }
+  }, 500);
+  return activity.activeId;
+}
+
+async function refreshBackendActivity(activityId) {
+  if (appState.activity.activeId !== activityId) return;
+  try {
+    const payload = await api("/api/activity");
+    const activity = payload.activity || {};
+    if (activity.status !== "running") {
+      if (appState.activity.source === "server") {
+        appState.activity.status = activity.status || "idle";
+        window.clearInterval(appState.activity.timer);
+        window.clearInterval(appState.activity.poll);
+        renderActivity(activity);
+      }
+      return;
+    }
+    appState.activity.status = "running";
+    renderActivity(activity);
+  } catch (_error) {
+    // The initiating request still owns final success/error handling.
+  }
+}
+
+function resumeBackendActivity(activity) {
+  if (!activity || !activity.status || activity.status === "idle") return;
+  if (appState.activity.status === "running" && appState.activity.source !== "server") return;
+  appState.activity.sequence += 1;
+  appState.activity.activeId = appState.activity.sequence;
+  appState.activity.source = "server";
+  appState.activity.status = activity.status;
+  appState.activity.startedAt = Date.parse(activity.startedAt || "") || Date.now();
+  renderActivity(activity);
+  if (activity.status !== "running") return;
+  const activityId = appState.activity.activeId;
+  window.clearInterval(appState.activity.timer);
+  window.clearInterval(appState.activity.poll);
+  appState.activity.timer = window.setInterval(() => {
+    $("activityElapsed").textContent = elapsedLabel(appState.activity.startedAt);
+  }, 500);
+  appState.activity.poll = window.setInterval(() => refreshBackendActivity(activityId), 450);
+}
+
+function finishVisibleActivity(activityId, status, title, detail) {
+  if (appState.activity.activeId !== activityId) return;
+  appState.activity.status = status;
+  window.clearInterval(appState.activity.timer);
+  window.clearInterval(appState.activity.poll);
+  renderActivity({
+    status,
+    title,
+    detail,
+    startedAt: appState.activity.startedAt,
+    current: 0,
+    total: 0,
+  });
+}
+
+async function runVisibleAction(button, options, action) {
+  const activityId = beginVisibleActivity(button, options);
+  if (options.pollBackend) {
+    appState.activity.poll = window.setInterval(() => refreshBackendActivity(activityId), 450);
+    window.setTimeout(() => refreshBackendActivity(activityId), 80);
+  }
+  try {
+    const result = await action();
+    if (result === ACTION_CANCELLED) {
+      finishVisibleActivity(activityId, "idle", "Action cancelled", "Nothing was changed.");
+      return result;
+    }
+    const successDetail = typeof options.success === "function" ? options.success(result) : options.success;
+    finishVisibleActivity(activityId, "success", options.successTitle || `${options.title} complete`, successDetail || "Operation completed successfully.");
+    return result;
+  } catch (error) {
+    finishVisibleActivity(activityId, "error", `${options.title} failed`, error.message);
+    showToast(error.message, 5200);
+    return null;
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function reportInstantActivity(title, detail) {
+  if (appState.activity.status === "running") return;
+  appState.activity.sequence += 1;
+  appState.activity.activeId = appState.activity.sequence;
+  appState.activity.startedAt = Date.now();
+  appState.activity.source = "instant";
+  finishVisibleActivity(appState.activity.activeId, "success", title, detail);
 }
 
 async function api(path, options = {}) {
@@ -302,6 +487,28 @@ function tokenPayload() {
   return token ? { token } : {};
 }
 
+function renderJobActivity(job) {
+  if (!job) return;
+  if (appState.activity.status === "running" && appState.activity.source !== "job") return;
+  const stats = job.stats || {};
+  const status = job.status || "idle";
+  const running = ["queued", "running", "paused"].includes(status);
+  const failed = status === "failed";
+  const cancelled = status === "cancelled";
+  const latest = job.latest?.title ? `Current item: ${job.latest.title}` : "Preparing the Audiobookshelf match queue…";
+  appState.activity.source = "job";
+  appState.activity.status = running ? "running" : failed ? "error" : cancelled ? "idle" : "success";
+  appState.activity.startedAt = Date.parse(job.startedAt || "") || appState.activity.startedAt || Date.now();
+  renderActivity({
+    status: appState.activity.status,
+    title: running ? `Matching job ${status}` : failed ? "Matching job failed" : cancelled ? "Matching job cancelled" : "Matching job complete",
+    detail: running ? latest : `Matched ${stats.matched || 0}; review ${stats.review || 0}; errors ${stats.errors || 0}.`,
+    current: stats.processed || 0,
+    total: stats.total || 0,
+    startedAt: appState.activity.startedAt,
+  });
+}
+
 function renderJob(job) {
   appState.job = job;
   const stats = job?.stats || {};
@@ -313,6 +520,7 @@ function renderJob(job) {
   $("latestItem").textContent = job?.latest?.title ? `Latest: ${job.latest.title}` : "";
   appState.logs = job?.logs || [];
   renderLogs();
+  renderJobActivity(job);
   if (!appState.reviewRows.length && job?.reviewQueue?.length) {
     appState.reviewRows = job.reviewQueue;
     renderReviewDesk();
@@ -783,6 +991,7 @@ async function scanReview() {
   appState.reviewRows = payload.review.rows || [];
   renderReviewDesk();
   showToast(`Loaded ${appState.reviewRows.length} review item(s)`);
+  return payload;
 }
 
 function loadJobReviewQueue() {
@@ -790,28 +999,30 @@ function loadJobReviewQueue() {
   appState.reviewRows = rows;
   renderReviewDesk();
   showToast(`Loaded ${rows.length} item(s) from the current job queue`);
+  reportInstantActivity("Job review queue loaded", `${rows.length} review item(s) are now displayed.`);
 }
 
 async function approveReview(rowIndex) {
   const row = appState.reviewRows[rowIndex];
-  if (!row) return;
+  if (!row) return ACTION_CANCELLED;
   const selected = document.querySelector(`input[name="review-${rowIndex}"]:checked`);
   const candidateIndex = Number(selected?.value || 0);
   const candidate = row.candidates?.[candidateIndex];
   if (!candidate) {
     showToast("No candidate selected");
-    return;
+    return ACTION_CANCELLED;
   }
   const confirmed = window.confirm(`Approve this match for "${row.item.title}"? This writes to Audiobookshelf.`);
-  if (!confirmed) return;
+  if (!confirmed) return ACTION_CANCELLED;
   appState.reviewRows.splice(rowIndex, 1);
   renderReviewDesk();
   try {
-    await api("/api/review/approve", {
+    const payload = await api("/api/review/approve", {
       method: "POST",
       body: JSON.stringify({ settings: getSettingsFromForm(), itemId: row.item.id, candidate, row, ...tokenPayload() }),
     });
     showToast("Review match approved");
+    return payload;
   } catch (error) {
     appState.reviewRows.splice(rowIndex, 0, row);
     renderReviewDesk();
@@ -821,15 +1032,16 @@ async function approveReview(rowIndex) {
 
 async function rejectReview(rowIndex) {
   const row = appState.reviewRows[rowIndex];
-  if (!row) return;
+  if (!row) return ACTION_CANCELLED;
   appState.reviewRows.splice(rowIndex, 1);
   renderReviewDesk();
   try {
-    await api("/api/review/reject", {
+    const payload = await api("/api/review/reject", {
       method: "POST",
       body: JSON.stringify({ settings: getSettingsFromForm(), itemId: row.item.id, row, ...tokenPayload() }),
     });
     showToast("Review item rejected");
+    return payload;
   } catch (error) {
     appState.reviewRows.splice(rowIndex, 0, row);
     renderReviewDesk();
@@ -841,6 +1053,7 @@ async function loadState() {
   const payload = await api("/api/state");
   setForm(payload.settings);
   renderJob(payload.job);
+  resumeBackendActivity(payload.activity);
   renderReviewDesk();
 }
 
@@ -903,10 +1116,11 @@ async function searchReview(rowIndex, form) {
         ? "Results need your review"
         : "No match found";
     showToast(verdict);
+    return payload;
   } catch (error) {
     search.error = `${error.message}. Try broader terms or another provider.`;
     search.result = null;
-    showToast("Manual search failed — details remain open below");
+    throw error;
   } finally {
     search.loading = false;
     renderReviewDesk({ preserveRow: rowIndex });
@@ -921,6 +1135,7 @@ async function connect() {
   setForm(payload.settings);
   populateLibraries(normalizeLibraryList(payload));
   showToast(payload.message || "Connected");
+  return payload;
 }
 
 async function saveSettings() {
@@ -930,6 +1145,7 @@ async function saveSettings() {
   });
   setForm(payload.settings);
   showToast("Settings saved");
+  return payload;
 }
 
 async function testGoogleBooks() {
@@ -950,6 +1166,7 @@ async function testGoogleBooks() {
     });
     setForm(payload.settings);
     showToast(payload.message || "Google Books API key tested and enabled");
+    return payload;
   } catch (error) {
     try {
       await loadState();
@@ -958,7 +1175,7 @@ async function testGoogleBooks() {
     }
     result.className = "provider-test-result error";
     result.textContent = `${error.message} Google searches remain disabled.`;
-    showToast("Google Books test failed — see the configuration panel", 5200);
+    throw error;
   } finally {
     button.disabled = false;
     button.textContent = "Test & Enable";
@@ -966,23 +1183,24 @@ async function testGoogleBooks() {
 }
 
 async function clearGoogleBooks() {
-  if (!window.confirm("Remove the saved Google Books API key and disable all Google searches?")) return;
+  if (!window.confirm("Remove the saved Google Books API key and disable all Google searches?")) return ACTION_CANCELLED;
   const payload = await api("/api/provider/google/clear", {
     method: "POST",
     body: "{}",
   });
   setForm(payload.settings);
   showToast(payload.message || "Google Books API key removed");
+  return payload;
 }
 
 async function loadFilterData() {
   const libraryId = $("libraryId").value;
   if (!libraryId) {
-    showToast("Select a library first");
-    return;
+    throw new Error("Select a library first");
   }
   const payload = await api(`/api/filter-data?libraryId=${encodeURIComponent(libraryId)}`);
   populateFilterData(payload.filterData);
+  return payload;
 }
 
 async function preview() {
@@ -993,6 +1211,7 @@ async function preview() {
   });
   renderPreview(payload.preview);
   showToast("Preview loaded");
+  return payload;
 }
 
 async function startJob() {
@@ -1000,7 +1219,7 @@ async function startJob() {
   ensureGoogleBooksReady(settings.connection.provider);
   if (!settings.run.dryRun) {
     const confirmed = window.confirm("This run will write metadata/tags to Audiobookshelf. Start anyway?");
-    if (!confirmed) return;
+    if (!confirmed) return ACTION_CANCELLED;
   }
   const payload = await api("/api/job/start", {
     method: "POST",
@@ -1009,11 +1228,13 @@ async function startJob() {
   renderJob(payload.job);
   startPolling();
   showToast("Job started");
+  return payload;
 }
 
 async function jobAction(action) {
   const payload = await api(`/api/job/${action}`, { method: "POST", body: "{}" });
   renderJob(payload.job);
+  return payload;
 }
 
 async function pollJob() {
@@ -1043,6 +1264,7 @@ function exportLog() {
   const job = appState.job;
   if (!job) {
     showToast("No job log to export");
+    reportInstantActivity("Nothing to export", "Run a matching job before exporting its log.");
     return;
   }
   const blob = new Blob([JSON.stringify(job, null, 2)], { type: "application/json" });
@@ -1052,6 +1274,7 @@ function exportLog() {
   link.download = `absidekick-job-${job.id}.json`;
   link.click();
   URL.revokeObjectURL(url);
+  reportInstantActivity("Job log exported", "The JSON log download was created.");
 }
 
 function wireEvents() {
@@ -1063,35 +1286,111 @@ function wireEvents() {
       $(`tab-${button.dataset.tab}`).classList.add("active");
     });
   });
-  $("connectBtn").addEventListener("click", () => connect().catch((error) => showToast(error.message)));
-  $("saveSettingsBtn").addEventListener("click", () => saveSettings().catch((error) => showToast(error.message)));
-  $("testGoogleBooksBtn").addEventListener("click", () => testGoogleBooks());
-  $("clearGoogleBooksBtn").addEventListener("click", () => clearGoogleBooks().catch((error) => showToast(error.message)));
-  $("loadFiltersBtn").addEventListener("click", () => loadFilterData().catch((error) => showToast(error.message)));
-  $("previewBtn").addEventListener("click", () => preview().catch((error) => showToast(error.message)));
-  $("startBtn").addEventListener("click", () => startJob().catch((error) => showToast(error.message)));
-  $("pauseBtn").addEventListener("click", () => jobAction("pause").catch((error) => showToast(error.message)));
-  $("resumeBtn").addEventListener("click", () => jobAction("resume").catch((error) => showToast(error.message)));
-  $("cancelBtn").addEventListener("click", () => jobAction("cancel").catch((error) => showToast(error.message)));
+  $("connectBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Connecting to Audiobookshelf",
+    detail: "Checking the server URL and token, then loading available libraries…",
+    busyText: "Connecting…",
+    success: (payload) => payload?.message || "Audiobookshelf connection is ready.",
+  }, connect));
+  $("saveSettingsBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Saving ABSidekick settings",
+    detail: "Validating and writing module settings to the private data folder…",
+    busyText: "Saving…",
+    success: "Settings were saved and will apply to the next action.",
+  }, saveSettings));
+  $("testGoogleBooksBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Testing Google Books",
+    detail: "Sending one validation query to the official Google Books API…",
+    busyText: "Testing…",
+    success: "The API key passed its live test; native Google searches are enabled.",
+  }, testGoogleBooks));
+  $("clearGoogleBooksBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Removing Google Books key",
+    detail: "Waiting for confirmation, then removing the stored private key…",
+    busyText: "Removing…",
+    success: "The key was removed and Google searches are disabled.",
+  }, clearGoogleBooks));
+  $("loadFiltersBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Loading library filters",
+    detail: "Requesting authors, tags, and series from the selected ABS library…",
+    busyText: "Loading…",
+    success: "Library filter choices are ready.",
+  }, loadFilterData));
+  $("previewBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Building match preview",
+    detail: "Loading eligible ABS items and searching the selected metadata provider…",
+    busyText: "Previewing…",
+    success: "The dry-run match preview is ready.",
+  }, preview));
+  $("startBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Starting matching job",
+    detail: "Validating run policy and creating the background matching queue…",
+    busyText: "Starting…",
+    success: "The background job started; live item counts will continue here.",
+  }, startJob));
+  $("pauseBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Pausing matching job",
+    detail: "Waiting for the current safe checkpoint…",
+    busyText: "Pausing…",
+    success: "The matching job is paused.",
+  }, () => jobAction("pause")));
+  $("resumeBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Resuming matching job",
+    detail: "Releasing the paused background worker…",
+    busyText: "Resuming…",
+    success: "The matching job resumed.",
+  }, () => jobAction("resume")));
+  $("cancelBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Cancelling matching job",
+    detail: "Requesting a stop at the next safe checkpoint…",
+    busyText: "Cancelling…",
+    success: "Cancellation was requested.",
+  }, () => jobAction("cancel")));
   $("exportBtn").addEventListener("click", exportLog);
-  $("scanReviewBtn").addEventListener("click", () => scanReview().catch((error) => showToast(error.message)));
+  $("scanReviewBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
+    title: "Scanning Review Tags",
+    successTitle: "Review scan complete",
+    detail: "Loading review-tagged ABS items; live item and provider progress will appear here…",
+    busyText: "Scanning…",
+    pollBackend: true,
+    success: () => `Review scan finished with ${appState.reviewRows.length} item(s) ready for review.`,
+  }, scanReview));
   $("loadJobReviewBtn").addEventListener("click", loadJobReviewQueue);
   $("reviewDesk").addEventListener("click", (event) => {
     const button = event.target.closest("[data-review-action]");
     if (!button) return;
     const row = Number(button.dataset.row);
+    const title = appState.reviewRows[row]?.item?.title || `review item ${row + 1}`;
     if (button.dataset.reviewAction === "approve") {
-      approveReview(row).catch((error) => showToast(error.message));
+      runVisibleAction(button, {
+        title: `Approving ${title}`,
+        detail: "Writing the selected metadata to Audiobookshelf and clearing review state…",
+        busyText: "Approving…",
+        success: "The selected match was written to Audiobookshelf.",
+      }, () => approveReview(row));
     }
     if (button.dataset.reviewAction === "reject") {
-      rejectReview(row).catch((error) => showToast(error.message));
+      runVisibleAction(button, {
+        title: `Rejecting ${title}`,
+        detail: "Updating ABS tags and saving the review decision…",
+        busyText: "Rejecting…",
+        success: "The item was rejected and its review state was saved.",
+      }, () => rejectReview(row));
     }
   });
   $("reviewDesk").addEventListener("submit", (event) => {
     const form = event.target.closest("[data-review-search-form]");
     if (!form) return;
     event.preventDefault();
-    searchReview(Number(form.dataset.row), form).catch((error) => showToast(error.message));
+    const row = Number(form.dataset.row);
+    const button = form.querySelector('button[type="submit"]');
+    const title = appState.reviewRows[row]?.item?.title || `review item ${row + 1}`;
+    runVisibleAction(button, {
+      title: `Researching ${title}`,
+      detail: "Searching the selected provider and rescoring every returned candidate…",
+      busyText: "Searching…",
+      success: (payload) => `${payload?.resultCount || 0} candidate(s) returned; the review row has been updated.`,
+    }, () => searchReview(row, form));
   });
   $("reviewDesk").addEventListener("change", (event) => {
     const radio = event.target.closest('input[type="radio"][name^="review-"]');

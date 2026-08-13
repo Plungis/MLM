@@ -144,3 +144,48 @@ def test_absidekick_review_search_uses_normal_service_connection(
     assert result["candidates"][0]["candidate"]["title"] == "The Book"
     assert result["manualMatch"]["bestCandidate"]["candidate"]["title"] == "The Book"
     assert result["manualMatch"]["status"] == result["decision"]["action"]
+
+
+def test_review_scan_publishes_live_activity_and_completion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+    observed_running = []
+
+    def fake_scan(_client, _settings, limit, excluded_ids, progress):
+        assert limit == 3
+        assert excluded_ids == set()
+        progress(
+            {
+                "phase": "searching",
+                "detail": "Searching providers for The Book",
+                "current": 0,
+                "total": 1,
+                "currentTitle": "The Book",
+            }
+        )
+        observed_running.append(service.activity_snapshot()["activity"])
+        progress(
+            {
+                "phase": "searching",
+                "detail": "Finished The Book",
+                "current": 1,
+                "total": 1,
+                "currentTitle": "The Book",
+            }
+        )
+        return {"totalReviewItems": 1, "rows": [{"item": {"id": "item-1"}}]}
+
+    monkeypatch.setattr(service, "client", lambda settings, token: object())
+    monkeypatch.setattr(absidekick_service, "scan_review_items", fake_scan)
+
+    result = service.scan_review({"limit": 3})
+    activity = service.public_state()["activity"]
+
+    assert result["ok"] is True
+    assert observed_running[0]["status"] == "running"
+    assert observed_running[0]["currentTitle"] == "The Book"
+    assert activity["status"] == "success"
+    assert activity["current"] == 1
+    assert activity["total"] == 1
+    assert "loaded 1 item" in activity["detail"]

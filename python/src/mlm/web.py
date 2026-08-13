@@ -680,6 +680,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             request, lambda: {"ok": True, "job": absidekick.job_snapshot()}
         )
 
+    @app.get("/api/absidekick/activity")
+    async def absidekick_activity(request: Request):
+        return await absidekick_call(request, absidekick.activity_snapshot)
+
     @app.get("/api/absidekick/item-cover/{item_id}")
     async def absidekick_item_cover(request: Request, item_id: str):
         result = await absidekick_call(request, absidekick.cover, item_id)

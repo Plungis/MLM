@@ -19,6 +19,7 @@ from mlm.modules.absidekick.core import (
     normalize_title,
     public_settings,
     rank_candidates,
+    scan_review_items,
     score_candidate,
     search_candidates,
     search_review_candidates,
@@ -756,6 +757,42 @@ class ScoringTests(unittest.TestCase):
                 {"title": "Wizard", "provider": "not-real"},
                 DEFAULT_SETTINGS,
             )
+
+    def test_review_scan_reports_loading_and_per_item_progress(self):
+        class ReviewScanClient:
+            def get(self, path, params=None):
+                if path == "/api/libraries/library-1/items":
+                    return {
+                        "results": [sample_item(["ABSidekick: Needs Review"])],
+                        "total": 1,
+                    }
+                if path == "/api/search/books":
+                    return [
+                        {
+                            "title": "Wizard's First Rule",
+                            "author": "Terry Goodkind",
+                        }
+                    ]
+                raise AssertionError(path)
+
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["connection"]["libraryId"] = "library-1"
+        updates = []
+
+        result = scan_review_items(
+            ReviewScanClient(),
+            settings,
+            limit=25,
+            progress=lambda update: updates.append(dict(update)),
+        )
+
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(updates[0]["phase"], "loading")
+        self.assertEqual(updates[1]["total"], 1)
+        self.assertEqual(updates[2]["current"], 0)
+        self.assertEqual(updates[2]["currentTitle"], "Wizard's First Rule")
+        self.assertEqual(updates[-1]["current"], 1)
+        self.assertIn("Finished Wizard's First Rule", updates[-1]["detail"])
 
 
 if __name__ == "__main__":

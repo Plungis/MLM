@@ -37,6 +37,20 @@
         </article>
       </section>
 
+      <section id="activityPanel" class="activity-panel idle" role="status" aria-live="polite" aria-atomic="false">
+        <div class="activity-signal" aria-hidden="true"><span></span></div>
+        <div class="activity-copy">
+          <p class="eyebrow">Live activity</p>
+          <strong id="activityTitle">Ready</strong>
+          <span id="activityDetail">No ABSidekick operation is currently running.</span>
+          <progress id="activityProgress" max="1" value="0"></progress>
+        </div>
+        <div class="activity-numbers">
+          <strong id="activityCount">—</strong>
+          <span id="activityElapsed">Idle</span>
+        </div>
+      </section>
+
       <section class="layout">
         <aside class="panel nav-panel">
           <button class="tab active" data-tab="connection">Connection</button>

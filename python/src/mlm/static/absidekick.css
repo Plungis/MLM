@@ -130,6 +130,148 @@ code {
   white-space: nowrap;
 }
 
+.activity-panel {
+  align-items: center;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.activity-panel.running {
+  background: linear-gradient(90deg, rgba(21, 255, 138, 0.08), color-mix(in srgb, var(--panel) 94%, transparent));
+  border-color: var(--accent);
+  box-shadow: 0 0 22px rgba(21, 255, 138, 0.08);
+}
+
+.activity-panel.success {
+  border-left-color: var(--accent);
+}
+
+.activity-panel.error {
+  border-color: var(--danger);
+}
+
+.activity-signal {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  display: flex;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+
+.activity-signal span {
+  background: var(--muted);
+  border-radius: 50%;
+  height: 0.55rem;
+  width: 0.55rem;
+}
+
+.activity-panel.running .activity-signal span {
+  animation: activity-pulse 1.15s ease-in-out infinite;
+  background: var(--accent);
+  box-shadow: 0 0 14px var(--accent);
+}
+
+.activity-panel.success .activity-signal span {
+  background: var(--accent);
+}
+
+.activity-panel.error .activity-signal span {
+  background: var(--danger);
+}
+
+.activity-copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.activity-copy .eyebrow {
+  margin: 0;
+}
+
+.activity-copy > strong {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.activity-copy > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-height: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.activity-copy progress {
+  accent-color: var(--accent);
+  height: 0.35rem;
+  margin-top: 0.25rem;
+  max-width: 42rem;
+  width: 100%;
+}
+
+.activity-numbers {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 7rem;
+  text-align: right;
+}
+
+.activity-numbers strong {
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+
+.activity-numbers span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+button.is-busy {
+  cursor: wait;
+  position: relative;
+}
+
+button.is-busy::before {
+  animation: activity-spin 0.8s linear infinite;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  display: inline-block;
+  height: 0.7rem;
+  margin-right: 0.5rem;
+  vertical-align: -0.05rem;
+  width: 0.7rem;
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .layout {
   display: grid;
   gap: 1rem;
@@ -988,6 +1130,17 @@ select:focus {
     flex-wrap: wrap;
   }
 
+  .activity-panel {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .activity-numbers {
+    grid-column: 2;
+    min-width: 0;
+    text-align: left;
+  }
+
   .google-key-grid {
     grid-template-columns: 1fr;
   }
@@ -995,4 +1148,13 @@ select:focus {
   .google-key-actions {
     flex-wrap: wrap;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-panel.running .activity-signal span,
+  button.is-busy::before {
+    animation: none;
+  }
+}
+
 }

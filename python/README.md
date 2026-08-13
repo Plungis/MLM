@@ -121,6 +121,12 @@ match, review-only candidates, no results, or an error. Candidates can be
 selected and approved directly, or the item can be rejected without leaving the
 review.
 
+The persistent **Live activity** strip confirms every server-backed action,
+keeps an elapsed timer running, disables the initiating button while work is in
+flight, and retains the completion or error result. **Scan Review Tags** also
+shows its live phase, current book title, and `completed / total` count while
+Audiobookshelf and metadata-provider requests are still running.
+
 For speed and rate-limit safety, automatic fallback providers are disabled by
 default. The primary provider gets one precise search; only an empty response
 can trigger a cleaned/title-only retry. Leading track/disc numbers are removed

@@ -58,6 +58,19 @@ class ABSidekickService:
         self.job: MatchJob | None = None
         self.review_state = _load_json(self.review_state_path, {"decisions": {}})
         self._lock = threading.RLock()
+        self.activity: dict[str, Any] = {
+            "id": "",
+            "kind": "",
+            "status": "idle",
+            "title": "Ready",
+            "detail": "No ABSidekick operation is currently running.",
+            "phase": "idle",
+            "current": 0,
+            "total": 0,
+            "currentTitle": "",
+            "startedAt": "",
+            "finishedAt": "",
+        }
 
     def merged_settings(self, incoming: dict[str, Any] | None = None) -> dict[str, Any]:
         return deep_merge(self.settings, incoming or {})
@@ -96,7 +109,51 @@ class ABSidekickService:
                 "version": APP_VERSION,
                 "settings": public_settings(self.settings, bool(self.token)),
                 "job": self.job_snapshot(),
+                "activity": dict(self.activity),
             }
+
+    def activity_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {"ok": True, "activity": dict(self.activity)}
+
+    def _begin_activity(self, kind: str, title: str, detail: str) -> str:
+        activity_id = str(time.time_ns())
+        with self._lock:
+            self.activity = {
+                "id": activity_id,
+                "kind": kind,
+                "status": "running",
+                "title": title,
+                "detail": detail,
+                "phase": "starting",
+                "current": 0,
+                "total": 0,
+                "currentTitle": "",
+                "startedAt": utc_now(),
+                "finishedAt": "",
+            }
+        return activity_id
+
+    def _update_activity(self, activity_id: str, update: dict[str, Any]) -> None:
+        with self._lock:
+            if self.activity.get("id") != activity_id:
+                return
+            for key in ("phase", "detail", "current", "total", "currentTitle"):
+                if key in update:
+                    self.activity[key] = update[key]
+
+    def _finish_activity(self, activity_id: str, status: str, detail: str) -> None:
+        with self._lock:
+            if self.activity.get("id") != activity_id:
+                return
+            self.activity.update(
+                {
+                    "status": status,
+                    "detail": detail,
+                    "phase": "finished",
+                    "finishedAt": utc_now(),
+                }
+            )
 
     def _incoming(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         incoming = payload.get("settings") or {}
@@ -243,11 +300,30 @@ class ABSidekickService:
         limit = int(
             payload.get("limit") or settings.get("review", {}).get("scanLimit", 25)
         )
-        rows = scan_review_items(
-            self.client(settings, token),
-            settings,
-            limit=limit,
-            excluded_ids=self.reviewed_ids(),
+        activity_id = self._begin_activity(
+            "review-scan",
+            "Scanning Review Tags",
+            "Connecting to Audiobookshelf and loading review-tagged items…",
+        )
+        try:
+            rows = scan_review_items(
+                self.client(settings, token),
+                settings,
+                limit=limit,
+                excluded_ids=self.reviewed_ids(),
+                progress=lambda update: self._update_activity(activity_id, update),
+            )
+        except Exception as error:
+            self._finish_activity(
+                activity_id,
+                "error",
+                f"Review scan failed: {error}",
+            )
+            raise
+        self._finish_activity(
+            activity_id,
+            "success",
+            f"Review scan finished: loaded {len(rows['rows'])} item(s).",
         )
         return {
             "ok": True,

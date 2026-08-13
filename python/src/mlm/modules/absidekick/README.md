@@ -61,6 +61,13 @@ are opt-in, and search requests use a short no-retry timeout. A timed-out
 provider is disabled on that `ABSClient` for the rest of the job. Provider
 failures are attached to preview/review rows and written to the module log.
 
+The module UI has a persistent Live Activity strip for every server-backed
+control. It owns button busy/disabled states, elapsed time, and persistent
+success or actionable failure results. Review-tag scans additionally publish
+thread-safe backend progress through `/api/absidekick/activity`, including the
+loading/search phase, current title, and completed/total count. A refreshed UI
+can resume observing an in-progress scan instead of losing its status.
+
 ## Boundaries
 
 MyAnonaSuite owns routing, local-only access checks, static delivery, and the

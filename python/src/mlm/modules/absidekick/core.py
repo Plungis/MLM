@@ -12,6 +12,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1823,6 +1824,7 @@ def scan_review_items(
     settings: dict[str, Any],
     limit: int | None = None,
     excluded_ids: set[str] | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     scan_settings = deepcopy(settings)
     scan_settings.setdefault("targeting", {})
@@ -1836,16 +1838,61 @@ def scan_review_items(
     scan_settings["matching"]["candidateLimit"] = int(
         scan_settings.get("review", {}).get("candidateLimit", 6)
     )
+    if progress:
+        progress(
+            {
+                "phase": "loading",
+                "detail": "Loading review-tagged items from Audiobookshelf…",
+                "current": 0,
+                "total": 0,
+                "currentTitle": "",
+            }
+        )
     items = fetch_library_items(client, scan_settings)
+    scan_items = [item for item in items if str(item.get("id")) not in excluded_ids][
+        :scan_limit
+    ]
+    if progress:
+        progress(
+            {
+                "phase": "searching",
+                "detail": (
+                    f"Loaded {len(items)} review-tagged item(s); searching "
+                    f"metadata for {len(scan_items)} pending item(s)."
+                ),
+                "current": 0,
+                "total": len(scan_items),
+                "currentTitle": "",
+            }
+        )
     rows = []
-    for item in items:
-        if str(item.get("id")) in excluded_ids:
-            continue
+    for index, item in enumerate(scan_items, start=1):
+        title = item_title(item)
+        if progress:
+            progress(
+                {
+                    "phase": "searching",
+                    "detail": f"Searching providers for {title}",
+                    "current": index - 1,
+                    "total": len(scan_items),
+                    "currentTitle": title,
+                }
+            )
         candidates = search_candidates(client, item, scan_settings)
         ranked = rank_candidates(item, candidates, scan_settings)
         rows.append(
             build_review_row(item, ranked, scan_settings, candidates.diagnostics)
         )
+        if progress:
+            progress(
+                {
+                    "phase": "searching",
+                    "detail": f"Finished {title}",
+                    "current": index,
+                    "total": len(scan_items),
+                    "currentTitle": title,
+                }
+            )
         primary_provider = str(
             scan_settings.get("connection", {}).get("provider") or "audible"
         )
@@ -1854,8 +1901,6 @@ def scan_review_items(
             and primary_provider in client.disabled_search_providers
             and not ranked
         ):
-            break
-        if len(rows) >= scan_limit:
             break
     return {"totalReviewItems": len(items), "rows": rows}
 
