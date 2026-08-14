@@ -156,6 +156,10 @@ timeout is separate from the general ABS API timeout and never uses general API
 retries. Provider failures follow the run-local retry and circuit-breaker policy
 described above, then leave the item available for Review.
 
+Track prefixes with secondary indices, such as `01(3) Octopussy` and
+`02 (7) Thunderball`, are reduced to the real title before searching and
+scoring, while numeric titles such as `11(22)63` remain intact.
+
 Series-number folder prefixes are parsed separately from real titles. For
 example, `Pern 17 - The Masterharper of Pern` searches as
 `The Masterharper of Pern`. Series metadata or a repeated distinctive series

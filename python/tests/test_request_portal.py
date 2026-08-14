@@ -390,7 +390,7 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b41"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b42"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())

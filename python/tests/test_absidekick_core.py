@@ -881,6 +881,49 @@ class ScoringTests(unittest.TestCase):
         )
         self.assertEqual(candidates[0]["title"], "Northern Lights")
 
+    def test_parenthesized_track_numbers_are_removed_from_search_title(self):
+        self.assertEqual(clean_search_title("01(3) Octopussy"), "Octopussy")
+        self.assertEqual(clean_search_title("02 (7) Thunderball"), "Thunderball")
+        self.assertEqual(clean_search_title("11(22)63"), "11(22)63")
+
+    def test_cleaned_google_result_can_auto_match_parenthesized_track_title(self):
+        class GoogleSecondPassClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["provider"] == "google":
+                    return [{"title": "Octopussy", "author": "Ian Fleming"}]
+                return [{"title": "A Different Book", "author": "Ian Fleming"}]
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = "01(3) Octopussy"
+        item["media"]["metadata"]["authorName"] = "Ian Fleming"
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+        client = GoogleSecondPassClient()
+
+        candidates = search_candidates(client, item, settings)
+        ranked = rank_candidates(item, candidates, settings)
+        decision = match_decision(ranked, settings)
+
+        self.assertEqual(
+            [query["provider"] for query in client.queries], ["audible", "google"]
+        )
+        self.assertEqual(client.queries[-1]["title"], "Octopussy")
+        self.assertEqual(ranked[0]["parts"]["title"], 100)
+        self.assertEqual(ranked[0]["parts"]["author"], 100)
+        self.assertEqual(decision["action"], "auto")
+
     def test_series_sequence_prefix_is_removed_before_searching(self):
         class PernClient:
             def __init__(self):

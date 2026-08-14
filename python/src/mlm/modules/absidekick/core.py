@@ -1629,11 +1629,19 @@ def clean_search_title(
     # searches (for example, "01 Northern Lights"). Do not touch titles that
     # are themselves a number, such as "1984".
     number_cleaned = re.sub(
-        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?0*\d{1,3}\s*[-_.:]?\s+",
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+        r"0*\d{1,3}\s*\(\s*\d{1,3}\s*\)\s*[-_.:]?\s+",
         "",
         title,
         flags=re.IGNORECASE,
     ).strip()
+    if number_cleaned == title:
+        number_cleaned = re.sub(
+            r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?0*\d{1,3}\s*[-_.:]?\s+",
+            "",
+            title,
+            flags=re.IGNORECASE,
+        ).strip()
     if number_cleaned and number_cleaned != title:
         return number_cleaned
     return _series_prefix_title(
