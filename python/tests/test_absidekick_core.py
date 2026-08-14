@@ -477,6 +477,67 @@ class ScoringTests(unittest.TestCase):
             any("winner margin" in reason for reason in decision["reasons"])
         )
 
+    def test_duplicate_listings_of_same_work_do_not_force_review(self):
+        candidates = [
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "asin": "ABS-EDITION",
+            },
+            {
+                "title": "Wizards First Rule",
+                "author": "Terry Goodkind",
+                "id": "google-edition",
+            },
+        ]
+
+        ranked = rank_candidates(sample_item(), candidates, DEFAULT_SETTINGS)
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "auto")
+        self.assertEqual(decision["equivalentCandidateCount"], 1)
+        self.assertEqual(decision["competingCandidateCount"], 0)
+        self.assertEqual(decision["margin"], 100)
+
+    def test_richer_duplicate_wins_when_other_provider_omits_author(self):
+        candidates = [
+            {"title": "Wizard's First Rule", "id": "sparse-result"},
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "id": "verified-result",
+            },
+        ]
+
+        ranked = rank_candidates(sample_item(), candidates, DEFAULT_SETTINGS)
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(ranked[0]["candidate"]["id"], "verified-result")
+        self.assertEqual(decision["action"], "auto")
+        self.assertEqual(decision["equivalentCandidateCount"], 1)
+
+    def test_same_title_and_author_with_conflicting_series_numbers_stays_review(self):
+        candidates = [
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "series": [{"name": "Sword of Truth", "sequence": "1"}],
+            },
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "series": [{"name": "Sword of Truth", "sequence": "2"}],
+            },
+        ]
+
+        ranked = rank_candidates(sample_item(), candidates, DEFAULT_SETTINGS)
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertEqual(decision["equivalentCandidateCount"], 0)
+        self.assertEqual(decision["competingCandidateCount"], 1)
+        self.assertIn("meaningfully different", " ".join(decision["reasons"]))
+
     def test_exact_identifier_can_confirm_sparse_candidate(self):
         item = sample_item()
         item["media"]["metadata"]["asin"] = "B00-ABC-123"

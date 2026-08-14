@@ -346,7 +346,7 @@ function renderPolicySummary() {
   $("matchPolicyPreset").value = preset;
   const scoreRange = `Similarity ${values.threshold}+ can auto-match; scores from ${values.reviewFloor} up to just under ${values.threshold} go to Review.`;
   $("policySummary").innerHTML = values.strictAutoMatch
-    ? `<strong>${preset === "custom" ? "Custom safety policy" : `${$("matchPolicyPreset").selectedOptions[0].textContent} policy`}</strong><span>${scoreRange} Automatic approval also requires title ${values.minimumTitleScore}+, author ${values.minimumAuthorScore}+ when both sides provide one, ${values.minimumStrongSignals} independent signal${values.minimumStrongSignals === 1 ? "" : "s"}, a ${values.minimumWinnerMargin}-point lead, and no metadata conflicts.</span><span class="policy-google">If ABS does not pass all of that, a tested Google key is searched immediately and the full ABS to Google path appears in the log.</span>`
+    ? `<strong>${preset === "custom" ? "Custom safety policy" : `${$("matchPolicyPreset").selectedOptions[0].textContent} policy`}</strong><span>${scoreRange} Automatic approval also requires title ${values.minimumTitleScore}+, author ${values.minimumAuthorScore}+ when both sides provide one, ${values.minimumStrongSignals} independent signal${values.minimumStrongSignals === 1 ? "" : "s"}, a ${values.minimumWinnerMargin}-point lead over a meaningfully different result, and no metadata conflicts. Duplicate listings of the same work do not count as competitors.</span><span class="policy-google">If ABS does not pass all of that, a tested Google key is searched immediately and the full ABS to Google path appears in the log.</span>`
     : `<strong>Similarity-only approval</strong><span>${scoreRange} The title, author, signal, margin, and conflict safety checks are displayed but do not block automatic approval. This is less accurate.</span><span class="policy-google">If ABS does not reach the score, a tested Google key is searched immediately.</span>`;
 }
 
@@ -681,8 +681,11 @@ function renderLogDecision(decision) {
   const scoreGate = decision.scorePassed
     ? `Similarity ${decision.score ?? "-"} passed the ${policy.autoThreshold ?? "-"} auto threshold.`
     : `Similarity ${decision.score ?? "-"} did not pass the ${policy.autoThreshold ?? "-"} auto threshold.`;
+  const duplicateNote = Number(decision.equivalentCandidateCount || 0)
+    ? ` ${decision.equivalentCandidateCount} duplicate-equivalent result${decision.equivalentCandidateCount === 1 ? " was" : "s were"} ignored for the margin check.`
+    : "";
   const evidence = policy.strict
-    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; winner lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}.`
+    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; different-result lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}.${duplicateNote}`
     : "Safety gates are not required by the current policy.";
   return `
     <div class="log-decision ${escapeHtml(decision.action || "")}">
@@ -894,8 +897,11 @@ function renderMatchDecision(decision) {
   const scoreStatus = decision.scorePassed
     ? `Similarity ${decision.score ?? "-"} passed ${policy.autoThreshold ?? "-"}`
     : `Similarity ${decision.score ?? "-"} is below ${policy.autoThreshold ?? "-"}`;
+  const duplicateNote = Number(decision.equivalentCandidateCount || 0)
+    ? `; ${decision.equivalentCandidateCount} duplicate-equivalent result${decision.equivalentCandidateCount === 1 ? " ignored" : "s ignored"}`
+    : "";
   const evidenceStatus = policy.strict
-    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}`
+    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; different-result lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}${duplicateNote}`
     : "Safety checks are not blocking in this policy";
   return `
     <div class="match-decision ${escapeHtml(decision.confidence || "none")}">

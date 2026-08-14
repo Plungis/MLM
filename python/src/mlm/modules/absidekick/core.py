@@ -752,8 +752,65 @@ def rank_candidates(
         score_candidate(item, candidate, settings, index)
         for index, candidate in enumerate(candidates)
     ]
-    scored.sort(key=lambda row: row["score"], reverse=True)
+    scored.sort(
+        key=lambda row: (
+            row["score"],
+            len(row.get("exactIdentifiers") or []),
+            len(row.get("strongSignals") or []),
+            int(row.get("evidenceCount") or 0),
+            -int(row.get("index") or 0),
+        ),
+        reverse=True,
+    )
     return scored
+
+
+def candidates_represent_same_work(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Return true when two scored results are duplicate listings of one work."""
+
+    left_candidate = left.get("candidate") or {}
+    right_candidate = right.get("candidate") or {}
+
+    for name in ("asin", "isbn"):
+        left_identifier = candidate_identifier(left_candidate, name)
+        right_identifier = candidate_identifier(right_candidate, name)
+        if left_identifier and left_identifier == right_identifier:
+            return True
+
+    left_title = normalize_title(left_candidate.get("title"))
+    right_title = normalize_title(right_candidate.get("title"))
+    if not left_title or left_title != right_title:
+        return False
+
+    left_collection = bool(
+        COLLECTION_PATTERN.search(" ".join(candidate_title_values(left_candidate)))
+    )
+    right_collection = bool(
+        COLLECTION_PATTERN.search(" ".join(candidate_title_values(right_candidate)))
+    )
+    if left_collection != right_collection:
+        return False
+
+    if series_sequence_conflict(
+        candidate_series_entries(left_candidate),
+        candidate_series_entries(right_candidate),
+    ):
+        return False
+
+    left_author = candidate_author(left_candidate)
+    right_author = candidate_author(right_candidate)
+    if left_author and right_author:
+        return best_people_ratio(left_author, right_author) >= 95
+    if not left_author and not right_author:
+        return False
+
+    # One provider may omit the author. It is not a competing match when the
+    # other result verifies the author and both return the exact same title.
+    known_author_score = max(
+        float((left.get("parts") or {}).get("author") or 0),
+        float((right.get("parts") or {}).get("author") or 0),
+    )
+    return known_author_score >= 90
 
 
 def match_decision(
@@ -786,12 +843,22 @@ def match_decision(
             "safetyPassed": False,
             "strongSignalCount": 0,
             "strongSignals": [],
+            "equivalentCandidateCount": 0,
+            "competingCandidateCount": 0,
             "policy": policy,
             "reasons": ["no metadata candidates returned"],
         }
 
     best = ranked[0]
-    runner_score = float(ranked[1]["score"]) if len(ranked) > 1 else 0.0
+    equivalent_candidates = [
+        row for row in ranked[1:] if candidates_represent_same_work(best, row)
+    ]
+    competing_candidates = [
+        row for row in ranked[1:] if not candidates_represent_same_work(best, row)
+    ]
+    runner_score = (
+        float(competing_candidates[0]["score"]) if competing_candidates else 0.0
+    )
     margin = round(float(best["score"]) - runner_score, 2)
     parts = best.get("parts") or {}
     safety_reasons = list(best.get("conflicts") or [])
@@ -822,7 +889,7 @@ def match_decision(
     if margin < margin_minimum and not exact_identifier:
         safety_reasons.append(
             f"winner margin: lead {margin:g} is below the required {margin_minimum:g}; "
-            "the top candidates are too close"
+            "the top meaningfully different candidates are too close"
         )
     if len(strong_signals) < signal_minimum and not exact_identifier:
         signal_label = ", ".join(strong_signals) if strong_signals else "none"
@@ -860,6 +927,8 @@ def match_decision(
         "margin": margin,
         "strongSignalCount": len(strong_signals),
         "strongSignals": strong_signals,
+        "equivalentCandidateCount": len(equivalent_candidates),
+        "competingCandidateCount": len(competing_candidates),
         "exactIdentifier": exact_identifier,
         "policy": policy,
     }

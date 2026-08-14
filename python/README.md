@@ -111,6 +111,12 @@ configuration rejections still stop Google immediately. Job diagnostics state
 whether the next item will retry or the provider was disabled and include the
 underlying error.
 
+The winner-margin check compares only meaningfully different works. Duplicate
+provider listings with the same normalized title and verified author are
+treated as one logical match, and the candidate with richer evidence is
+preferred. A tie still requires Review when candidates disagree on the title,
+author, collection status, or series sequence.
+
 ABSidekick retains the source project's dry-run preview, weighted scoring,
 metadata-patch, ABS quick-match and tags-only modes, author/tag/path targeting,
 pause/resume/cancel, retries, live searchable logs, cover comparisons, and
