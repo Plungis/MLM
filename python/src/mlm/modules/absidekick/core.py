@@ -87,7 +87,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "candidateLimit": 8,
         "adaptiveSearch": True,
         "automaticFallbackProviders": False,
-        "fallbackProviders": ["google"],
+        "fallbackProviders": [],
         "strictAutoMatch": True,
         "minimumTitleScore": 86,
         "minimumAuthorScore": 78,
@@ -760,30 +760,50 @@ def match_decision(
     ranked: list[dict[str, Any]], settings: dict[str, Any]
 ) -> dict[str, Any]:
     matching = settings.get("matching", {})
+    threshold = float(matching.get("threshold", 80))
+    review_floor = float(matching.get("reviewFloor", 65))
+    strict = bool(matching.get("strictAutoMatch", True))
+    title_minimum = float(matching.get("minimumTitleScore", 86))
+    author_minimum = float(matching.get("minimumAuthorScore", 78))
+    margin_minimum = float(matching.get("minimumWinnerMargin", 6))
+    signal_minimum = int(matching.get("minimumStrongSignals", 2))
+    policy = {
+        "autoThreshold": threshold,
+        "reviewFloor": review_floor,
+        "strict": strict,
+        "minimumTitleScore": title_minimum,
+        "minimumAuthorScore": author_minimum,
+        "minimumWinnerMargin": margin_minimum,
+        "minimumStrongSignals": signal_minimum,
+    }
     if not ranked:
         return {
             "action": "unmatched",
             "confidence": "none",
             "margin": 0.0,
+            "score": 0.0,
+            "scorePassed": False,
+            "safetyPassed": False,
+            "strongSignalCount": 0,
+            "strongSignals": [],
+            "policy": policy,
             "reasons": ["no metadata candidates returned"],
         }
 
     best = ranked[0]
     runner_score = float(ranked[1]["score"]) if len(ranked) > 1 else 0.0
     margin = round(float(best["score"]) - runner_score, 2)
-    threshold = float(matching.get("threshold", 80))
-    review_floor = float(matching.get("reviewFloor", 65))
-    strict = bool(matching.get("strictAutoMatch", True))
-    title_minimum = float(matching.get("minimumTitleScore", 86))
-    author_minimum = float(matching.get("minimumAuthorScore", 78))
-    margin_minimum = float(matching.get("minimumWinnerMargin", 4))
-    signal_minimum = int(matching.get("minimumStrongSignals", 2))
     parts = best.get("parts") or {}
-    reasons = list(best.get("conflicts") or [])
+    safety_reasons = list(best.get("conflicts") or [])
+    score = float(best["score"])
+    strong_signals = list(best.get("strongSignals") or [])
 
     exact_identifier = bool(best.get("exactIdentifiers"))
-    if float(parts.get("title") or 0) < title_minimum and not exact_identifier:
-        reasons.append(f"title evidence is below {title_minimum:g}")
+    title_score = float(parts.get("title") or 0)
+    if title_score < title_minimum and not exact_identifier:
+        safety_reasons.append(
+            f"title similarity {title_score:g} is below the required {title_minimum:g}"
+        )
     author_value = parts.get("author")
     item_has_author = bool(item_author_from_scored(best))
     candidate_has_author = bool(candidate_author(best.get("candidate") or {}))
@@ -792,46 +812,76 @@ def match_decision(
         and candidate_has_author
         and float(author_value or 0) < author_minimum
     ):
-        reasons.append(f"author evidence is below {author_minimum:g}")
+        safety_reasons.append(
+            "author evidence: similarity "
+            f"{float(author_value or 0):g} is below the required "
+            f"{author_minimum:g}"
+        )
     elif item_has_author and not candidate_has_author and not exact_identifier:
-        reasons.append("candidate has no author evidence")
+        safety_reasons.append("candidate returned no author to verify")
     if margin < margin_minimum and not exact_identifier:
-        reasons.append(f"winner margin is below {margin_minimum:g}")
-    if len(best.get("strongSignals") or []) < signal_minimum and not exact_identifier:
-        reasons.append(f"fewer than {signal_minimum} strong corroborating signals")
+        safety_reasons.append(
+            f"winner margin: lead {margin:g} is below the required {margin_minimum:g}; "
+            "the top candidates are too close"
+        )
+    if len(strong_signals) < signal_minimum and not exact_identifier:
+        signal_label = ", ".join(strong_signals) if strong_signals else "none"
+        safety_reasons.append(
+            f"only {len(strong_signals)} strong signal(s) ({signal_label}); "
+            f"{signal_minimum} required"
+        )
     quick_match_compatible = matching.get("applyMode") != "quick_match" or bool(
         (best.get("search") or {}).get("quickMatchEligible")
     )
     if not quick_match_compatible:
-        reasons.append(
+        safety_reasons.append(
             "candidate requires metadata patch mode because it did not come from "
             "the first precise Audiobookshelf provider result"
         )
 
     auto_allowed = (
-        float(best["score"]) >= threshold
+        score >= threshold
         and quick_match_compatible
-        and (not strict or not reasons)
+        and (not strict or not safety_reasons)
     )
+    reasons = list(safety_reasons)
+    if score < threshold:
+        reasons.insert(
+            0,
+            f"similarity score {score:g} is below the auto-match threshold "
+            f"{threshold:g}",
+        )
+    decision_details = {
+        "score": score,
+        "scorePassed": score >= threshold,
+        "safetyPassed": not safety_reasons,
+        "titleScore": title_score,
+        "authorScore": (float(author_value) if author_value is not None else None),
+        "margin": margin,
+        "strongSignalCount": len(strong_signals),
+        "strongSignals": strong_signals,
+        "exactIdentifier": exact_identifier,
+        "policy": policy,
+    }
     if auto_allowed:
         return {
             "action": "auto",
             "confidence": "high",
-            "margin": margin,
             "reasons": [],
+            **decision_details,
         }
-    if float(best["score"]) >= review_floor or exact_identifier:
+    if score >= review_floor or exact_identifier:
         return {
             "action": "review",
             "confidence": "review",
-            "margin": margin,
             "reasons": list(dict.fromkeys(reasons)) or ["below automatic threshold"],
+            **decision_details,
         }
     return {
         "action": "unmatched",
         "confidence": "low",
-        "margin": margin,
         "reasons": list(dict.fromkeys(reasons)) or ["insufficient matching evidence"],
+        **decision_details,
     }
 
 
@@ -1438,9 +1488,11 @@ class CandidateResults(list[dict[str, Any]]):
         self,
         values: list[dict[str, Any]] | None = None,
         diagnostics: list[dict[str, Any]] | None = None,
+        attempts: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(values or [])
         self.diagnostics = diagnostics or []
+        self.attempts = attempts or []
 
 
 def _series_prefix_title(
@@ -1643,10 +1695,12 @@ def search_candidates(
         configured_fallbacks = [
             value.strip() for value in configured_fallbacks.split(",") if value.strip()
         ]
-    fallback_providers: list[str] = []
+    second_pass_providers: list[str] = []
     google_ready = google_books_key_is_ready(settings)
     if google_ready and primary_provider != "google":
-        fallback_providers.append("google")
+        # Google is an automatic second pass, not an optional fallback. It runs
+        # immediately whenever the primary ABS provider cannot auto-match.
+        second_pass_providers.append("google")
     if adaptive and bool(matching.get("automaticFallbackProviders", False)):
         for configured_provider in configured_fallbacks:
             provider = str(configured_provider).strip()
@@ -1654,12 +1708,13 @@ def search_candidates(
                 provider in PROVIDERS
                 and provider != primary_provider
                 and (provider != "google" or google_ready)
-                and provider not in fallback_providers
+                and provider not in second_pass_providers
             ):
-                fallback_providers.append(provider)
+                second_pass_providers.append(provider)
 
     candidates: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
     seen_queries: set[tuple[str, str, str]] = set()
     for provider, query_title, query_author, strategy, only_if_empty in primary_queries:
         if only_if_empty and candidates:
@@ -1678,8 +1733,34 @@ def search_candidates(
             "provider": provider,
             "limit": candidate_limit,
         }
+        was_disabled = (
+            isinstance(client, ABSClient)
+            and provider in client.disabled_search_providers
+        )
         results, error = _search_books_once(client, params, search_timeout)
+        attempt = {
+            "provider": provider,
+            "stage": "ABS primary search",
+            "strategy": strategy,
+            "queryTitle": query_title,
+            "queryAuthor": query_author,
+            "resultCount": len(results),
+            "status": (
+                "disabled"
+                if was_disabled
+                else "error"
+                if error
+                else "results"
+                if results
+                else "no_results"
+            ),
+        }
         if error:
+            attempt["error"] = str(error)
+            attempt["message"] = _search_failure_message(
+                client, provider, fallback=False
+            )
+            attempts.append(attempt)
             diagnostics.append(
                 {
                     "provider": provider,
@@ -1691,6 +1772,11 @@ def search_candidates(
                 }
             )
             continue
+        if was_disabled:
+            attempt["message"] = _search_failure_message(
+                client, provider, fallback=False
+            )
+        attempts.append(attempt)
         for provider_rank, candidate in enumerate(results[:candidate_limit]):
             if not isinstance(candidate, dict):
                 continue
@@ -1717,16 +1803,33 @@ def search_candidates(
     primary_ranked = rank_candidates(item, list(candidates.values()), settings)
     if match_decision(primary_ranked, settings)["action"] == "auto":
         return CandidateResults(
-            [row["candidate"] for row in primary_ranked[:candidate_limit]], diagnostics
+            [row["candidate"] for row in primary_ranked[:candidate_limit]],
+            diagnostics,
+            attempts,
         )
 
-    for provider in fallback_providers:
+    if primary_provider != "google" and not google_ready:
+        attempts.append(
+            {
+                "provider": "google",
+                "stage": "Google second pass",
+                "strategy": "after ABS did not auto-match",
+                "queryTitle": broad_title,
+                "queryAuthor": author,
+                "resultCount": 0,
+                "status": "skipped",
+                "message": "Google Books skipped: add and test an API key in Providers",
+            }
+        )
+
+    for provider in second_pass_providers:
         query_key = (provider, normalize_title(broad_title), normalize_text(author))
         if query_key in seen_queries or not query_key[1]:
             continue
         seen_queries.add(query_key)
         strategy = (
-            "native Google fallback after no confident Audiobookshelf match"
+            "immediate Google second pass after no confident Audiobookshelf match "
+            "(ABS did not auto-match)"
             if provider == "google"
             else "fallback title + author"
         )
@@ -1736,8 +1839,38 @@ def search_candidates(
             "provider": provider,
             "limit": candidate_limit,
         }
+        was_disabled = (
+            isinstance(client, ABSClient)
+            and provider in client.disabled_search_providers
+        )
         results, error = _search_books_once(client, params, search_timeout)
+        attempt = {
+            "provider": provider,
+            "stage": (
+                "Google second pass"
+                if provider == "google"
+                else "additional provider fallback"
+            ),
+            "strategy": strategy,
+            "queryTitle": broad_title,
+            "queryAuthor": author,
+            "resultCount": len(results),
+            "status": (
+                "disabled"
+                if was_disabled
+                else "error"
+                if error
+                else "results"
+                if results
+                else "no_results"
+            ),
+        }
         if error:
+            attempt["error"] = str(error)
+            attempt["message"] = _search_failure_message(
+                client, provider, fallback=True
+            )
+            attempts.append(attempt)
             diagnostics.append(
                 {
                     "provider": provider,
@@ -1747,6 +1880,11 @@ def search_candidates(
                 }
             )
             continue
+        if was_disabled:
+            attempt["message"] = _search_failure_message(
+                client, provider, fallback=True
+            )
+        attempts.append(attempt)
 
         fallback_candidates: list[dict[str, Any]] = []
         for provider_rank, candidate in enumerate(results[:candidate_limit]):
@@ -1768,6 +1906,7 @@ def search_candidates(
             return CandidateResults(
                 [row["candidate"] for row in fallback_ranked[:candidate_limit]],
                 diagnostics,
+                attempts,
             )
         for candidate in fallback_candidates:
             identity = candidate_identity(candidate)
@@ -1776,7 +1915,9 @@ def search_candidates(
 
     ranked = rank_candidates(item, list(candidates.values()), settings)
     return CandidateResults(
-        [row["candidate"] for row in ranked[:candidate_limit]], diagnostics
+        [row["candidate"] for row in ranked[:candidate_limit]],
+        diagnostics,
+        attempts,
     )
 
 
@@ -1948,6 +2089,7 @@ def build_review_row(
     ranked: list[dict[str, Any]],
     settings: dict[str, Any],
     search_diagnostics: list[dict[str, Any]] | None = None,
+    search_attempts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     review_settings = settings.get("review", {})
     candidate_limit = max(1, int(review_settings.get("candidateLimit", 6)))
@@ -1956,6 +2098,7 @@ def build_review_row(
         "candidates": ranked[:candidate_limit],
         "decision": match_decision(ranked, settings),
         "searchDiagnostics": search_diagnostics or [],
+        "searchAttempts": search_attempts or [],
         "createdAt": utc_now(),
     }
 
@@ -2022,7 +2165,13 @@ def scan_review_items(
         candidates = search_candidates(client, item, scan_settings)
         ranked = rank_candidates(item, candidates, scan_settings)
         rows.append(
-            build_review_row(item, ranked, scan_settings, candidates.diagnostics)
+            build_review_row(
+                item,
+                ranked,
+                scan_settings,
+                candidates.diagnostics,
+                candidates.attempts,
+            )
         )
         if progress:
             progress(
@@ -2377,6 +2526,8 @@ class MatchJob:
                             margin=decision["margin"],
                             signals=best.get("strongSignals", []),
                             search=best.get("search", {}),
+                            searchAttempts=candidates.attempts,
+                            decision=decision,
                             result=apply_result,
                         )
                     elif best and decision["action"] == "review":
@@ -2389,6 +2540,7 @@ class MatchJob:
                                     ranked,
                                     self.settings,
                                     candidates.diagnostics,
+                                    candidates.attempts,
                                 )
                             )
                         self.log(
@@ -2403,6 +2555,8 @@ class MatchJob:
                             margin=decision["margin"],
                             signals=best.get("strongSignals", []),
                             search=best.get("search", {}),
+                            searchAttempts=candidates.attempts,
+                            decision=decision,
                         )
                     else:
                         mark_unmatched(self.client, item, self.settings, review=False)
@@ -2418,6 +2572,8 @@ class MatchJob:
                             candidate=best["candidate"].get("title") if best else None,
                             reasons=decision["reasons"],
                             margin=decision["margin"],
+                            searchAttempts=candidates.attempts,
+                            decision=decision,
                         )
                     with self.lock:
                         self.stats["processed"] += 1
@@ -2472,6 +2628,7 @@ def preview_matches(
                 "candidateCount": len(candidates),
                 "decision": match_decision(ranked, preview_settings),
                 "searchDiagnostics": candidates.diagnostics,
+                "searchAttempts": candidates.attempts,
             }
         )
         primary_provider = str(

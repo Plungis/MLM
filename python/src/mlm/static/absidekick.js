@@ -16,6 +16,43 @@ const REVIEW_PROVIDERS = [
   "audible.es",
   "fantlab",
 ];
+const MATCH_POLICY_PRESETS = {
+  balanced: {
+    threshold: 80,
+    reviewFloor: 65,
+    minimumTitleScore: 86,
+    minimumAuthorScore: 78,
+    minimumWinnerMargin: 6,
+    minimumStrongSignals: 2,
+    strictAutoMatch: true,
+  },
+  cautious: {
+    threshold: 90,
+    reviewFloor: 70,
+    minimumTitleScore: 92,
+    minimumAuthorScore: 85,
+    minimumWinnerMargin: 8,
+    minimumStrongSignals: 2,
+    strictAutoMatch: true,
+  },
+  flexible: {
+    threshold: 80,
+    reviewFloor: 60,
+    minimumTitleScore: 84,
+    minimumAuthorScore: 72,
+    minimumWinnerMargin: 3,
+    minimumStrongSignals: 1,
+    strictAutoMatch: true,
+  },
+};
+const MATCH_POLICY_FIELDS = [
+  "threshold",
+  "reviewFloor",
+  "minimumTitleScore",
+  "minimumAuthorScore",
+  "minimumWinnerMargin",
+  "minimumStrongSignals",
+];
 
 let appState = {
   settings: null,
@@ -284,6 +321,48 @@ function setSelectedValues(select, values) {
   });
 }
 
+function matchingPolicyValues() {
+  return {
+    threshold: Number($("threshold").value || 80),
+    reviewFloor: Number($("reviewFloor").value || 65),
+    minimumTitleScore: Number($("minimumTitleScore").value || 86),
+    minimumAuthorScore: Number($("minimumAuthorScore").value || 78),
+    minimumWinnerMargin: Number($("minimumWinnerMargin").value || 6),
+    minimumStrongSignals: Number($("minimumStrongSignals").value || 2),
+    strictAutoMatch: $("strictAutoMatch").checked,
+  };
+}
+
+function detectMatchingPolicyPreset() {
+  const current = matchingPolicyValues();
+  return Object.entries(MATCH_POLICY_PRESETS).find(([, preset]) =>
+    Object.entries(preset).every(([key, value]) => current[key] === value),
+  )?.[0] || "custom";
+}
+
+function renderPolicySummary() {
+  const values = matchingPolicyValues();
+  const preset = detectMatchingPolicyPreset();
+  $("matchPolicyPreset").value = preset;
+  const scoreRange = `Similarity ${values.threshold}+ can auto-match; scores from ${values.reviewFloor} up to just under ${values.threshold} go to Review.`;
+  $("policySummary").innerHTML = values.strictAutoMatch
+    ? `<strong>${preset === "custom" ? "Custom safety policy" : `${$("matchPolicyPreset").selectedOptions[0].textContent} policy`}</strong><span>${scoreRange} Automatic approval also requires title ${values.minimumTitleScore}+, author ${values.minimumAuthorScore}+ when both sides provide one, ${values.minimumStrongSignals} independent signal${values.minimumStrongSignals === 1 ? "" : "s"}, a ${values.minimumWinnerMargin}-point lead, and no metadata conflicts.</span><span class="policy-google">If ABS does not pass all of that, a tested Google key is searched immediately and the full ABS to Google path appears in the log.</span>`
+    : `<strong>Similarity-only approval</strong><span>${scoreRange} The title, author, signal, margin, and conflict safety checks are displayed but do not block automatic approval. This is less accurate.</span><span class="policy-google">If ABS does not reach the score, a tested Google key is searched immediately.</span>`;
+}
+
+function applyMatchingPolicyPreset(name) {
+  const preset = MATCH_POLICY_PRESETS[name];
+  if (!preset) {
+    renderPolicySummary();
+    return;
+  }
+  MATCH_POLICY_FIELDS.forEach((id) => {
+    $(id).value = preset[id];
+  });
+  $("strictAutoMatch").checked = preset.strictAutoMatch;
+  renderPolicySummary();
+}
+
 function normalizeLibraryList(payload) {
   const raw = payload?.libraries;
   if (Array.isArray(raw)) return raw;
@@ -364,7 +443,9 @@ function setForm(settings) {
   $("minimumAuthorScore").value = matching.minimumAuthorScore ?? 78;
   $("minimumWinnerMargin").value = matching.minimumWinnerMargin ?? 6;
   $("minimumStrongSignals").value = matching.minimumStrongSignals ?? 2;
-  $("fallbackProviders").value = arrayToCsv(matching.fallbackProviders || ["google"]);
+  $("fallbackProviders").value = arrayToCsv(
+    (matching.fallbackProviders || []).filter((provider) => provider !== "google"),
+  );
   $("applyMode").value = matching.applyMode || "metadata_patch";
   $("coverMode").value = matching.coverMode || "if_missing";
 
@@ -396,6 +477,7 @@ function setForm(settings) {
     if ($(id) && id in tags) $(id).checked = Boolean(tags[id]);
     if ($(id) && id in review) $(id).checked = Boolean(review[id]);
   });
+  renderPolicySummary();
 }
 
 function getSettingsFromForm() {
@@ -542,7 +624,17 @@ function filteredLogs() {
   const rows = appState.logs.filter((entry) => {
     if (level !== "all" && entry.level !== level) return false;
     if (!search) return true;
-    const haystack = [entry.message, entry.title, entry.author, entry.candidate, entry.level, entry.score]
+    const haystack = [
+      entry.message,
+      entry.title,
+      entry.author,
+      entry.candidate,
+      entry.level,
+      entry.score,
+      JSON.stringify(entry.reasons || []),
+      JSON.stringify(entry.searchAttempts || []),
+      JSON.stringify(entry.decision || {}),
+    ]
       .filter((value) => value !== undefined && value !== null)
       .join(" ")
       .toLowerCase();
@@ -556,6 +648,49 @@ function filteredLogs() {
     return 0;
   });
   return rows;
+}
+
+function providerLabel(provider) {
+  if (provider === "google") return "Google Books";
+  return `ABS ${provider || "provider"}`;
+}
+
+function renderSearchAttempts(attempts) {
+  if (!attempts?.length) return "";
+  const steps = attempts.map((attempt) => {
+    const count = Number(attempt.resultCount || 0);
+    const status = attempt.status === "results"
+      ? `${count} result${count === 1 ? "" : "s"}`
+      : attempt.status === "no_results"
+        ? "no results"
+        : attempt.status === "skipped"
+          ? "skipped"
+          : attempt.status === "disabled"
+            ? "disabled"
+            : "error";
+    const detail = attempt.message || attempt.error || attempt.strategy || "";
+    return `<span class="search-attempt ${escapeHtml(attempt.status || "")}" title="${escapeHtml(detail)}"><b>${escapeHtml(providerLabel(attempt.provider))}</b> ${escapeHtml(status)}</span>`;
+  });
+  return `<div class="search-trace"><span class="trace-label">Search path</span>${steps.join('<span class="trace-arrow">&rarr;</span>')}</div>`;
+}
+
+function renderLogDecision(decision) {
+  if (!decision) return "";
+  const policy = decision.policy || {};
+  const reasons = decision.reasons || [];
+  const scoreGate = decision.scorePassed
+    ? `Similarity ${decision.score ?? "-"} passed the ${policy.autoThreshold ?? "-"} auto threshold.`
+    : `Similarity ${decision.score ?? "-"} did not pass the ${policy.autoThreshold ?? "-"} auto threshold.`;
+  const evidence = policy.strict
+    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; winner lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}.`
+    : "Safety gates are not required by the current policy.";
+  return `
+    <div class="log-decision ${escapeHtml(decision.action || "")}">
+      <strong>${escapeHtml(decision.action === "auto" ? "Automatically approved" : decision.action === "review" ? "Why it needs review" : "Why it was not matched")}</strong>
+      <span>${escapeHtml(scoreGate)} ${escapeHtml(evidence)}</span>
+      ${reasons.length ? `<span class="decision-reasons">${escapeHtml(reasons.join("; "))}</span>` : ""}
+    </div>
+  `;
 }
 
 function renderLogs() {
@@ -577,11 +712,17 @@ function renderLogs() {
   pageRows.forEach((entry) => {
     const row = document.createElement("div");
     row.className = `log-entry ${entry.level || ""}`;
-    const score = entry.score !== undefined && entry.score !== null ? ` Score ${entry.score}` : "";
+    const score = entry.score !== undefined && entry.score !== null ? ` Similarity ${entry.score}` : "";
+    const selectedProvider = entry.search?.provider
+      ? `<div class="meta">Selected from ${escapeHtml(providerLabel(entry.search.provider))}${entry.search.strategy ? ` via ${escapeHtml(entry.search.strategy)}` : ""}</div>`
+      : "";
     row.innerHTML = `
       <strong>${entry.level || "info"}${score}</strong>
       <div>${escapeHtml(entry.message || "")}</div>
       <div class="meta">${escapeHtml(entry.time || "")}${entry.candidate ? ` | Candidate: ${escapeHtml(entry.candidate)}` : ""}</div>
+      ${renderSearchAttempts(entry.searchAttempts)}
+      ${selectedProvider}
+      ${renderLogDecision(entry.decision)}
     `;
     root.appendChild(row);
   });
@@ -619,6 +760,7 @@ function renderPreview(preview) {
                 : "<div>No candidates returned</div>"
             }
             <div class="confidence-line ${escapeHtml(decision.confidence || "none")}">${escapeHtml(decision.action || "unmatched")} · margin ${escapeHtml(decision.margin ?? 0)}${decision.reasons?.length ? ` · ${escapeHtml(decision.reasons.join("; "))}` : ""}</div>
+            ${renderSearchAttempts(row.searchAttempts)}
             ${row.searchDiagnostics?.length ? `<div class="conflict-line">Provider warning: ${escapeHtml(row.searchDiagnostics.map((entry) => entry.message).join("; "))}</div>` : ""}
             ${best?.parts ? `<div class="meta">Title ${best.parts.title} | Author ${best.parts.author} | Year ${best.parts.year} | Duration ${best.parts.duration}</div>` : ""}
           </div>
@@ -748,10 +890,17 @@ function renderScoreParts(parts) {
 function renderMatchDecision(decision) {
   if (!decision) return "";
   const reasons = decision.reasons || [];
+  const policy = decision.policy || {};
+  const scoreStatus = decision.scorePassed
+    ? `Similarity ${decision.score ?? "-"} passed ${policy.autoThreshold ?? "-"}`
+    : `Similarity ${decision.score ?? "-"} is below ${policy.autoThreshold ?? "-"}`;
+  const evidenceStatus = policy.strict
+    ? `${decision.strongSignalCount ?? 0}/${policy.minimumStrongSignals ?? "-"} strong signals; lead ${decision.margin ?? 0}/${policy.minimumWinnerMargin ?? "-"}`
+    : "Safety checks are not blocking in this policy";
   return `
     <div class="match-decision ${escapeHtml(decision.confidence || "none")}">
       <strong>${decision.action === "auto" ? "High-confidence match" : decision.action === "review" ? "Human review required" : "Insufficient evidence"}</strong>
-      <span>Winner margin ${escapeHtml(decision.margin ?? 0)}</span>
+      <span>${escapeHtml(scoreStatus)} | ${escapeHtml(evidenceStatus)}</span>
       ${reasons.length ? `<span>${escapeHtml(reasons.join(" · "))}</span>` : ""}
     </div>
   `;
@@ -914,7 +1063,7 @@ function renderGoogleBooksStatus(providers = {}) {
     result.classList.add("warning");
     result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
   } else {
-    result.textContent = "Google fallback is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
+    result.textContent = "Google second pass is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
   }
 }
 
@@ -966,6 +1115,7 @@ function renderReviewDesk({ preserveRow = null } = {}) {
             </div>
           </div>
           ${renderMatchDecision(row.decision)}
+          ${renderSearchAttempts(row.searchAttempts)}
           ${row.searchDiagnostics?.length ? `<div class="provider-warning">${escapeHtml(row.searchDiagnostics.map((entry) => `${entry.provider}: ${entry.error}`).join(" · "))}</div>` : ""}
           ${renderReviewSearch(row, rowIndex)}
           <div class="compare-grid">
@@ -1290,6 +1440,13 @@ function wireEvents() {
       button.classList.add("active");
       $(`tab-${button.dataset.tab}`).classList.add("active");
     });
+  });
+  $("matchPolicyPreset").addEventListener("change", (event) => {
+    applyMatchingPolicyPreset(event.target.value);
+  });
+  [...MATCH_POLICY_FIELDS, "strictAutoMatch"].forEach((id) => {
+    $(id).addEventListener("input", renderPolicySummary);
+    $(id).addEventListener("change", renderPolicySummary);
   });
   $("connectBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
     title: "Connecting to Audiobookshelf",

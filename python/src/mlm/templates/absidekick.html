@@ -221,13 +221,25 @@
                   <h2>Matching</h2>
                 </div>
               </div>
+              <div class="match-policy-card">
+                <label class="field match-policy-select">
+                  <span>Matching Safety Preset</span>
+                  <select id="matchPolicyPreset">
+                    <option value="balanced">Balanced (recommended)</option>
+                    <option value="cautious">Cautious (more review)</option>
+                    <option value="flexible">Flexible (fewer reviews)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <div id="policySummary" class="policy-summary" aria-live="polite"></div>
+              </div>
               <div class="grid four">
                 <label class="field">
-                  <span>Auto Threshold</span>
+                  <span>Auto-match Similarity Score</span>
                   <input id="threshold" type="number" min="1" max="100" />
                 </label>
                 <label class="field">
-                  <span>Review Floor</span>
+                  <span>Lowest Score Sent to Review</span>
                   <input id="reviewFloor" type="number" min="1" max="100" />
                 </label>
                 <label class="field">
@@ -240,28 +252,28 @@
                 </label>
               </div>
               <div class="note">
-                High-precision mode requires a clear title, corroborating evidence, no identifier/series/duration conflicts, and enough separation from the runner-up before automatic writes. Missing provider fields are treated as unknown rather than incorrect.
+                The similarity score measures how alike the available fields are; it is not an approval percentage. With safety checks enabled, a score of 100 can still require review when only the title is known, author data is missing, editions are tied, or metadata conflicts. Every job log now names the exact failed check.
               </div>
               <div class="grid four">
                 <label class="field">
-                  <span>Minimum Title Evidence</span>
+                  <span>Minimum Title Similarity</span>
                   <input id="minimumTitleScore" type="number" min="1" max="100" />
                 </label>
                 <label class="field">
-                  <span>Minimum Author Evidence</span>
+                  <span>Minimum Author Similarity</span>
                   <input id="minimumAuthorScore" type="number" min="1" max="100" />
                 </label>
                 <label class="field">
-                  <span>Minimum Winner Margin</span>
+                  <span>Required Lead Over Runner-up</span>
                   <input id="minimumWinnerMargin" type="number" min="0" max="100" step="0.5" />
                 </label>
                 <label class="field">
-                  <span>Strong Signals Required</span>
+                  <span>Independent Signals Required</span>
                   <input id="minimumStrongSignals" type="number" min="1" max="6" />
                 </label>
               </div>
               <label class="field">
-                <span>Additional Fallback Providers</span>
+                <span>Extra Providers After Google (optional)</span>
                 <input id="fallbackProviders" placeholder="openlibrary, itunes" />
               </label>
               <div class="grid three">
@@ -292,9 +304,9 @@
                 </label>
               </div>
               <div class="checks">
-                <label class="check"><input id="strictAutoMatch" type="checkbox" /><span>High-precision automatic matching</span></label>
+                <label class="check"><input id="strictAutoMatch" type="checkbox" /><span>Require safety checks as well as the similarity score</span></label>
                 <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Clean track numbers and retry only when the precise search is empty</span></label>
-                <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Query additional fallback providers (a tested Google key is automatic)</span></label>
+                <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Query extra providers after the automatic Google second pass</span></label>
                 <label class="check"><input id="overwriteMetadata" type="checkbox" /><span>Overwrite existing metadata fields</span></label>
                 <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
                 <label class="check"><input id="requireAuthor" type="checkbox" /><span>Require a solid author score</span></label>

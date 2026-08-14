@@ -97,8 +97,12 @@ Google remains disabled until the live test succeeds; when no tested key is
 present, MyAnonaSuite sends no request to Google. The key itself is never
 returned to the browser or sent to Audiobookshelf. Once the key is tested,
 previews, initial matching runs, and Review Desk scans always try the selected
-Audiobookshelf metadata provider first. Native Google Books is queried only
-when ABS does not produce a confident automatic match. Reviewer-controlled
+Audiobookshelf metadata provider first. If that ABS result does not pass the
+automatic-match policy for any reason, native Google Books is queried
+immediately as a second pass. This does not depend on the optional extra-provider
+fallback setting. The live log displays each ABS and Google attempt, including
+zero-result and skipped searches, its result count, the selected provider, and
+the exact score or safety gate that led to Review. Reviewer-controlled
 Google searches remain available on each Review Desk item. Temporary Google
 timeouts, rate limits, and 5xx responses receive one immediate retry and do not
 disable the provider after a single failed item. Three consecutive exhausted
@@ -137,13 +141,14 @@ flight, and retains the completion or error result. **Scan Review Tags** also
 shows its live phase, current book title, and `completed / total` count while
 Audiobookshelf and metadata-provider requests are still running.
 
-For speed and rate-limit safety, automatic fallback providers are disabled by
-default. The primary provider gets one precise search; only an empty response
-can trigger a cleaned/title-only retry. Leading track/disc numbers are removed
-before the first query. Metadata search timeout is separate from the general ABS
-API timeout and never uses general API retries. When a provider times out, it is
-quarantined for the remainder of that run and the item follows the normal
-review/unmatched path.
+For speed and rate-limit safety, extra providers such as Open Library and iTunes
+are disabled by default. The tested Google provider is a separate automatic
+second pass whenever ABS does not auto-match. The primary provider gets one
+precise search; only an empty response can trigger a cleaned/title-only retry.
+Leading track/disc numbers are removed before the first query. Metadata search
+timeout is separate from the general ABS API timeout and never uses general API
+retries. Provider failures follow the run-local retry and circuit-breaker policy
+described above, then leave the item available for Review.
 
 Series-number folder prefixes are parsed separately from real titles. For
 example, `Pern 17 - The Masterharper of Pern` searches as

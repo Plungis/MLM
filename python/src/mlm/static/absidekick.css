@@ -431,6 +431,43 @@ select:focus {
   padding: 0.9rem;
 }
 
+.match-policy-card {
+  align-items: stretch;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 58%),
+    var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: var(--radius);
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(20rem, 2fr);
+  padding: 1rem;
+}
+
+.match-policy-select {
+  align-content: start;
+}
+
+.policy-summary {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.policy-summary strong {
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+
+.policy-summary span {
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.policy-summary .policy-google {
+  color: var(--muted);
+}
+
 .preview {
   color: var(--text);
   max-height: 30rem;
@@ -532,6 +569,74 @@ select:focus {
   gap: 1rem;
   justify-content: space-between;
   margin-bottom: 0.85rem;
+}
+
+.search-trace {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
+
+.trace-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-right: 0.2rem;
+  text-transform: uppercase;
+}
+
+.trace-arrow {
+  color: var(--muted);
+}
+
+.search-attempt {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.76rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.search-attempt.no_results,
+.search-attempt.skipped {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  color: var(--warning);
+}
+
+.search-attempt.error,
+.search-attempt.disabled {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  color: var(--danger);
+}
+
+.log-decision {
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
+  border-left: 3px solid var(--accent);
+  display: grid;
+  font-size: 0.8rem;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.log-decision.review {
+  border-left-color: var(--warning);
+}
+
+.log-decision.unmatched {
+  border-left-color: var(--muted);
+}
+
+.log-decision strong {
+  color: var(--text);
+}
+
+.decision-reasons {
+  color: var(--warning);
 }
 
 .review-search {
@@ -1142,6 +1247,10 @@ select:focus {
   }
 
   .google-key-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .match-policy-card {
     grid-template-columns: 1fr;
   }
 

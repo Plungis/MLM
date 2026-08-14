@@ -385,6 +385,51 @@ class ScoringTests(unittest.TestCase):
         self.assertGreaterEqual(scored["parts"]["title"], 92)
         self.assertEqual(match_decision([scored], DEFAULT_SETTINGS)["action"], "auto")
 
+    def test_passing_score_explains_which_safety_gate_requires_review(self):
+        ranked = rank_candidates(
+            sample_item(),
+            [{"title": "Wizard's First Rule"}],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["score"], 100)
+        self.assertTrue(decision["scorePassed"])
+        self.assertFalse(decision["safetyPassed"])
+        self.assertEqual(decision["action"], "review")
+        self.assertEqual(decision["strongSignalCount"], 1)
+        self.assertEqual(decision["policy"]["autoThreshold"], 80)
+        self.assertTrue(
+            any("only 1 strong signal" in reason for reason in decision["reasons"])
+        )
+
+    def test_below_threshold_always_names_the_score_gate(self):
+        ranked = [
+            {
+                "score": 73.23,
+                "parts": {"title": 100, "author": 100},
+                "conflicts": [],
+                "strongSignals": ["title", "author"],
+                "exactIdentifiers": [],
+                "source": {"author": "Terry Goodkind"},
+                "candidate": {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                },
+                "search": {},
+            }
+        ]
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertFalse(decision["scorePassed"])
+        self.assertIn(
+            "similarity score 73.23 is below the auto-match threshold 80",
+            decision["reasons"],
+        )
+
     def test_contained_but_different_title_is_not_automatched(self):
         item = sample_item()
         item["media"]["metadata"]["title"] = "Dune Messiah"
@@ -567,6 +612,14 @@ class ScoringTests(unittest.TestCase):
             "after no confident Audiobookshelf match",
             candidates[0]["_absidekickSearch"]["strategy"],
         )
+        self.assertEqual(
+            [attempt["provider"] for attempt in candidates.attempts],
+            ["audible", "google"],
+        )
+        self.assertEqual(candidates.attempts[0]["stage"], "ABS primary search")
+        self.assertEqual(candidates.attempts[1]["stage"], "Google second pass")
+        self.assertEqual(candidates.attempts[1]["status"], "results")
+        self.assertEqual(candidates.attempts[1]["resultCount"], 1)
         self.assertEqual(match_decision(ranked, settings)["action"], "auto")
 
     def test_tested_google_key_is_not_used_after_confident_abs_result(self):
@@ -599,6 +652,41 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual([query["provider"] for query in client.queries], ["audible"])
+        self.assertEqual(
+            [attempt["provider"] for attempt in candidates.attempts], ["audible"]
+        )
+
+    def test_google_second_pass_is_visible_when_it_returns_no_results(self):
+        class WeakThenEmptyClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["provider"] == "google":
+                    return []
+                return [{"title": "A Different Wizard", "author": "Someone Else"}]
+
+        client = WeakThenEmptyClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+
+        candidates = search_candidates(client, sample_item(), settings)
+
+        self.assertEqual(
+            [query["provider"] for query in client.queries], ["audible", "google"]
+        )
+        self.assertEqual(candidates.attempts[-1]["provider"], "google")
+        self.assertEqual(candidates.attempts[-1]["status"], "no_results")
+        self.assertEqual(candidates.attempts[-1]["resultCount"], 0)
 
     def test_untested_google_key_is_never_used_automatically(self):
         class EmptyClient:
@@ -613,10 +701,13 @@ class ScoringTests(unittest.TestCase):
         settings = deepcopy(DEFAULT_SETTINGS)
         settings["providers"]["googleBooksApiKey"] = "not-tested"
 
-        search_candidates(client, sample_item(), settings)
+        candidates = search_candidates(client, sample_item(), settings)
 
         self.assertTrue(client.queries)
         self.assertEqual({query["provider"] for query in client.queries}, {"audible"})
+        self.assertEqual(candidates.attempts[-1]["provider"], "google")
+        self.assertEqual(candidates.attempts[-1]["status"], "skipped")
+        self.assertIn("add and test an API key", candidates.attempts[-1]["message"])
 
     def test_google_fallback_cannot_auto_apply_through_abs_quick_match(self):
         settings = deepcopy(DEFAULT_SETTINGS)
