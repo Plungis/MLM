@@ -147,6 +147,12 @@ validation control. Google searching is fail-closed: the suite does not contact
 Google unless the currently saved key has passed that test, and the private key
 is never exposed through the web settings API.
 
+Open Library is the native third matching stage after the Audiobookshelf and
+tested Google searches. It uses Open Library's official JSON API directly,
+supports the same automatic and Review Desk flows, caches repeated requests,
+and applies the service's documented identified or anonymous rate limit. No API
+key is needed; Config offers an optional contact email for API identification.
+
 ## Migrate legacy data
 
 The Python migrator imports the versioned JSON export into SQLite while

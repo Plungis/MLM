@@ -145,8 +145,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="automaticFallbackProviders"' in absidekick.text
     assert 'id="matchPolicyPreset"' in absidekick.text
     assert 'id="policySummary"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b42"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b42"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b43"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b43"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -177,6 +177,9 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="testGoogleBooksBtn"' in absidekick_config.text
     assert "How to create and secure a Google Books API key" in absidekick_config.text
     assert "books.googleapis.com" in absidekick_config.text
+    assert 'id="openLibraryEnabled"' in absidekick_config.text
+    assert 'id="openLibraryContactEmail"' in absidekick_config.text
+    assert "official Open Library API guidelines" in absidekick_config.text
     assert client.get("/suite/absidekick/not-real").status_code == 404
     absidekick_state = client.get("/api/absidekick/state")
     assert absidekick_state.status_code == 200
@@ -201,14 +204,37 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
                 "matching": {"threshold": 88},
             },
             "token": "abs-secret-token",
+            "openLibraryEnabled": True,
+            "openLibraryContactEmail": "owner@example.com",
         },
     )
     assert saved_absidekick.status_code == 200
     assert saved_absidekick.json()["settings"]["connection"]["hasToken"] is True
     assert "token" not in saved_absidekick.json()["settings"]["connection"]
+    assert (
+        saved_absidekick.json()["settings"]["providers"]["openLibraryEnabled"] is True
+    )
+    assert (
+        saved_absidekick.json()["settings"]["providers"]["openLibraryContactEmail"]
+        == "owner@example.com"
+    )
     absidekick_settings = tmp_path / "absidekick" / "settings.json"
     assert absidekick_settings.exists()
-    assert "abs-secret-token" in absidekick_settings.read_text(encoding="utf-8")
+    saved_settings_text = absidekick_settings.read_text(encoding="utf-8")
+    assert "abs-secret-token" in saved_settings_text
+    assert "owner@example.com" in saved_settings_text
+    invalid_open_library_contact = client.post(
+        "/api/absidekick/settings",
+        json={
+            "settings": {},
+            "openLibraryContactEmail": "not-an-email",
+        },
+    )
+    assert invalid_open_library_contact.status_code == 400
+    assert (
+        "valid Open Library contact email"
+        in invalid_open_library_contact.json()["error"]
+    )
     spender = client.get("/suite/mam-spender")
     assert spender.status_code == 200
     assert 'data-suite="mam-spender"' in spender.text
@@ -224,7 +250,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b42" in spender_config.text
+    assert "0.5.0b43" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text

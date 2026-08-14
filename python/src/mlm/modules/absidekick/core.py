@@ -21,6 +21,8 @@ from typing import Any
 APP_VERSION = "Beta V.91.1"
 GOOGLE_TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
 GOOGLE_TRANSIENT_FAILURE_LIMIT = 3
+OPEN_LIBRARY_TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
+OPEN_LIBRARY_TRANSIENT_FAILURE_LIMIT = 3
 
 PROVIDERS = [
     "google",
@@ -52,6 +54,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "googleBooksApiKeyFingerprint": "",
         "googleBooksApiKeyValidatedAt": "",
         "googleBooksLastError": "",
+        "openLibraryEnabled": True,
+        "openLibraryContactEmail": "",
     },
     "run": {
         "dryRun": True,
@@ -1323,6 +1327,160 @@ def test_google_books_api_key(
     }
 
 
+def _open_library_error_message(status: int, body: str) -> str:
+    detail = ""
+    try:
+        payload = json.loads(body)
+        detail = str(payload.get("error") or payload.get("message") or "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        detail = ""
+    if status in {401, 403}:
+        guidance = (
+            "Open Library rejected the request. Check the configured contact "
+            "email and allow the rate limiter to cool down."
+        )
+    elif status == 429:
+        guidance = "Open Library is temporarily rate-limiting this installation."
+    else:
+        guidance = f"Open Library returned HTTP {status}."
+    return f"{guidance}{f' Open Library says: {detail}' if detail else ''}"
+
+
+def open_library_error_is_transient(error: ABSAPIError) -> bool:
+    return error.status is None or error.status in OPEN_LIBRARY_TRANSIENT_STATUSES
+
+
+def _open_library_user_agent(contact_email: str) -> str:
+    contact = re.sub(r"[\r\n]", "", str(contact_email or "").strip())
+    project = "+https://github.com/Plungis/MLM"
+    return (
+        f"MyAnonaSuite/ABSidekick ({contact}; {project})"
+        if contact
+        else f"MyAnonaSuite/ABSidekick ({project})"
+    )
+
+
+def _open_library_payload(
+    title: str,
+    author: str,
+    *,
+    limit: int,
+    timeout_seconds: int,
+    contact_email: str = "",
+) -> dict[str, Any]:
+    safe_contact = re.sub(r"[\r\n]", "", str(contact_email or "").strip())
+    params: dict[str, Any] = {
+        "title": title,
+        "limit": max(1, min(30, int(limit))),
+        "fields": (
+            "key,title,subtitle,author_name,first_publish_year,cover_i,isbn,"
+            "publisher,language,edition_count"
+        ),
+    }
+    if author:
+        params["author"] = author
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": _open_library_user_agent(safe_contact),
+    }
+    if safe_contact:
+        headers["From"] = safe_contact
+    request = urllib.request.Request(
+        f"https://openlibrary.org/search.json?{urllib.parse.urlencode(params)}",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=max(3, min(60, int(timeout_seconds)))
+        ) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise ABSAPIError(
+            _open_library_error_message(error.code, body), error.code, body
+        ) from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise ABSAPIError(f"Open Library request failed: {error}") from error
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ABSAPIError("Open Library returned invalid JSON") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("docs", []), list):
+        raise ABSAPIError("Open Library returned an invalid response")
+    return payload
+
+
+def _open_library_isbn(values: Any) -> str | None:
+    if not isinstance(values, list):
+        return None
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    return next(
+        (value for value in normalized if len(normalize_identifier(value)) == 13), None
+    ) or next(
+        (value for value in normalized if len(normalize_identifier(value)) == 10),
+        None,
+    )
+
+
+def _open_library_candidate(document: Any) -> dict[str, Any] | None:
+    if not isinstance(document, dict):
+        return None
+    title = str(document.get("title") or "").strip()
+    if not title:
+        return None
+    key = str(document.get("key") or "").strip()
+    authors = document.get("author_name") or []
+    publishers = document.get("publisher") or []
+    languages = document.get("language") or []
+    cover_id = document.get("cover_i")
+    return {
+        "id": key or None,
+        "bookId": key.rsplit("/", 1)[-1] if key else None,
+        "title": title,
+        "subtitle": document.get("subtitle"),
+        "author": ", ".join(str(author) for author in authors)
+        if isinstance(authors, list)
+        else str(authors or "") or None,
+        "publisher": (
+            str(publishers[0])
+            if isinstance(publishers, list) and publishers
+            else str(publishers or "") or None
+        ),
+        "publishedYear": str(document.get("first_publish_year") or "") or None,
+        "cover": (
+            f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+            if cover_id
+            else None
+        ),
+        "isbn": _open_library_isbn(document.get("isbn")),
+        "language": languages if isinstance(languages, list) else [str(languages)],
+        "editionCount": document.get("edition_count"),
+        "openLibraryUrl": f"https://openlibrary.org{key}" if key else None,
+    }
+
+
+def search_open_library(
+    title: str,
+    author: str = "",
+    *,
+    limit: int = 10,
+    timeout_seconds: int = 12,
+    contact_email: str = "",
+) -> list[dict[str, Any]]:
+    payload = _open_library_payload(
+        title,
+        author,
+        limit=limit,
+        timeout_seconds=timeout_seconds,
+        contact_email=contact_email,
+    )
+    candidates = [
+        _open_library_candidate(document) for document in payload.get("docs") or []
+    ]
+    return [candidate for candidate in candidates if candidate is not None]
+
+
 class ABSClient:
     def __init__(
         self,
@@ -1333,6 +1491,8 @@ class ABSClient:
         request_delay_ms: int = 150,
         google_books_api_key: str = "",
         google_books_ready: bool = False,
+        open_library_enabled: bool = True,
+        open_library_contact_email: str = "",
     ) -> None:
         if not base_url:
             raise ValueError("Audiobookshelf base URL is required")
@@ -1345,6 +1505,11 @@ class ABSClient:
         self.request_delay_ms = request_delay_ms
         self.google_books_api_key = google_books_api_key
         self.google_books_ready = google_books_ready
+        self.open_library_enabled = open_library_enabled
+        self.open_library_contact_email = open_library_contact_email
+        self.open_library_cache: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+        self.open_library_next_request_at = 0.0
+        self.open_library_rate_lock = threading.Lock()
         self.disabled_search_providers: dict[str, str] = {}
         self.transient_search_failures: dict[str, int] = {}
 
@@ -1433,7 +1598,7 @@ class ABSClient:
     def search_books(
         self, params: dict[str, Any], timeout_seconds: int
     ) -> list[dict[str, Any]]:
-        """Run one provider search with a small Google transient-error budget."""
+        """Run one provider search with native-provider safety limits."""
 
         provider = str(params.get("provider") or "")
         if provider in self.disabled_search_providers:
@@ -1461,6 +1626,41 @@ class ABSClient:
                             time.sleep(0.5)
                             continue
                         raise
+            elif provider == "openlibrary":
+                if not self.open_library_enabled:
+                    raise ABSAPIError(
+                        "Native Open Library is disabled in ABSidekick Config."
+                    )
+                cache_key = (
+                    normalize_title(params.get("title")),
+                    normalize_text(params.get("author")),
+                    int(params.get("limit") or 10),
+                )
+                cached = self.open_library_cache.get(cache_key)
+                if cached is not None:
+                    return deepcopy(cached)
+                with self.open_library_rate_lock:
+                    wait_seconds = self.open_library_next_request_at - time.monotonic()
+                    if wait_seconds > 0:
+                        time.sleep(wait_seconds)
+                    interval = 0.35 if self.open_library_contact_email else 1.05
+                    self.open_library_next_request_at = time.monotonic() + interval
+                for attempt in range(2):
+                    try:
+                        result = search_open_library(
+                            str(params.get("title") or ""),
+                            str(params.get("author") or ""),
+                            limit=int(params.get("limit") or 10),
+                            timeout_seconds=timeout_seconds,
+                            contact_email=self.open_library_contact_email,
+                        )
+                        break
+                    except ABSAPIError as error:
+                        if open_library_error_is_transient(error) and attempt == 0:
+                            time.sleep(0.5)
+                            continue
+                        raise
+                self.open_library_cache[cache_key] = deepcopy(result)
             else:
                 result = self.request(
                     "GET",
@@ -1470,12 +1670,20 @@ class ABSClient:
                     max_retries=0,
                 )
         except ABSAPIError as error:
-            if provider != "google" or not google_error_is_transient(error):
+            is_transient = (
+                provider == "google" and google_error_is_transient(error)
+            ) or (provider == "openlibrary" and open_library_error_is_transient(error))
+            if not is_transient:
                 self.disabled_search_providers[provider] = str(error)
             else:
                 failures = self.transient_search_failures.get(provider, 0) + 1
                 self.transient_search_failures[provider] = failures
-                if failures >= GOOGLE_TRANSIENT_FAILURE_LIMIT:
+                failure_limit = (
+                    GOOGLE_TRANSIENT_FAILURE_LIMIT
+                    if provider == "google"
+                    else OPEN_LIBRARY_TRANSIENT_FAILURE_LIMIT
+                )
+                if failures >= failure_limit:
                     self.disabled_search_providers[provider] = (
                         f"{error} ({failures} consecutive transient failures)"
                     )
@@ -1508,6 +1716,8 @@ def create_client(settings: dict[str, Any], token: str | None = None) -> ABSClie
         request_delay_ms=int(run.get("requestDelayMs", 150)),
         google_books_api_key=str(providers.get("googleBooksApiKey") or ""),
         google_books_ready=google_books_key_is_ready(settings),
+        open_library_enabled=bool(providers.get("openLibraryEnabled", True)),
+        open_library_contact_email=str(providers.get("openLibraryContactEmail") or ""),
     )
 
 
@@ -1682,26 +1892,49 @@ def _search_failure_message(
     *,
     fallback: bool,
 ) -> str:
-    label = "Google Books" if provider == "google" else provider
-    operation = "fallback" if fallback else "metadata search"
+    label = {
+        "google": "Google Books",
+        "openlibrary": "Open Library",
+    }.get(provider, provider)
+    operation = (
+        "third-stage search"
+        if fallback and provider == "openlibrary"
+        else "second-stage search"
+        if fallback and provider == "google"
+        else "metadata search"
+    )
     if not isinstance(client, ABSClient):
         return f"{label} {operation} failed for this item"
     if provider in client.disabled_search_providers:
         failures = client.transient_search_failures.get(provider, 0)
-        if provider == "google" and failures >= GOOGLE_TRANSIENT_FAILURE_LIMIT:
+        failure_limit = (
+            GOOGLE_TRANSIENT_FAILURE_LIMIT
+            if provider == "google"
+            else OPEN_LIBRARY_TRANSIENT_FAILURE_LIMIT
+            if provider == "openlibrary"
+            else 0
+        )
+        if failure_limit and failures >= failure_limit:
             return (
                 f"{label} {operation} disabled for the rest of this run after "
                 f"{failures} consecutive transient failures"
             )
         return (
             f"{label} {operation} disabled for the rest of this run because "
-            "Google rejected the request or provider configuration"
+            "the provider rejected the request or configuration"
         )
     failures = client.transient_search_failures.get(provider, 0)
-    if provider == "google" and failures:
+    failure_limit = (
+        GOOGLE_TRANSIENT_FAILURE_LIMIT
+        if provider == "google"
+        else OPEN_LIBRARY_TRANSIENT_FAILURE_LIMIT
+        if provider == "openlibrary"
+        else 0
+    )
+    if failure_limit and failures:
         return (
             f"{label} {operation} failed for this item; it will retry on the "
-            f"next item ({failures}/{GOOGLE_TRANSIENT_FAILURE_LIMIT} transient "
+            f"next item ({failures}/{failure_limit} transient "
             "failures)"
         )
     return f"{label} {operation} failed for this item"
@@ -1774,10 +2007,17 @@ def search_candidates(
         ]
     second_pass_providers: list[str] = []
     google_ready = google_books_key_is_ready(settings)
+    open_library_enabled = bool(
+        settings.get("providers", {}).get("openLibraryEnabled", True)
+    )
     if google_ready and primary_provider != "google":
         # Google is an automatic second pass, not an optional fallback. It runs
         # immediately whenever the primary ABS provider cannot auto-match.
         second_pass_providers.append("google")
+    if open_library_enabled and primary_provider != "openlibrary":
+        # Open Library is the native third stage. It runs only after both the
+        # primary ABS search and the optional Google second stage fail policy.
+        second_pass_providers.append("openlibrary")
     if adaptive and bool(matching.get("automaticFallbackProviders", False)):
         for configured_provider in configured_fallbacks:
             provider = str(configured_provider).strip()
@@ -1785,6 +2025,7 @@ def search_candidates(
                 provider in PROVIDERS
                 and provider != primary_provider
                 and (provider != "google" or google_ready)
+                and (provider != "openlibrary" or open_library_enabled)
                 and provider not in second_pass_providers
             ):
                 second_pass_providers.append(provider)
@@ -1817,7 +2058,13 @@ def search_candidates(
         results, error = _search_books_once(client, params, search_timeout)
         attempt = {
             "provider": provider,
-            "stage": "ABS primary search",
+            "stage": (
+                "Open Library primary search"
+                if provider == "openlibrary"
+                else "Google Books primary search"
+                if provider == "google"
+                else "ABS primary search"
+            ),
             "strategy": strategy,
             "queryTitle": query_title,
             "queryAuthor": query_author,
@@ -1866,6 +2113,7 @@ def search_candidates(
                 "providerRank": provider_rank + 1,
                 "quickMatchEligible": (
                     provider == primary_provider
+                    and provider not in {"google", "openlibrary"}
                     and strategy in {"precise title + author", "parsed title + author"}
                     and provider_rank == 0
                 ),
@@ -1898,6 +2146,19 @@ def search_candidates(
                 "message": "Google Books skipped: add and test an API key in Providers",
             }
         )
+    if primary_provider != "openlibrary" and not open_library_enabled:
+        attempts.append(
+            {
+                "provider": "openlibrary",
+                "stage": "Open Library third stage",
+                "strategy": "after ABS and Google did not auto-match",
+                "queryTitle": broad_title,
+                "queryAuthor": author,
+                "resultCount": 0,
+                "status": "skipped",
+                "message": "Open Library skipped: enable it in Providers",
+            }
+        )
 
     for provider in second_pass_providers:
         query_key = (provider, normalize_title(broad_title), normalize_text(author))
@@ -1908,6 +2169,9 @@ def search_candidates(
             "immediate Google second pass after no confident Audiobookshelf match "
             "(ABS did not auto-match)"
             if provider == "google"
+            else "native Open Library third stage after ABS and Google did not "
+            "auto-match"
+            if provider == "openlibrary"
             else "fallback title + author"
         )
         params = {
@@ -1926,6 +2190,8 @@ def search_candidates(
             "stage": (
                 "Google second pass"
                 if provider == "google"
+                else "Open Library third stage"
+                if provider == "openlibrary"
                 else "additional provider fallback"
             ),
             "strategy": strategy,

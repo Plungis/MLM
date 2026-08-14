@@ -111,6 +111,18 @@ configuration rejections still stop Google immediately. Job diagnostics state
 whether the next item will retry or the provider was disabled and include the
 underlying error.
 
+Native Open Library search is enabled by default as the third lookup. If the
+Audiobookshelf provider and the tested Google provider do not produce an
+automatic match, MyAnonaSuite queries Open Library's official JSON Search API.
+No Open Library API key is required. Add a contact email under **Config -> Open
+Library Search** to identify the installation as Open Library requests for
+regular API clients; identified clients are limited to three requests per
+second and anonymous clients to one. MyAnonaSuite enforces the matching limit,
+caches repeated searches for the current run, requests only the fields used by
+the matcher, and gives transient failures the same one-retry/three-strike
+circuit-breaker treatment as Google. The provider can be disabled completely,
+and it is also available directly in Review Desk manual searches.
+
 The winner-margin check compares only meaningfully different works. Duplicate
 provider listings with the same normalized title and verified author are
 treated as one logical match, and the candidate with richer evidence is
@@ -147,14 +159,15 @@ flight, and retains the completion or error result. **Scan Review Tags** also
 shows its live phase, current book title, and `completed / total` count while
 Audiobookshelf and metadata-provider requests are still running.
 
-For speed and rate-limit safety, extra providers such as Open Library and iTunes
-are disabled by default. The tested Google provider is a separate automatic
-second pass whenever ABS does not auto-match. The primary provider gets one
-precise search; only an empty response can trigger a cleaned/title-only retry.
-Leading track/disc numbers are removed before the first query. Metadata search
-timeout is separate from the general ABS API timeout and never uses general API
-retries. Provider failures follow the run-local retry and circuit-breaker policy
-described above, then leave the item available for Review.
+For speed and rate-limit safety, optional Audiobookshelf-proxied providers such
+as iTunes are disabled by default. Tested native Google is the automatic second
+pass whenever ABS does not auto-match, and native Open Library is the third.
+The primary provider gets one precise search; only an empty response can trigger
+a cleaned/title-only retry. Leading track/disc numbers are removed before the
+first query. Metadata search timeout is separate from the general ABS API
+timeout and never uses general API retries. Provider failures follow the
+run-local retry and circuit-breaker policy described above, then leave the item
+available for Review.
 
 Track prefixes with secondary indices, such as `01(3) Octopussy` and
 `02 (7) Thunderball`, are reduced to the real title before searching and

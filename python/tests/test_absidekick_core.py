@@ -22,6 +22,7 @@ from mlm.modules.absidekick.core import (
     scan_review_items,
     score_candidate,
     search_candidates,
+    search_open_library,
     search_review_candidates,
     should_process_item,
     summarize_item,
@@ -269,6 +270,106 @@ class GoogleBooksProviderTests(unittest.TestCase):
         self.assertTrue(result["valid"])
         self.assertEqual(payload.call_count, 2)
         sleep.assert_called_once_with(0.5)
+
+
+class OpenLibraryProviderTests(unittest.TestCase):
+    @patch("mlm.modules.absidekick.core.urllib.request.urlopen")
+    def test_native_search_uses_identified_json_api_and_maps_work(self, urlopen):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "docs": [
+                            {
+                                "key": "/works/OL27448W",
+                                "title": "The Lord of the Rings",
+                                "author_name": ["J. R. R. Tolkien"],
+                                "first_publish_year": 1954,
+                                "cover_i": 258027,
+                                "isbn": ["0618640150", "9780618640157"],
+                                "publisher": ["George Allen & Unwin"],
+                                "language": ["eng"],
+                                "edition_count": 200,
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        urlopen.return_value = Response()
+
+        results = search_open_library(
+            "The Lord of the Rings",
+            "Tolkien",
+            limit=5,
+            timeout_seconds=12,
+            contact_email="owner@example.com",
+        )
+
+        request = urlopen.call_args.args[0]
+        parsed = urllib.parse.urlparse(request.full_url)
+        query = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/search.json")
+        self.assertEqual(query["title"], ["The Lord of the Rings"])
+        self.assertEqual(query["author"], ["Tolkien"])
+        self.assertEqual(query["limit"], ["5"])
+        self.assertIn("cover_i", query["fields"][0])
+        self.assertIn("MyAnonaSuite", request.get_header("User-agent"))
+        self.assertIn("owner@example.com", request.get_header("User-agent"))
+        self.assertEqual(request.get_header("From"), "owner@example.com")
+        self.assertEqual(results[0]["id"], "/works/OL27448W")
+        self.assertEqual(results[0]["author"], "J. R. R. Tolkien")
+        self.assertEqual(results[0]["publishedYear"], "1954")
+        self.assertEqual(results[0]["isbn"], "9780618640157")
+        self.assertEqual(
+            results[0]["cover"],
+            "https://covers.openlibrary.org/b/id/258027-L.jpg",
+        )
+
+    @patch("mlm.modules.absidekick.core.search_open_library")
+    def test_repeated_search_uses_per_run_cache(self, search):
+        search.return_value = [{"title": "The Hobbit", "author": "J. R. R. Tolkien"}]
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            open_library_contact_email="owner@example.com",
+        )
+        params = {
+            "provider": "openlibrary",
+            "title": "The Hobbit",
+            "author": "Tolkien",
+            "limit": 5,
+        }
+
+        first = client.search_books(params, timeout_seconds=12)
+        second = client.search_books(params, timeout_seconds=12)
+
+        self.assertEqual(first, second)
+        self.assertEqual(search.call_count, 1)
+
+    @patch("mlm.modules.absidekick.core.search_open_library")
+    def test_transient_error_retries_once_without_disabling(self, search):
+        search.side_effect = [
+            ABSAPIError("Open Library returned HTTP 503.", status=503),
+            [{"title": "The Hobbit", "author": "J. R. R. Tolkien"}],
+        ]
+        client = ABSClient("http://localhost:13378", "abs-token")
+
+        with patch("mlm.modules.absidekick.core.time.sleep") as sleep:
+            results = client.search_books(
+                {"provider": "openlibrary", "title": "The Hobbit", "limit": 5},
+                timeout_seconds=12,
+            )
+
+        self.assertEqual(results[0]["title"], "The Hobbit")
+        self.assertEqual(search.call_count, 2)
+        self.assertNotIn("openlibrary", client.disabled_search_providers)
+        self.assertTrue(any(call.args == (0.5,) for call in sleep.call_args_list))
 
 
 class ScoringTests(unittest.TestCase):
@@ -724,7 +825,7 @@ class ScoringTests(unittest.TestCase):
 
             def get(self, path, params=None):
                 self.queries.append(dict(params or {}))
-                if params["provider"] == "google":
+                if params["provider"] in {"google", "openlibrary"}:
                     return []
                 return [{"title": "A Different Wizard", "author": "Someone Else"}]
 
@@ -743,11 +844,62 @@ class ScoringTests(unittest.TestCase):
         candidates = search_candidates(client, sample_item(), settings)
 
         self.assertEqual(
-            [query["provider"] for query in client.queries], ["audible", "google"]
+            [query["provider"] for query in client.queries],
+            ["audible", "google", "openlibrary"],
         )
-        self.assertEqual(candidates.attempts[-1]["provider"], "google")
+        google_attempt = next(
+            attempt
+            for attempt in candidates.attempts
+            if attempt["provider"] == "google"
+        )
+        self.assertEqual(google_attempt["status"], "no_results")
+        self.assertEqual(google_attempt["resultCount"], 0)
+        self.assertEqual(candidates.attempts[-1]["provider"], "openlibrary")
         self.assertEqual(candidates.attempts[-1]["status"], "no_results")
-        self.assertEqual(candidates.attempts[-1]["resultCount"], 0)
+
+    def test_open_library_third_stage_can_auto_match_after_abs_and_google(self):
+        class ThirdStageClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["provider"] == "openlibrary":
+                    return [
+                        {
+                            "id": "/works/OL-test",
+                            "title": "Wizard's First Rule",
+                            "author": "Terry Goodkind",
+                        }
+                    ]
+                return []
+
+        client = ThirdStageClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+
+        candidates = search_candidates(client, sample_item(), settings)
+        decision = match_decision(
+            rank_candidates(sample_item(), candidates, settings), settings
+        )
+
+        self.assertEqual(
+            [query["provider"] for query in client.queries],
+            ["audible", "audible", "google", "openlibrary"],
+        )
+        self.assertEqual(candidates[0]["id"], "/works/OL-test")
+        self.assertEqual(candidates[0]["_absidekickSearch"]["provider"], "openlibrary")
+        self.assertEqual(candidates.attempts[-1]["stage"], "Open Library third stage")
+        self.assertEqual(candidates.attempts[-1]["status"], "results")
+        self.assertEqual(decision["action"], "auto")
 
     def test_untested_google_key_is_never_used_automatically(self):
         class EmptyClient:
@@ -765,10 +917,17 @@ class ScoringTests(unittest.TestCase):
         candidates = search_candidates(client, sample_item(), settings)
 
         self.assertTrue(client.queries)
-        self.assertEqual({query["provider"] for query in client.queries}, {"audible"})
-        self.assertEqual(candidates.attempts[-1]["provider"], "google")
-        self.assertEqual(candidates.attempts[-1]["status"], "skipped")
-        self.assertIn("add and test an API key", candidates.attempts[-1]["message"])
+        self.assertEqual(
+            {query["provider"] for query in client.queries},
+            {"audible", "openlibrary"},
+        )
+        google_attempt = next(
+            attempt
+            for attempt in candidates.attempts
+            if attempt["provider"] == "google"
+        )
+        self.assertEqual(google_attempt["status"], "skipped")
+        self.assertIn("add and test an API key", google_attempt["message"])
 
     def test_google_fallback_cannot_auto_apply_through_abs_quick_match(self):
         settings = deepcopy(DEFAULT_SETTINGS)
@@ -828,7 +987,7 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("disabled for the rest", candidates.diagnostics[0]["message"])
         self.assertEqual(candidates.diagnostics[0]["error"], str(search.side_effect))
 
-    def test_automatic_fallback_providers_are_disabled_by_default(self):
+    def test_only_native_open_library_fallback_is_enabled_by_default(self):
         class EmptyClient:
             def __init__(self):
                 self.queries = []
@@ -841,7 +1000,10 @@ class ScoringTests(unittest.TestCase):
         search_candidates(client, sample_item(), DEFAULT_SETTINGS)
 
         self.assertTrue(client.queries)
-        self.assertEqual({query["provider"] for query in client.queries}, {"audible"})
+        self.assertEqual(
+            {query["provider"] for query in client.queries},
+            {"audible", "openlibrary"},
+        )
 
     def test_candidate_stops_broader_searches(self):
         class PreciseClient:
@@ -1060,8 +1222,10 @@ class ScoringTests(unittest.TestCase):
             raise ABSAPIError("timed out")
 
         client.request = fail_request
-        first = search_candidates(client, sample_item(), DEFAULT_SETTINGS)
-        second = search_candidates(client, sample_item(), DEFAULT_SETTINGS)
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"]["openLibraryEnabled"] = False
+        first = search_candidates(client, sample_item(), settings)
+        second = search_candidates(client, sample_item(), settings)
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["max_retries"], 0)
@@ -1089,6 +1253,7 @@ class ScoringTests(unittest.TestCase):
 
         settings = deepcopy(DEFAULT_SETTINGS)
         settings["connection"]["libraryId"] = "library"
+        settings["providers"]["openLibraryEnabled"] = False
         client = DownClient()
         job = MatchJob("test", client, settings)
 

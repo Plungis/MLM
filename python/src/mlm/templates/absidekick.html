@@ -89,7 +89,7 @@
                   <select id="provider">
                     <option>audible</option>
                     <option value="google">google (native API key required)</option>
-                    <option>openlibrary</option>
+                    <option value="openlibrary">openlibrary (native)</option>
                     <option>itunes</option>
                     <option>audible.ca</option>
                     <option>audible.uk</option>
@@ -119,7 +119,7 @@
                   <span id="googleBooksStatus" class="provider-state missing">Not configured</span>
                 </div>
                 <p class="meta">
-                  Google searches run directly from MyAnonaSuite and never through Audiobookshelf's anonymous Google provider. Once this key passes its live test, automatic runs try Audiobookshelf first and use Google only when ABS does not produce a confident match.
+                  Google searches run directly from MyAnonaSuite and never through Audiobookshelf's anonymous Google provider. Once this key passes its live test, automatic runs try Audiobookshelf first, Google second, and native Open Library third.
                 </p>
                 <div class="google-key-grid">
                   <label class="field">
@@ -143,6 +143,35 @@
                     <li>Paste the key above and select <strong>Test &amp; Enable</strong>. A successful live Google response stores the key in the private ABSidekick settings file and enables Google searches.</li>
                   </ol>
                   <p class="meta">Do not use an HTTP referrer restriction: MyAnonaSuite calls Google from Python, not from the browser. The saved key is never returned to the web page or sent to Audiobookshelf.</p>
+                </details>
+              </section>
+
+              <section class="provider-config open-library-provider-config" aria-labelledby="openLibraryHeading">
+                <div class="section-head compact-head">
+                  <div>
+                    <p class="eyebrow">Native metadata provider</p>
+                    <h3 id="openLibraryHeading">Open Library Search</h3>
+                  </div>
+                  <span id="openLibraryStatus" class="provider-state ready">Enabled</span>
+                </div>
+                <p class="meta">
+                  Open Library is the automatic third lookup after Audiobookshelf and Google fail the matching policy. It needs no API key. Searches use the official JSON API, are cached for the current run, and obey Open Library's published request limits.
+                </p>
+                <div class="google-key-grid">
+                  <label class="check">
+                    <input id="openLibraryEnabled" type="checkbox" />
+                    <span>Enable native Open Library automatic and Review Desk searches</span>
+                  </label>
+                  <label class="field">
+                    <span>Contact Email for API Identification</span>
+                    <input id="openLibraryContactEmail" type="email" placeholder="you@example.com (recommended)" autocomplete="email" spellcheck="false" />
+                  </label>
+                </div>
+                <div id="openLibraryResult" class="provider-test-result" role="status" aria-live="polite"></div>
+                <details class="setup-guide">
+                  <summary>Why Open Library requests a contact email</summary>
+                  <p>Open Library asks regular API users to identify their application with a contact email. Identified clients receive a documented limit of three requests per second; unidentified clients are limited to one request per second. MyAnonaSuite enforces the appropriate limit automatically.</p>
+                  <p class="meta">The address is sent only to Open Library in the API request headers so their administrators can contact the installation owner about unusual traffic. See the <a href="https://openlibrary.org/developers/api" target="_blank" rel="noreferrer">official Open Library API guidelines</a>.</p>
                 </details>
               </section>
             </div>
@@ -273,8 +302,8 @@
                 </label>
               </div>
               <label class="field">
-                <span>Extra Providers After Google (optional)</span>
-                <input id="fallbackProviders" placeholder="openlibrary, itunes" />
+                <span>Extra Providers After Google and Open Library (optional)</span>
+                <input id="fallbackProviders" placeholder="itunes, audible.uk" />
               </label>
               <div class="grid three">
                 <label class="field">
@@ -306,7 +335,7 @@
               <div class="checks">
                 <label class="check"><input id="strictAutoMatch" type="checkbox" /><span>Require safety checks as well as the similarity score</span></label>
                 <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Clean track numbers and retry only when the precise search is empty</span></label>
-                <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Query extra providers after the automatic Google second pass</span></label>
+                <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Query extra providers after the automatic Google and Open Library stages</span></label>
                 <label class="check"><input id="overwriteMetadata" type="checkbox" /><span>Overwrite existing metadata fields</span></label>
                 <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
                 <label class="check"><input id="requireAuthor" type="checkbox" /><span>Require a solid author score</span></label>
@@ -365,7 +394,7 @@
                 <label class="field"><span>ABS API Timeout</span><input id="timeoutSeconds" type="number" min="3" max="300" /></label>
                 <label class="field"><span>Metadata Search Timeout</span><input id="searchTimeoutSeconds" type="number" min="3" max="60" /></label>
               </div>
-              <div class="note">Metadata searches never use the general retry count. A timed-out provider is disabled for the remainder of that run so it cannot stall every book.</div>
+              <div class="note">Metadata searches never use the general ABS retry count. Native Google and Open Library requests retry one transient failure and open a run-local circuit breaker after three consecutively failed items.</div>
               <div class="checks">
                 <label class="check"><input id="dryRun" type="checkbox" /><span>Dry run: score and log only</span></label>
                 <label class="check"><input id="stopOnError" type="checkbox" /><span>Stop on first error</span></label>

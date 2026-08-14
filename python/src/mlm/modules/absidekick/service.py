@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -192,6 +193,41 @@ class ABSidekickService:
             }
         )
 
+    def _apply_open_library_input(
+        self, settings: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        if (
+            "openLibraryEnabled" not in payload
+            and "openLibraryContactEmail" not in payload
+        ):
+            return
+        providers = settings.setdefault("providers", {})
+        enabled = bool(
+            payload.get(
+                "openLibraryEnabled",
+                providers.get("openLibraryEnabled", True),
+            )
+        )
+        contact_email = str(
+            payload.get(
+                "openLibraryContactEmail",
+                providers.get("openLibraryContactEmail", ""),
+            )
+            or ""
+        ).strip()
+        if len(contact_email) > 254:
+            raise ValueError("Open Library contact email is too long")
+        if contact_email and not re.fullmatch(
+            r"[^\s@]+@[^\s@]+\.[^\s@]+", contact_email
+        ):
+            raise ValueError("Enter a valid Open Library contact email")
+        providers.update(
+            {
+                "openLibraryEnabled": enabled,
+                "openLibraryContactEmail": contact_email,
+            }
+        )
+
     def _store(self, settings: dict[str, Any], token: str) -> None:
         with self._lock:
             self.settings = settings
@@ -213,6 +249,7 @@ class ABSidekickService:
     def save(self, payload: dict[str, Any]) -> dict[str, Any]:
         settings, token = self._incoming(payload)
         self._apply_google_key_input(settings, payload)
+        self._apply_open_library_input(settings, payload)
         self._store(settings, token)
         return {
             "ok": True,

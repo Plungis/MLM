@@ -51,23 +51,49 @@ replacing the key disables the provider again. The Config screen contains the
 Google Cloud project, Books API enablement, credential, API restriction, and
 optional stable-IP restriction steps.
 
+## Native Open Library provider
+
+Open Library searches are also made directly by `core.py`, using the official
+`/search.json` API rather than Audiobookshelf's legacy OpenLib provider. It is
+enabled by default as the third automatic stage: the configured Audiobookshelf
+provider runs first, a tested Google key runs second, and Open Library runs only
+when neither earlier stage passes the normal auto-match policy. The same native
+provider is available in Review Desk manual search.
+
+No API key is needed. Config accepts an optional contact email for the
+application-identification headers requested by Open Library. Requests are
+limited to three per second when identified and one per second when anonymous,
+and identical searches are cached for the life of the `ABSClient`. Only the
+fields used by candidate scoring and display are requested. Returned work keys,
+titles, authors, first publication years, ISBNs, publishers, languages, edition
+counts, and cover IDs are converted to the common candidate model.
+
+Open Library timeouts, rate limits, and 5xx responses get one immediate retry;
+three consecutive exhausted transient searches open a run-local circuit
+breaker. A non-transient rejection disables the provider for that run and
+records the underlying error in search diagnostics. Turning the provider off
+in Config prevents both automatic and manual Open Library requests.
+
 The Review Desk also supports reviewer-controlled searches by title, optional
 author, and metadata provider. Manual results are rescored by `core.py` against
 the canonical Audiobookshelf item and use the normal review approval path.
 
 The automatic matcher is intentionally evidence-aware. It performs a precise
 title-and-author search first, broadens the query only after an empty result,
-and can optionally consult configured fallback providers. Missing provider fields are excluded
+then uses the native Google and Open Library stages before optional configured
+fallback providers. Missing provider fields are excluded
 from the weighted score. Contradictory identifiers, authors, series positions,
 collection status, duration, or a close runner-up prevent automatic writes and
 are recorded as explicit Review Desk reasons. This policy and its thresholds
 live under the module's `matching` settings rather than in shared suite code.
 
 Search execution is deliberately bounded: numbering prefixes are cleaned,
-additional queries run only after zero results, automatic fallback providers
-are opt-in, and search requests use a short no-retry timeout. A timed-out
-provider is disabled on that `ABSClient` for the rest of the job. Provider
-failures are attached to preview/review rows and written to the module log.
+additional primary-provider queries run only after zero results, optional ABS
+fallback providers are opt-in, and search requests use a short timeout. Native
+Google and Open Library use a one-retry/three-strike transient-error policy;
+other timed-out providers are disabled on that `ABSClient` for the rest of the
+job. Provider failures are attached to preview/review rows and written to the
+module log.
 
 The module UI has a persistent Live Activity strip for every server-backed
 control. It owns button busy/disabled states, elapsed time, and persistent

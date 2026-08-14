@@ -346,8 +346,8 @@ function renderPolicySummary() {
   $("matchPolicyPreset").value = preset;
   const scoreRange = `Similarity ${values.threshold}+ can auto-match; scores from ${values.reviewFloor} up to just under ${values.threshold} go to Review.`;
   $("policySummary").innerHTML = values.strictAutoMatch
-    ? `<strong>${preset === "custom" ? "Custom safety policy" : `${$("matchPolicyPreset").selectedOptions[0].textContent} policy`}</strong><span>${scoreRange} Automatic approval also requires title ${values.minimumTitleScore}+, author ${values.minimumAuthorScore}+ when both sides provide one, ${values.minimumStrongSignals} independent signal${values.minimumStrongSignals === 1 ? "" : "s"}, a ${values.minimumWinnerMargin}-point lead over a meaningfully different result, and no metadata conflicts. Duplicate listings of the same work do not count as competitors.</span><span class="policy-google">If ABS does not pass all of that, a tested Google key is searched immediately and the full ABS to Google path appears in the log.</span>`
-    : `<strong>Similarity-only approval</strong><span>${scoreRange} The title, author, signal, margin, and conflict safety checks are displayed but do not block automatic approval. This is less accurate.</span><span class="policy-google">If ABS does not reach the score, a tested Google key is searched immediately.</span>`;
+    ? `<strong>${preset === "custom" ? "Custom safety policy" : `${$("matchPolicyPreset").selectedOptions[0].textContent} policy`}</strong><span>${scoreRange} Automatic approval also requires title ${values.minimumTitleScore}+, author ${values.minimumAuthorScore}+ when both sides provide one, ${values.minimumStrongSignals} independent signal${values.minimumStrongSignals === 1 ? "" : "s"}, a ${values.minimumWinnerMargin}-point lead over a meaningfully different result, and no metadata conflicts. Duplicate listings of the same work do not count as competitors.</span><span class="policy-google">If ABS does not pass all of that, a tested Google key is searched second and Open Library is searched third. The full provider path appears in the log.</span>`
+    : `<strong>Similarity-only approval</strong><span>${scoreRange} The title, author, signal, margin, and conflict safety checks are displayed but do not block automatic approval. This is less accurate.</span><span class="policy-google">If ABS does not reach the score, Google is searched second and Open Library third.</span>`;
 }
 
 function applyMatchingPolicyPreset(name) {
@@ -425,6 +425,9 @@ function setForm(settings) {
   $("libraryId").value = connection.libraryId || "";
   $("googleBooksApiKey").value = "";
   renderGoogleBooksStatus(providers);
+  $("openLibraryEnabled").checked = providers.openLibraryEnabled !== false;
+  $("openLibraryContactEmail").value = providers.openLibraryContactEmail || "";
+  renderOpenLibraryStatus();
 
   $("targetMode").value = targeting.mode || "unprocessed";
   $("titleContains").value = targeting.titleContains || "";
@@ -444,7 +447,9 @@ function setForm(settings) {
   $("minimumWinnerMargin").value = matching.minimumWinnerMargin ?? 6;
   $("minimumStrongSignals").value = matching.minimumStrongSignals ?? 2;
   $("fallbackProviders").value = arrayToCsv(
-    (matching.fallbackProviders || []).filter((provider) => provider !== "google"),
+    (matching.fallbackProviders || []).filter(
+      (provider) => !["google", "openlibrary"].includes(provider),
+    ),
   );
   $("applyMode").value = matching.applyMode || "metadata_patch";
   $("coverMode").value = matching.coverMode || "if_missing";
@@ -652,6 +657,7 @@ function filteredLogs() {
 
 function providerLabel(provider) {
   if (provider === "google") return "Google Books";
+  if (provider === "openlibrary") return "Open Library";
   return `ABS ${provider || "provider"}`;
 }
 
@@ -988,7 +994,7 @@ function renderManualSearchOutcome(row, rowIndex) {
 function renderReviewSearch(row, rowIndex) {
   const search = reviewSearchState(row);
   const options = REVIEW_PROVIDERS.map(
-    (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${provider === "google" ? "google (native)" : provider}</option>`,
+    (provider) => `<option value="${provider}"${provider === search.provider ? " selected" : ""}>${["google", "openlibrary"].includes(provider) ? `${provider} (native)` : provider}</option>`,
   ).join("");
   const keepOpen = search.open || search.loading || search.result || search.error;
   return `
@@ -1064,13 +1070,28 @@ function renderGoogleBooksStatus(providers = {}) {
     result.classList.add(lastError ? "warning" : "success");
     result.textContent = lastError
       ? `The key remains enabled because it passed validation ${when}. The latest test was interrupted by a temporary provider error: ${lastError}`
-      : `Live Google Books test passed ${when}. Automatic runs try ABS first, then native Google. Temporary Google failures retry and only pause the provider after three consecutive failed items.`;
+      : `Live Google Books test passed ${when}. Automatic runs try ABS first, native Google second, and Open Library third. Temporary Google failures retry and only pause the provider after three consecutive failed items.`;
   } else if (hasKey) {
     result.classList.add("warning");
     result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
   } else {
-    result.textContent = "Google second pass is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
+    result.textContent = "Google second pass is disabled. MyAnonaSuite will skip Google and continue to Open Library until a key passes the live test.";
   }
+}
+
+function renderOpenLibraryStatus() {
+  const enabled = $("openLibraryEnabled").checked;
+  const contact = $("openLibraryContactEmail").value.trim();
+  const status = $("openLibraryStatus");
+  const result = $("openLibraryResult");
+  status.className = `provider-state ${enabled ? "ready" : "missing"}`;
+  status.textContent = enabled ? (contact ? "Identified & enabled" : "Enabled") : "Disabled";
+  result.className = `provider-test-result ${enabled ? "success" : "warning"}`;
+  result.textContent = enabled
+    ? contact
+      ? "Third-stage and manual searches are enabled at the identified-client limit of 3 requests/second. Results are cached during each run."
+      : "Third-stage and manual searches are enabled at the anonymous limit of 1 request/second. Add a contact email for Open Library's identified-client limit."
+    : "Open Library automatic and Review Desk searches are disabled.";
 }
 
 function googleKeyPayload() {
@@ -1078,12 +1099,22 @@ function googleKeyPayload() {
   return key ? { googleBooksApiKey: key } : {};
 }
 
-function ensureGoogleBooksReady(provider) {
-  if (provider !== "google") return;
-  if (appState.settings?.providers?.googleBooksReady) return;
-  throw new Error(
-    "Google Books is disabled. Open ABSidekick Config, add an API key, and select Test & Enable first. No Google request was sent.",
-  );
+function openLibraryPayload() {
+  return {
+    openLibraryEnabled: $("openLibraryEnabled").checked,
+    openLibraryContactEmail: $("openLibraryContactEmail").value.trim(),
+  };
+}
+
+function ensureProviderReady(provider) {
+  if (provider === "google" && !appState.settings?.providers?.googleBooksReady) {
+    throw new Error(
+      "Google Books is disabled. Open ABSidekick Config, add an API key, and select Test & Enable first. No Google request was sent.",
+    );
+  }
+  if (provider === "openlibrary" && !$("openLibraryEnabled").checked) {
+    throw new Error("Open Library is disabled. Enable it in ABSidekick Config before selecting it as the primary or manual provider.");
+  }
 }
 
 function selectedCandidateIndex(row) {
@@ -1144,7 +1175,7 @@ function renderReviewDesk({ preserveRow = null } = {}) {
 
 async function scanReview() {
   const settings = getSettingsFromForm();
-  ensureGoogleBooksReady(settings.connection.provider);
+  ensureProviderReady(settings.connection.provider);
   const payload = await api("/api/review/scan", {
     method: "POST",
     body: JSON.stringify({ settings, limit: settings.review.scanLimit, ...tokenPayload() }),
@@ -1226,7 +1257,7 @@ async function searchReview(rowIndex, form) {
   search.title = String(formData.get("title") || "").trim();
   search.author = String(formData.get("author") || "").trim();
   search.provider = String(formData.get("provider") || "audible");
-  ensureGoogleBooksReady(search.provider);
+  ensureProviderReady(search.provider);
   search.limit = Number(formData.get("limit") || 20);
   search.open = true;
   search.loading = true;
@@ -1302,7 +1333,12 @@ async function connect() {
 async function saveSettings() {
   const payload = await api("/api/settings", {
     method: "POST",
-    body: JSON.stringify({ settings: getSettingsFromForm(), ...tokenPayload(), ...googleKeyPayload() }),
+    body: JSON.stringify({
+      settings: getSettingsFromForm(),
+      ...tokenPayload(),
+      ...googleKeyPayload(),
+      ...openLibraryPayload(),
+    }),
   });
   setForm(payload.settings);
   showToast("Settings saved");
@@ -1365,7 +1401,7 @@ async function loadFilterData() {
 }
 
 async function preview() {
-  ensureGoogleBooksReady($("provider").value);
+  ensureProviderReady($("provider").value);
   const payload = await api("/api/preview", {
     method: "POST",
     body: JSON.stringify({ settings: getSettingsFromForm(), limit: 10, ...tokenPayload() }),
@@ -1377,7 +1413,7 @@ async function preview() {
 
 async function startJob() {
   const settings = getSettingsFromForm();
-  ensureGoogleBooksReady(settings.connection.provider);
+  ensureProviderReady(settings.connection.provider);
   if (!settings.run.dryRun) {
     const confirmed = window.confirm("This run will write metadata/tags to Audiobookshelf. Start anyway?");
     if (!confirmed) return ACTION_CANCELLED;
@@ -1453,6 +1489,10 @@ function wireEvents() {
   [...MATCH_POLICY_FIELDS, "strictAutoMatch"].forEach((id) => {
     $(id).addEventListener("input", renderPolicySummary);
     $(id).addEventListener("change", renderPolicySummary);
+  });
+  ["openLibraryEnabled", "openLibraryContactEmail"].forEach((id) => {
+    $(id).addEventListener("input", renderOpenLibraryStatus);
+    $(id).addEventListener("change", renderOpenLibraryStatus);
   });
   $("connectBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
     title: "Connecting to Audiobookshelf",
