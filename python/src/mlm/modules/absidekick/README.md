@@ -94,6 +94,13 @@ non-blocking match note. It no longer vetoes an otherwise passing score, author,
 signal-count, and winner-margin decision. Identifier, author, series-position,
 collection, duration, and competing-work conflicts remain blocking.
 
+Before metadata-patch mode calls Audiobookshelf, author names are normalized and
+deduplicated case-insensitively. If the candidate's normalized author set is
+already the same as the book's current author set, the author field is omitted
+even when metadata overwrite is enabled. This avoids Audiobookshelf 2.36.0's
+`bookAuthors.bookId, bookAuthors.authorId` unique-constraint crash path without
+preventing a genuinely different author set from being applied.
+
 Search execution is deliberately bounded: numbering prefixes are cleaned,
 additional primary-provider queries run only after zero results, optional ABS
 fallback providers are opt-in, and search requests use a short timeout. Native

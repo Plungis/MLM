@@ -462,6 +462,33 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("authors", payload)
         self.assertEqual(payload["asin"], "B000123")
 
+    def test_metadata_payload_deduplicates_case_variant_authors(self):
+        payload = candidate_metadata_payload(
+            {},
+            {
+                "authors": [
+                    {"name": "Stephen King"},
+                    {"name": "stephen king"},
+                    {"name": "  Stephen  King  "},
+                ]
+            },
+            overwrite=True,
+        )
+
+        self.assertEqual(payload["authors"], [{"name": "Stephen King"}])
+
+    def test_metadata_payload_skips_unchanged_author_relationships(self):
+        payload = candidate_metadata_payload(
+            {
+                "authors": [{"name": "Stephen King"}],
+                "authorName": "Stephen King",
+            },
+            {"authors": ["stephen king", "Stephen King"]},
+            overwrite=True,
+        )
+
+        self.assertNotIn("authors", payload)
+
     def test_sparse_provider_metadata_does_not_penalize_obvious_match(self):
         ranked = rank_candidates(
             sample_item(),

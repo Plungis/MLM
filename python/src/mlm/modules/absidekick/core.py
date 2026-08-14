@@ -304,11 +304,22 @@ def split_people(value: Any) -> list[str]:
                 people.append(str(item.get("name") or item.get("author") or ""))
             else:
                 people.append(str(item))
-        return [person.strip() for person in people if person and person.strip()]
-    text = str(value)
-    for sep in [";", " and ", " & ", " / "]:
-        text = text.replace(sep, ",")
-    return [person.strip() for person in text.split(",") if person.strip()]
+    else:
+        text = str(value)
+        for sep in [";", " and ", " & ", " / "]:
+            text = text.replace(sep, ",")
+        people = text.split(",")
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in people:
+        person = value.strip()
+        identity = normalize_text(person)
+        if not identity or identity in seen:
+            continue
+        unique.append(person)
+        seen.add(identity)
+    return unique
 
 
 def first_present(*values: Any) -> Any:
@@ -1139,8 +1150,22 @@ def candidate_metadata_payload(
         if empty_value(value):
             continue
         existing_value = existing_metadata.get(key)
-        if key == "authors" and existing_metadata.get("authorName"):
-            existing_value = existing_metadata.get("authorName")
+        if key == "authors":
+            existing_value = first_present(
+                existing_metadata.get("authors"),
+                existing_metadata.get("authorName"),
+            )
+            existing_authors = {
+                normalize_text(person) for person in split_people(existing_value)
+            }
+            candidate_authors = {
+                normalize_text(person) for person in split_people(value)
+            }
+            if existing_authors and existing_authors == candidate_authors:
+                # ABS 2.36.0 can crash while inserting duplicate book-author
+                # relationships. Do not invoke its author update path when the
+                # normalized relationship set is already correct.
+                continue
         if key == "narrators" and existing_metadata.get("narratorName"):
             existing_value = existing_metadata.get("narratorName")
         if key == "series" and existing_metadata.get("seriesName"):
