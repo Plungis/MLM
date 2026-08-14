@@ -26,6 +26,9 @@ from mlm.modules.absidekick.core import (
     should_process_item,
     summarize_item,
 )
+from mlm.modules.absidekick.core import (
+    test_google_books_api_key as validate_google_books_api_key,
+)
 
 
 def sample_item(tags=None):
@@ -158,6 +161,114 @@ class GoogleBooksProviderTests(unittest.TestCase):
         self.assertEqual(results[0]["publishedYear"], "1937")
         self.assertEqual(results[0]["isbn"], "9780547928227")
         self.assertEqual(results[0]["cover"], "https://books.google.com/cover.jpg")
+
+    @patch("mlm.modules.absidekick.core.search_google_books")
+    def test_transient_google_error_retries_once_without_disabling(self, search):
+        search.side_effect = [
+            ABSAPIError("Google Books returned HTTP 503.", status=503),
+            [{"title": "The Hobbit", "author": "J. R. R. Tolkien"}],
+        ]
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="validated-key",
+            google_books_ready=True,
+        )
+
+        with patch("mlm.modules.absidekick.core.time.sleep") as sleep:
+            results = client.search_books(
+                {"provider": "google", "title": "The Hobbit", "limit": 5},
+                timeout_seconds=12,
+            )
+
+        self.assertEqual(results[0]["title"], "The Hobbit")
+        self.assertEqual(search.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+        self.assertNotIn("google", client.disabled_search_providers)
+        self.assertNotIn("google", client.transient_search_failures)
+
+    @patch("mlm.modules.absidekick.core.search_google_books")
+    def test_single_exhausted_transient_google_search_retries_next_item(self, search):
+        search.side_effect = ABSAPIError("Google Books returned HTTP 503.", status=503)
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="validated-key",
+            google_books_ready=True,
+        )
+        params = {"provider": "google", "title": "The Hobbit", "limit": 5}
+
+        with (
+            patch("mlm.modules.absidekick.core.time.sleep"),
+            self.assertRaises(ABSAPIError),
+        ):
+            client.search_books(params, timeout_seconds=12)
+
+        self.assertNotIn("google", client.disabled_search_providers)
+        self.assertEqual(client.transient_search_failures["google"], 1)
+
+        search.side_effect = None
+        search.return_value = [{"title": "The Hobbit"}]
+        results = client.search_books(params, timeout_seconds=12)
+
+        self.assertEqual(results[0]["title"], "The Hobbit")
+        self.assertNotIn("google", client.transient_search_failures)
+
+    @patch("mlm.modules.absidekick.core.search_google_books")
+    def test_three_exhausted_transient_google_searches_open_circuit(self, search):
+        search.side_effect = ABSAPIError("Google Books returned HTTP 503.", status=503)
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="validated-key",
+            google_books_ready=True,
+        )
+        params = {"provider": "google", "title": "The Hobbit", "limit": 5}
+
+        with patch("mlm.modules.absidekick.core.time.sleep"):
+            for _ in range(3):
+                with self.assertRaises(ABSAPIError):
+                    client.search_books(params, timeout_seconds=12)
+
+        self.assertIn("google", client.disabled_search_providers)
+        self.assertIn(
+            "3 consecutive transient failures",
+            client.disabled_search_providers["google"],
+        )
+        self.assertEqual(search.call_count, 6)
+
+    @patch("mlm.modules.absidekick.core.search_google_books")
+    def test_google_auth_error_disables_immediately_without_retry(self, search):
+        search.side_effect = ABSAPIError("Google rejected the API key.", status=403)
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="validated-key",
+            google_books_ready=True,
+        )
+
+        with self.assertRaises(ABSAPIError):
+            client.search_books(
+                {"provider": "google", "title": "The Hobbit", "limit": 5},
+                timeout_seconds=12,
+            )
+
+        self.assertEqual(search.call_count, 1)
+        self.assertIn("google", client.disabled_search_providers)
+
+    @patch("mlm.modules.absidekick.core._google_books_payload")
+    def test_live_key_test_retries_one_transient_google_failure(self, payload):
+        payload.side_effect = [
+            ABSAPIError("Google Books returned HTTP 503.", status=503),
+            {"items": [{"id": "sample"}]},
+        ]
+
+        with patch("mlm.modules.absidekick.core.time.sleep") as sleep:
+            result = validate_google_books_api_key("validated-key", timeout_seconds=12)
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(payload.call_count, 2)
+        sleep.assert_called_once_with(0.5)
 
 
 class ScoringTests(unittest.TestCase):
@@ -527,6 +638,43 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(decision["action"], "review")
         self.assertIn("metadata patch mode", " ".join(decision["reasons"]))
+
+    @patch("mlm.modules.absidekick.core.search_google_books")
+    def test_transient_google_fallback_log_says_it_will_retry(self, search):
+        search.side_effect = ABSAPIError("Google Books returned HTTP 503.", status=503)
+        client = ABSClient(
+            "http://localhost:13378",
+            "abs-token",
+            google_books_api_key="tested-key",
+            google_books_ready=True,
+        )
+        client.request = lambda *args, **kwargs: [
+            {
+                "title": "A Different Wizard",
+                "author": "Someone Else",
+                "asin": "abs-wrong",
+            }
+        ]
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+
+        with patch("mlm.modules.absidekick.core.time.sleep"):
+            candidates = search_candidates(client, sample_item(), settings)
+
+        self.assertEqual(len(candidates.diagnostics), 1)
+        self.assertIn(
+            "will retry on the next item", candidates.diagnostics[0]["message"]
+        )
+        self.assertNotIn("disabled for the rest", candidates.diagnostics[0]["message"])
+        self.assertEqual(candidates.diagnostics[0]["error"], str(search.side_effect))
 
     def test_automatic_fallback_providers_are_disabled_by_default(self):
         class EmptyClient:

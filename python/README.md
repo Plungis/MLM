@@ -99,7 +99,13 @@ returned to the browser or sent to Audiobookshelf. Once the key is tested,
 previews, initial matching runs, and Review Desk scans always try the selected
 Audiobookshelf metadata provider first. Native Google Books is queried only
 when ABS does not produce a confident automatic match. Reviewer-controlled
-Google searches remain available on each Review Desk item.
+Google searches remain available on each Review Desk item. Temporary Google
+timeouts, rate limits, and 5xx responses receive one immediate retry and do not
+disable the provider after a single failed item. Three consecutive exhausted
+transient searches open the run-local circuit breaker; authentication or API
+configuration rejections still stop Google immediately. Job diagnostics state
+whether the next item will retry or the provider was disabled and include the
+underlying error.
 
 ABSidekick retains the source project's dry-run preview, weighted scoring,
 metadata-patch, ABS quick-match and tags-only modes, author/tag/path targeting,

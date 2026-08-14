@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 APP_VERSION = "Beta V.91.1"
+GOOGLE_TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
+GOOGLE_TRANSIENT_FAILURE_LIMIT = 3
 
 PROVIDERS = [
     "google",
@@ -1049,6 +1051,10 @@ def _google_error_message(status: int, body: str) -> str:
     return f"{guidance}{f' Google says: {detail}' if detail else ''}"
 
 
+def google_error_is_transient(error: ABSAPIError) -> bool:
+    return error.status is None or error.status in GOOGLE_TRANSIENT_STATUSES
+
+
 def _google_books_payload(
     api_key: str,
     query: str,
@@ -1083,7 +1089,7 @@ def _google_books_payload(
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
         raise ABSAPIError(
-            _google_error_message(error.code, body), error.code
+            _google_error_message(error.code, body), error.code, body
         ) from error
     except (urllib.error.URLError, TimeoutError) as error:
         raise ABSAPIError(f"Google Books request failed: {error}") from error
@@ -1094,7 +1100,8 @@ def _google_books_payload(
     if not isinstance(payload, dict):
         raise ABSAPIError("Google Books returned an invalid response")
     if payload.get("error"):
-        raise ABSAPIError(_google_error_message(400, json.dumps(payload)), 400)
+        body = json.dumps(payload)
+        raise ABSAPIError(_google_error_message(400, body), 400, body)
     return payload
 
 
@@ -1176,12 +1183,20 @@ def search_google_books(
 def test_google_books_api_key(
     api_key: str, *, timeout_seconds: int = 12
 ) -> dict[str, Any]:
-    payload = _google_books_payload(
-        api_key,
-        "isbn:9780547928227",
-        limit=1,
-        timeout_seconds=timeout_seconds,
-    )
+    for attempt in range(2):
+        try:
+            payload = _google_books_payload(
+                api_key,
+                "isbn:9780547928227",
+                limit=1,
+                timeout_seconds=timeout_seconds,
+            )
+            break
+        except ABSAPIError as error:
+            if google_error_is_transient(error) and attempt == 0:
+                time.sleep(0.5)
+                continue
+            raise
     return {
         "valid": True,
         "sampleResults": len(payload.get("items") or []),
@@ -1212,6 +1227,7 @@ class ABSClient:
         self.google_books_api_key = google_books_api_key
         self.google_books_ready = google_books_ready
         self.disabled_search_providers: dict[str, str] = {}
+        self.transient_search_failures: dict[str, int] = {}
 
     def url(self, path: str, params: dict[str, Any] | None = None) -> str:
         if not path.startswith("/"):
@@ -1298,7 +1314,7 @@ class ABSClient:
     def search_books(
         self, params: dict[str, Any], timeout_seconds: int
     ) -> list[dict[str, Any]]:
-        """Run one fail-fast metadata search without generic API retries."""
+        """Run one provider search with a small Google transient-error budget."""
 
         provider = str(params.get("provider") or "")
         if provider in self.disabled_search_providers:
@@ -1311,13 +1327,21 @@ class ABSClient:
                         "test an API key in ABSidekick Config first. No Google "
                         "request was sent."
                     )
-                result = search_google_books(
-                    self.google_books_api_key,
-                    str(params.get("title") or ""),
-                    str(params.get("author") or ""),
-                    limit=int(params.get("limit") or 10),
-                    timeout_seconds=timeout_seconds,
-                )
+                for attempt in range(2):
+                    try:
+                        result = search_google_books(
+                            self.google_books_api_key,
+                            str(params.get("title") or ""),
+                            str(params.get("author") or ""),
+                            limit=int(params.get("limit") or 10),
+                            timeout_seconds=timeout_seconds,
+                        )
+                        break
+                    except ABSAPIError as error:
+                        if google_error_is_transient(error) and attempt == 0:
+                            time.sleep(0.5)
+                            continue
+                        raise
             else:
                 result = self.request(
                     "GET",
@@ -1327,8 +1351,17 @@ class ABSClient:
                     max_retries=0,
                 )
         except ABSAPIError as error:
-            self.disabled_search_providers[provider] = str(error)
+            if provider != "google" or not google_error_is_transient(error):
+                self.disabled_search_providers[provider] = str(error)
+            else:
+                failures = self.transient_search_failures.get(provider, 0) + 1
+                self.transient_search_failures[provider] = failures
+                if failures >= GOOGLE_TRANSIENT_FAILURE_LIMIT:
+                    self.disabled_search_providers[provider] = (
+                        f"{error} ({failures} consecutive transient failures)"
+                    )
             raise
+        self.transient_search_failures.pop(provider, None)
         return result if isinstance(result, list) else []
 
     def post(
@@ -1493,7 +1526,7 @@ def _search_books_once(
     client: ABSClient,
     params: dict[str, Any],
     timeout_seconds: int,
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], Exception | None]:
     provider = str(params.get("provider") or "unknown")
     if isinstance(client, ABSClient):
         if provider in client.disabled_search_providers:
@@ -1501,17 +1534,48 @@ def _search_books_once(
         try:
             return client.search_books(params, timeout_seconds), None
         except ABSAPIError as error:
-            return [], str(error)
+            return [], error
     try:
         results = client.get("/api/search/books", params=params)
     except Exception as error:  # noqa: BLE001 - provider failure is recoverable
-        return [], str(error)
+        return [], error
     return (
         [candidate for candidate in results if isinstance(candidate, dict)]
         if isinstance(results, list)
         else [],
         None,
     )
+
+
+def _search_failure_message(
+    client: ABSClient,
+    provider: str,
+    *,
+    fallback: bool,
+) -> str:
+    label = "Google Books" if provider == "google" else provider
+    operation = "fallback" if fallback else "metadata search"
+    if not isinstance(client, ABSClient):
+        return f"{label} {operation} failed for this item"
+    if provider in client.disabled_search_providers:
+        failures = client.transient_search_failures.get(provider, 0)
+        if provider == "google" and failures >= GOOGLE_TRANSIENT_FAILURE_LIMIT:
+            return (
+                f"{label} {operation} disabled for the rest of this run after "
+                f"{failures} consecutive transient failures"
+            )
+        return (
+            f"{label} {operation} disabled for the rest of this run because "
+            "Google rejected the request or provider configuration"
+        )
+    failures = client.transient_search_failures.get(provider, 0)
+    if provider == "google" and failures:
+        return (
+            f"{label} {operation} failed for this item; it will retry on the "
+            f"next item ({failures}/{GOOGLE_TRANSIENT_FAILURE_LIMIT} transient "
+            "failures)"
+        )
+    return f"{label} {operation} failed for this item"
 
 
 def search_candidates(
@@ -1620,10 +1684,9 @@ def search_candidates(
                 {
                     "provider": provider,
                     "strategy": strategy,
-                    "error": error,
-                    "message": (
-                        f"{provider} metadata search failed; disabled for the "
-                        "rest of this run"
+                    "error": str(error),
+                    "message": _search_failure_message(
+                        client, provider, fallback=False
                     ),
                 }
             )
@@ -1679,11 +1742,8 @@ def search_candidates(
                 {
                     "provider": provider,
                     "strategy": strategy,
-                    "error": error,
-                    "message": (
-                        f"{provider} metadata fallback failed; disabled for the "
-                        "rest of this run"
-                    ),
+                    "error": str(error),
+                    "message": _search_failure_message(client, provider, fallback=True),
                 }
             )
             continue

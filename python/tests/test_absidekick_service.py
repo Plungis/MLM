@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import mlm.modules.absidekick.service as absidekick_service
 from mlm.modules.absidekick.service import ABSidekickService
 
@@ -102,6 +104,70 @@ def test_google_books_key_must_pass_live_test_and_is_never_returned(
     assert cleared_result["settings"]["providers"]["hasGoogleBooksApiKey"] is False
     assert cleared_result["settings"]["providers"]["googleBooksReady"] is False
     assert "private-google-key" not in service.settings_path.read_text(encoding="utf-8")
+
+
+def test_transient_retest_keeps_previously_validated_google_key_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+    service.save({"googleBooksApiKey": "private-google-key"})
+    monkeypatch.setattr(
+        absidekick_service,
+        "test_google_books_api_key",
+        lambda api_key, timeout_seconds: {
+            "valid": True,
+            "sampleResults": 1,
+            "message": "Google accepted the key.",
+        },
+    )
+    service.test_google_books({})
+
+    def transient_failure(api_key, timeout_seconds):
+        raise absidekick_service.ABSAPIError(
+            "Google Books returned HTTP 503.", status=503
+        )
+
+    monkeypatch.setattr(
+        absidekick_service, "test_google_books_api_key", transient_failure
+    )
+
+    with pytest.raises(absidekick_service.ABSAPIError, match="HTTP 503"):
+        service.test_google_books({})
+
+    providers = service.public_state()["settings"]["providers"]
+    assert providers["googleBooksReady"] is True
+    assert providers["googleBooksLastError"] == "Google Books returned HTTP 503."
+
+
+def test_permanent_retest_error_revokes_google_key_validation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+    service.save({"googleBooksApiKey": "private-google-key"})
+    monkeypatch.setattr(
+        absidekick_service,
+        "test_google_books_api_key",
+        lambda api_key, timeout_seconds: {
+            "valid": True,
+            "sampleResults": 1,
+            "message": "Google accepted the key.",
+        },
+    )
+    service.test_google_books({})
+
+    def permanent_failure(api_key, timeout_seconds):
+        raise absidekick_service.ABSAPIError("Google rejected the API key.", status=403)
+
+    monkeypatch.setattr(
+        absidekick_service, "test_google_books_api_key", permanent_failure
+    )
+
+    with pytest.raises(absidekick_service.ABSAPIError, match="rejected"):
+        service.test_google_books({})
+
+    providers = service.public_state()["settings"]["providers"]
+    assert providers["googleBooksReady"] is False
+    assert providers["googleBooksLastError"] == "Google rejected the API key."
 
 
 def test_absidekick_review_search_uses_normal_service_connection(

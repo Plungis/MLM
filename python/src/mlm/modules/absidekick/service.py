@@ -18,6 +18,8 @@ from .core import (
     create_client,
     deep_merge,
     google_books_key_fingerprint,
+    google_books_key_is_ready,
+    google_error_is_transient,
     load_settings,
     preview_matches,
     public_settings,
@@ -224,6 +226,7 @@ class ABSidekickService:
         api_key = str(providers.get("googleBooksApiKey") or "").strip()
         if not api_key:
             raise ValueError("Enter a Google Books API key before testing it")
+        was_ready = google_books_key_is_ready(settings)
         try:
             result = test_google_books_api_key(
                 api_key,
@@ -232,14 +235,15 @@ class ABSidekickService:
                 ),
             )
         except ABSAPIError as error:
-            providers.update(
-                {
-                    "googleBooksApiKeyValidated": False,
-                    "googleBooksApiKeyFingerprint": "",
-                    "googleBooksApiKeyValidatedAt": "",
-                    "googleBooksLastError": str(error),
-                }
-            )
+            providers["googleBooksLastError"] = str(error)
+            if not (was_ready and google_error_is_transient(error)):
+                providers.update(
+                    {
+                        "googleBooksApiKeyValidated": False,
+                        "googleBooksApiKeyFingerprint": "",
+                        "googleBooksApiKeyValidatedAt": "",
+                    }
+                )
             self._store(settings, token)
             raise
         providers.update(

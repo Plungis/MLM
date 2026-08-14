@@ -38,7 +38,11 @@ the browser. A tested key automatically enables Google as the second-stage
 provider for previews, initial jobs, and Review Desk scans: the configured
 Audiobookshelf provider runs first, and Google is contacted only if that
 provider does not produce a confident match. Manual Google searching in the
-Review Desk remains independent and available.
+Review Desk remains independent and available. Google timeouts, rate limits,
+and 5xx responses receive one immediate retry. One exhausted transient search
+does not disable Google; three consecutive failures open a circuit breaker for
+that run. Authentication and API-configuration failures disable Google
+immediately. The next successful search resets the transient failure count.
 
 The provider is fail-closed. Saving a key clears any previous validation, and
 the Google code path refuses to make an outbound request until **Test & Enable**

@@ -890,9 +890,12 @@ function renderGoogleBooksStatus(providers = {}) {
   const clearButton = $("clearGoogleBooksBtn");
   const hasKey = Boolean(providers.hasGoogleBooksApiKey);
   const ready = Boolean(providers.googleBooksReady);
+  const lastError = String(providers.googleBooksLastError || "").trim();
 
   status.className = `provider-state ${ready ? "ready" : hasKey ? "untested" : "missing"}`;
-  status.textContent = ready ? "Tested & enabled" : hasKey ? "Saved · test required" : "Not configured";
+  status.textContent = ready
+    ? lastError ? "Enabled · last test interrupted" : "Tested & enabled"
+    : hasKey ? "Saved · test required" : "Not configured";
   input.placeholder = hasKey
     ? "Stored key is hidden — paste only to replace it"
     : "Paste a new key, then test it";
@@ -903,8 +906,10 @@ function renderGoogleBooksStatus(providers = {}) {
     const when = providers.googleBooksApiKeyValidatedAt
       ? new Date(providers.googleBooksApiKeyValidatedAt).toLocaleString()
       : "recently";
-    result.classList.add("success");
-    result.textContent = `Live Google Books test passed ${when}. Automatic runs now try ABS first and use native Google only when ABS has no confident match.`;
+    result.classList.add(lastError ? "warning" : "success");
+    result.textContent = lastError
+      ? `The key remains enabled because it passed validation ${when}. The latest test was interrupted by a temporary provider error: ${lastError}`
+      : `Live Google Books test passed ${when}. Automatic runs try ABS first, then native Google. Temporary Google failures retry and only pause the provider after three consecutive failed items.`;
   } else if (hasKey) {
     result.classList.add("warning");
     result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
