@@ -709,6 +709,67 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(ranked[0]["exactIdentifiers"], ["ASIN"])
         self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "auto")
 
+    def test_exact_identifier_overrides_only_edition_level_conflicts(self):
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {"asin": "B00-ABC-123", "isbn": "978-old-edition"}
+        )
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "asin": "B00ABC123",
+                    "isbn": "978-new-edition",
+                    "duration": 100,
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(ranked[0]["score"], 99)
+        self.assertEqual(
+            ranked[0]["conflicts"], ["ISBN differs", "duration differs substantially"]
+        )
+        self.assertEqual(decision["action"], "auto")
+        self.assertTrue(decision["editionConflictOverride"])
+        self.assertTrue(decision["safetyPassed"])
+        self.assertEqual(decision["reasons"], [])
+        self.assertTrue(
+            all("non-blocking" in advisory for advisory in decision["advisories"])
+        )
+
+    def test_exact_identifier_does_not_override_series_identity_conflict(self):
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {
+                "asin": "B00ABC123",
+                "series": [{"name": "Sword of Truth", "sequence": "1"}],
+            }
+        )
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "asin": "B00ABC123",
+                    "series": [{"name": "Sword of Truth", "sequence": "2"}],
+                    "duration": 100,
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("series sequence differs", decision["reasons"])
+        self.assertNotIn("duration differs substantially", decision["reasons"])
+
     def test_identifier_conflict_blocks_automatic_write(self):
         item = sample_item()
         item["media"]["metadata"]["asin"] = "B00ABC123"

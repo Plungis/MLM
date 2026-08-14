@@ -880,12 +880,34 @@ def match_decision(
     )
     margin = round(float(best["score"]) - runner_score, 2)
     parts = best.get("parts") or {}
-    safety_reasons = list(best.get("conflicts") or [])
+    reported_conflicts = list(best.get("conflicts") or [])
     advisories = list(best.get("advisories") or [])
     score = float(best["score"])
     strong_signals = list(best.get("strongSignals") or [])
 
     exact_identifier = bool(best.get("exactIdentifiers"))
+    edition_conflicts = [
+        reason
+        for reason in reported_conflicts
+        if reason in {"ASIN differs", "ISBN differs", "duration differs substantially"}
+    ]
+    blocking_conflicts = [
+        reason for reason in reported_conflicts if reason not in edition_conflicts
+    ]
+    # An exact ASIN or ISBN identifies the selected edition more reliably than
+    # stale duration or alternate-edition identifiers already stored in ABS.
+    # Keep genuine work-identity conflicts (series sequence, collection status,
+    # and the author/title gates below) blocking automatic writes.
+    edition_conflict_override = bool(exact_identifier and edition_conflicts)
+    safety_reasons = (
+        blocking_conflicts if edition_conflict_override else reported_conflicts
+    )
+    if edition_conflict_override:
+        exact_label = ", ".join(best.get("exactIdentifiers") or [])
+        advisories.extend(
+            f"{reason} (non-blocking because {exact_label} matched exactly)"
+            for reason in edition_conflicts
+        )
     title_score = float(parts.get("title") or 0)
     if title_score < title_minimum and not exact_identifier:
         safety_reasons.append(
@@ -950,6 +972,8 @@ def match_decision(
         "equivalentCandidateCount": len(equivalent_candidates),
         "competingCandidateCount": len(competing_candidates),
         "exactIdentifier": exact_identifier,
+        "editionConflictOverride": edition_conflict_override,
+        "editionConflicts": edition_conflicts,
         "advisories": advisories,
         "policy": policy,
     }
