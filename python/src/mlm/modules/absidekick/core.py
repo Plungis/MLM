@@ -686,6 +686,7 @@ def score_candidate(
 
     exact_identifiers: list[str] = []
     conflicts: list[str] = []
+    advisories: list[str] = []
     for name in ("asin", "isbn"):
         left_identifier = item_identifier(item, name)
         right_identifier = candidate_identifier(candidate, name)
@@ -703,7 +704,9 @@ def score_candidate(
         for result_title in candidate_title_values(candidate)
     )
     if primary_title_score < 55 <= title_score:
-        conflicts.append("folder title and current ABS title disagree")
+        advisories.append(
+            "current ABS title differs from the matching folder/search title"
+        )
     if series_sequence_conflict(item_series, result_series):
         conflicts.append("series sequence differs")
     item_collection = bool(COLLECTION_PATTERN.search(" ".join(title_values(item))))
@@ -741,6 +744,7 @@ def score_candidate(
         "strongSignals": signals,
         "exactIdentifiers": exact_identifiers,
         "conflicts": conflicts,
+        "advisories": advisories,
         "search": deepcopy(candidate.get("_absidekickSearch") or {}),
         "source": {"title": title, "author": author},
         "candidate": candidate,
@@ -866,6 +870,7 @@ def match_decision(
     margin = round(float(best["score"]) - runner_score, 2)
     parts = best.get("parts") or {}
     safety_reasons = list(best.get("conflicts") or [])
+    advisories = list(best.get("advisories") or [])
     score = float(best["score"])
     strong_signals = list(best.get("strongSignals") or [])
 
@@ -934,6 +939,7 @@ def match_decision(
         "equivalentCandidateCount": len(equivalent_candidates),
         "competingCandidateCount": len(competing_candidates),
         "exactIdentifier": exact_identifier,
+        "advisories": advisories,
         "policy": policy,
     }
     if auto_allowed:

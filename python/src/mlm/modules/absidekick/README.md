@@ -87,6 +87,13 @@ collection status, duration, or a close runner-up prevent automatic writes and
 are recorded as explicit Review Desk reasons. This policy and its thresholds
 live under the module's `matching` settings rather than in shared suite code.
 
+The current ABS title and the final folder name are both title evidence. When a
+folder or parsed search title clearly matches the candidate but the current ABS
+title is short, incomplete, or incorrect, that disagreement is displayed as a
+non-blocking match note. It no longer vetoes an otherwise passing score, author,
+signal-count, and winner-margin decision. Identifier, author, series-position,
+collection, duration, and competing-work conflicts remain blocking.
+
 Search execution is deliberately bounded: numbering prefixes are cleaned,
 additional primary-provider queries run only after zero results, optional ABS
 fallback providers are opt-in, and search requests use a short timeout. Native

@@ -684,6 +684,7 @@ function renderLogDecision(decision) {
   if (!decision) return "";
   const policy = decision.policy || {};
   const reasons = decision.reasons || [];
+  const advisories = decision.advisories || [];
   const scoreGate = decision.scorePassed
     ? `Similarity ${decision.score ?? "-"} passed the ${policy.autoThreshold ?? "-"} auto threshold.`
     : `Similarity ${decision.score ?? "-"} did not pass the ${policy.autoThreshold ?? "-"} auto threshold.`;
@@ -698,6 +699,7 @@ function renderLogDecision(decision) {
       <strong>${escapeHtml(decision.action === "auto" ? "Automatically approved" : decision.action === "review" ? "Why it needs review" : "Why it was not matched")}</strong>
       <span>${escapeHtml(scoreGate)} ${escapeHtml(evidence)}</span>
       ${reasons.length ? `<span class="decision-reasons">${escapeHtml(reasons.join("; "))}</span>` : ""}
+      ${advisories.length ? `<span class="decision-advisories">Match note: ${escapeHtml(advisories.join("; "))}. This did not block approval.</span>` : ""}
     </div>
   `;
 }
@@ -769,6 +771,7 @@ function renderPreview(preview) {
                 : "<div>No candidates returned</div>"
             }
             <div class="confidence-line ${escapeHtml(decision.confidence || "none")}">${escapeHtml(decision.action || "unmatched")} · margin ${escapeHtml(decision.margin ?? 0)}${decision.reasons?.length ? ` · ${escapeHtml(decision.reasons.join("; "))}` : ""}</div>
+            ${decision.advisories?.length ? `<div class="evidence-line">Match note: ${escapeHtml(decision.advisories.join("; "))}. This did not block approval.</div>` : ""}
             ${renderSearchAttempts(row.searchAttempts)}
             ${row.searchDiagnostics?.length ? `<div class="conflict-line">Provider warning: ${escapeHtml(row.searchDiagnostics.map((entry) => entry.message).join("; "))}</div>` : ""}
             ${best?.parts ? `<div class="meta">Title ${best.parts.title} | Author ${best.parts.author} | Year ${best.parts.year} | Duration ${best.parts.duration}</div>` : ""}
@@ -866,6 +869,7 @@ function renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex = 0
       <div class="match-score"><span class="score">${scored.score}</span> match score</div>
       ${scored.strongSignals?.length ? `<div class="evidence-line">Strong: ${escapeHtml(scored.strongSignals.join(", "))}</div>` : ""}
       ${scored.conflicts?.length ? `<div class="conflict-line">Check: ${escapeHtml(scored.conflicts.join("; "))}</div>` : ""}
+      ${scored.advisories?.length ? `<div class="evidence-line">Note: ${escapeHtml(scored.advisories.join("; "))}</div>` : ""}
       <details>
         <summary>More match info</summary>
         ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}
@@ -899,6 +903,7 @@ function renderScoreParts(parts) {
 function renderMatchDecision(decision) {
   if (!decision) return "";
   const reasons = decision.reasons || [];
+  const advisories = decision.advisories || [];
   const policy = decision.policy || {};
   const scoreStatus = decision.scorePassed
     ? `Similarity ${decision.score ?? "-"} passed ${policy.autoThreshold ?? "-"}`
@@ -914,6 +919,7 @@ function renderMatchDecision(decision) {
       <strong>${decision.action === "auto" ? "High-confidence match" : decision.action === "review" ? "Human review required" : "Insufficient evidence"}</strong>
       <span>${escapeHtml(scoreStatus)} | ${escapeHtml(evidenceStatus)}</span>
       ${reasons.length ? `<span>${escapeHtml(reasons.join(" · "))}</span>` : ""}
+      ${advisories.length ? `<span>Match note: ${escapeHtml(advisories.join(" · "))}. This did not block approval.</span>` : ""}
     </div>
   `;
 }

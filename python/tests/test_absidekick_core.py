@@ -486,6 +486,37 @@ class ScoringTests(unittest.TestCase):
         self.assertGreaterEqual(scored["parts"]["title"], 92)
         self.assertEqual(match_decision([scored], DEFAULT_SETTINGS)["action"], "auto")
 
+    def test_matching_folder_title_can_correct_a_short_abs_title(self):
+        item = sample_item()
+        item["path"] = "/audiobooks/Arthur C. Clarke/2061 Odyssey Three"
+        item["media"]["metadata"].update(
+            {
+                "title": "2061",
+                "authorName": "Arthur C. Clarke",
+                "seriesName": "Space Odyssey",
+            }
+        )
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "2061: Odyssey Three",
+                    "author": "Arthur C. Clarke",
+                    "series": [{"name": "Space Odyssey", "sequence": "3"}],
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertGreaterEqual(ranked[0]["score"], 98)
+        self.assertEqual(ranked[0]["conflicts"], [])
+        self.assertIn("current ABS title differs", ranked[0]["advisories"][0])
+        self.assertEqual(decision["action"], "auto")
+        self.assertTrue(decision["safetyPassed"])
+        self.assertEqual(decision["advisories"], ranked[0]["advisories"])
+
     def test_passing_score_explains_which_safety_gate_requires_review(self):
         ranked = rank_candidates(
             sample_item(),
