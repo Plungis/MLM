@@ -904,12 +904,12 @@ function renderGoogleBooksStatus(providers = {}) {
       ? new Date(providers.googleBooksApiKeyValidatedAt).toLocaleString()
       : "recently";
     result.classList.add("success");
-    result.textContent = `Live Google Books test passed ${when}. Native Google searches are enabled.`;
+    result.textContent = `Live Google Books test passed ${when}. Automatic runs now try ABS first and use native Google only when ABS has no confident match.`;
   } else if (hasKey) {
     result.classList.add("warning");
     result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
   } else {
-    result.textContent = "Google is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
+    result.textContent = "Google fallback is disabled. MyAnonaSuite will not contact Google until a key passes the live test.";
   }
 }
 

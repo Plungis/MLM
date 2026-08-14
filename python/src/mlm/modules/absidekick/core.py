@@ -797,8 +797,20 @@ def match_decision(
         reasons.append(f"winner margin is below {margin_minimum:g}")
     if len(best.get("strongSignals") or []) < signal_minimum and not exact_identifier:
         reasons.append(f"fewer than {signal_minimum} strong corroborating signals")
+    quick_match_compatible = matching.get("applyMode") != "quick_match" or bool(
+        (best.get("search") or {}).get("quickMatchEligible")
+    )
+    if not quick_match_compatible:
+        reasons.append(
+            "candidate requires metadata patch mode because it did not come from "
+            "the first precise Audiobookshelf provider result"
+        )
 
-    auto_allowed = float(best["score"]) >= threshold and (not strict or not reasons)
+    auto_allowed = (
+        float(best["score"]) >= threshold
+        and quick_match_compatible
+        and (not strict or not reasons)
+    )
     if auto_allowed:
         return {
             "action": "auto",
@@ -1512,7 +1524,6 @@ def search_candidates(
     candidate_limit = max(1, int(matching.get("candidateLimit", 8)))
     primary_provider = str(connection.get("provider") or "audible")
     adaptive = bool(matching.get("adaptiveSearch", True))
-    automatic_fallbacks = bool(matching.get("automaticFallbackProviders", False))
     search_timeout = max(
         3, min(60, int(settings.get("run", {}).get("searchTimeoutSeconds", 12)))
     )
@@ -1529,7 +1540,7 @@ def search_candidates(
         possible_series_title
     ) != normalize_title(title)
     broad_title = possible_series_title if has_series_prefix_fallback else clean_title
-    queries: list[tuple[str, str, str, str, bool]] = [
+    primary_queries: list[tuple[str, str, str, str, bool]] = [
         (
             primary_provider,
             clean_title if title_was_cleaned else title,
@@ -1540,7 +1551,7 @@ def search_candidates(
     ]
     if adaptive:
         if title_was_cleaned:
-            queries.append(
+            primary_queries.append(
                 (
                     primary_provider,
                     title,
@@ -1550,7 +1561,7 @@ def search_candidates(
                 )
             )
         elif has_series_prefix_fallback:
-            queries.append(
+            primary_queries.append(
                 (
                     primary_provider,
                     possible_series_title,
@@ -1559,27 +1570,34 @@ def search_candidates(
                     True,
                 )
             )
-        queries.append((primary_provider, broad_title, "", "parsed title only", True))
+        primary_queries.append(
+            (primary_provider, broad_title, "", "parsed title only", True)
+        )
 
-    if adaptive and automatic_fallbacks:
-        fallback_providers = matching.get("fallbackProviders") or []
-        if isinstance(fallback_providers, str):
-            fallback_providers = [
-                value.strip()
-                for value in fallback_providers.split(",")
-                if value.strip()
-            ]
-        for provider in fallback_providers:
-            provider = str(provider).strip()
-            if provider in PROVIDERS and provider != primary_provider:
-                queries.append(
-                    (provider, broad_title, author, "fallback title + author", True)
-                )
+    configured_fallbacks = matching.get("fallbackProviders") or []
+    if isinstance(configured_fallbacks, str):
+        configured_fallbacks = [
+            value.strip() for value in configured_fallbacks.split(",") if value.strip()
+        ]
+    fallback_providers: list[str] = []
+    google_ready = google_books_key_is_ready(settings)
+    if google_ready and primary_provider != "google":
+        fallback_providers.append("google")
+    if adaptive and bool(matching.get("automaticFallbackProviders", False)):
+        for configured_provider in configured_fallbacks:
+            provider = str(configured_provider).strip()
+            if (
+                provider in PROVIDERS
+                and provider != primary_provider
+                and (provider != "google" or google_ready)
+                and provider not in fallback_providers
+            ):
+                fallback_providers.append(provider)
 
     candidates: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, Any]] = []
     seen_queries: set[tuple[str, str, str]] = set()
-    for provider, query_title, query_author, strategy, only_if_empty in queries:
+    for provider, query_title, query_author, strategy, only_if_empty in primary_queries:
         if only_if_empty and candidates:
             continue
         query_key = (
@@ -1632,6 +1650,69 @@ def search_candidates(
 
         if candidates:
             break
+
+    primary_ranked = rank_candidates(item, list(candidates.values()), settings)
+    if match_decision(primary_ranked, settings)["action"] == "auto":
+        return CandidateResults(
+            [row["candidate"] for row in primary_ranked[:candidate_limit]], diagnostics
+        )
+
+    for provider in fallback_providers:
+        query_key = (provider, normalize_title(broad_title), normalize_text(author))
+        if query_key in seen_queries or not query_key[1]:
+            continue
+        seen_queries.add(query_key)
+        strategy = (
+            "native Google fallback after no confident Audiobookshelf match"
+            if provider == "google"
+            else "fallback title + author"
+        )
+        params = {
+            "title": broad_title,
+            "author": author,
+            "provider": provider,
+            "limit": candidate_limit,
+        }
+        results, error = _search_books_once(client, params, search_timeout)
+        if error:
+            diagnostics.append(
+                {
+                    "provider": provider,
+                    "strategy": strategy,
+                    "error": error,
+                    "message": (
+                        f"{provider} metadata fallback failed; disabled for the "
+                        "rest of this run"
+                    ),
+                }
+            )
+            continue
+
+        fallback_candidates: list[dict[str, Any]] = []
+        for provider_rank, candidate in enumerate(results[:candidate_limit]):
+            if not isinstance(candidate, dict):
+                continue
+            candidate = deepcopy(candidate)
+            candidate["_absidekickSearch"] = {
+                "provider": provider,
+                "strategy": strategy,
+                "queryTitle": broad_title,
+                "originalTitle": title,
+                "providerRank": provider_rank + 1,
+                "quickMatchEligible": False,
+            }
+            fallback_candidates.append(candidate)
+
+        fallback_ranked = rank_candidates(item, fallback_candidates, settings)
+        if match_decision(fallback_ranked, settings)["action"] == "auto":
+            return CandidateResults(
+                [row["candidate"] for row in fallback_ranked[:candidate_limit]],
+                diagnostics,
+            )
+        for candidate in fallback_candidates:
+            identity = candidate_identity(candidate)
+            if identity not in candidates:
+                candidates[identity] = candidate
 
     ranked = rank_candidates(item, list(candidates.values()), settings)
     return CandidateResults(

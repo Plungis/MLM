@@ -34,7 +34,11 @@ through Audiobookshelf. The optional API key is stored only in this module's
 private `settings.json`. Public settings expose only whether a key exists,
 whether its fingerprint matches the last successful test, the validation time,
 and a safe error message. Neither the key nor its fingerprint is returned to
-the browser.
+the browser. A tested key automatically enables Google as the second-stage
+provider for previews, initial jobs, and Review Desk scans: the configured
+Audiobookshelf provider runs first, and Google is contacted only if that
+provider does not produce a confident match. Manual Google searching in the
+Review Desk remains independent and available.
 
 The provider is fail-closed. Saving a key clears any previous validation, and
 the Google code path refuses to make an outbound request until **Test & Enable**

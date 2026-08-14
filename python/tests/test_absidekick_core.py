@@ -393,11 +393,140 @@ class ScoringTests(unittest.TestCase):
         settings = deepcopy(DEFAULT_SETTINGS)
         settings["connection"]["provider"] = "audible"
         settings["matching"]["automaticFallbackProviders"] = True
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
         candidates = search_candidates(client, sample_item(), settings)
 
         self.assertEqual(candidates[0]["title"], "Wizard's First Rule")
         self.assertTrue(any(query["provider"] == "audible" for query in client.queries))
         self.assertTrue(any(query["provider"] == "google" for query in client.queries))
+
+    def test_tested_google_key_falls_back_after_weak_abs_result(self):
+        class FallbackClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["provider"] == "google":
+                    return [
+                        {
+                            "title": "Wizard's First Rule",
+                            "author": "Terry Goodkind",
+                            "id": "google-correct",
+                        }
+                    ]
+                return [
+                    {
+                        "title": "A Different Wizard",
+                        "author": "Someone Else",
+                        "asin": "abs-wrong",
+                    }
+                ]
+
+        client = FallbackClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+        settings["matching"]["automaticFallbackProviders"] = False
+
+        candidates = search_candidates(client, sample_item(), settings)
+        ranked = rank_candidates(sample_item(), candidates, settings)
+
+        self.assertEqual(
+            [query["provider"] for query in client.queries], ["audible", "google"]
+        )
+        self.assertEqual(candidates[0]["id"], "google-correct")
+        self.assertEqual(candidates[0]["_absidekickSearch"]["provider"], "google")
+        self.assertIn(
+            "after no confident Audiobookshelf match",
+            candidates[0]["_absidekickSearch"]["strategy"],
+        )
+        self.assertEqual(match_decision(ranked, settings)["action"], "auto")
+
+    def test_tested_google_key_is_not_used_after_confident_abs_result(self):
+        class ConfidentClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return [
+                    {
+                        "title": "Wizard's First Rule",
+                        "author": "Terry Goodkind",
+                    }
+                ]
+
+        client = ConfidentClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"].update(
+            {
+                "googleBooksApiKey": "tested-key",
+                "googleBooksApiKeyValidated": True,
+                "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
+                    "tested-key"
+                ),
+            }
+        )
+
+        candidates = search_candidates(client, sample_item(), settings)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual([query["provider"] for query in client.queries], ["audible"])
+
+    def test_untested_google_key_is_never_used_automatically(self):
+        class EmptyClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return []
+
+        client = EmptyClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"]["googleBooksApiKey"] = "not-tested"
+
+        search_candidates(client, sample_item(), settings)
+
+        self.assertTrue(client.queries)
+        self.assertEqual({query["provider"] for query in client.queries}, {"audible"})
+
+    def test_google_fallback_cannot_auto_apply_through_abs_quick_match(self):
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["matching"]["applyMode"] = "quick_match"
+        settings["matching"]["strictAutoMatch"] = False
+        candidate = {
+            "title": "Wizard's First Rule",
+            "author": "Terry Goodkind",
+            "_absidekickSearch": {
+                "provider": "google",
+                "strategy": "native Google fallback",
+                "quickMatchEligible": False,
+            },
+        }
+
+        decision = match_decision(
+            rank_candidates(sample_item(), [candidate], settings), settings
+        )
+
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("metadata patch mode", " ".join(decision["reasons"]))
 
     def test_automatic_fallback_providers_are_disabled_by_default(self):
         class EmptyClient:

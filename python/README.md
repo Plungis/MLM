@@ -95,7 +95,11 @@ Enable**. The in-app guide links directly to each Google Cloud screen and
 explains optional stable-IP restrictions. A pasted key is saved privately but
 Google remains disabled until the live test succeeds; when no tested key is
 present, MyAnonaSuite sends no request to Google. The key itself is never
-returned to the browser or sent to Audiobookshelf.
+returned to the browser or sent to Audiobookshelf. Once the key is tested,
+previews, initial matching runs, and Review Desk scans always try the selected
+Audiobookshelf metadata provider first. Native Google Books is queried only
+when ABS does not produce a confident automatic match. Reviewer-controlled
+Google searches remain available on each Review Desk item.
 
 ABSidekick retains the source project's dry-run preview, weighted scoring,
 metadata-patch, ABS quick-match and tags-only modes, author/tag/path targeting,
