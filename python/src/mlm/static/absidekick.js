@@ -90,6 +90,7 @@ const checkboxIds = [
   "quickMatchFirstResultOnly",
   "requireAuthor",
   "requireTitleToken",
+  "useEmbeddedFileMetadata",
   "sortDesc",
   "tagMatched",
   "tagUnmatched",
@@ -540,6 +541,7 @@ function getSettingsFromForm() {
       requireAuthor: $("requireAuthor").checked,
       requireTitleToken: $("requireTitleToken").checked,
       durationToleranceMinutes: Number($("durationToleranceMinutes").value || 7),
+      useEmbeddedFileMetadata: $("useEmbeddedFileMetadata").checked,
     },
     weights: {
       title: Number($("weightTitle").value || 0),
@@ -656,6 +658,7 @@ function filteredLogs() {
 }
 
 function providerLabel(provider) {
+  if (provider === "embedded") return "File metadata";
   if (provider === "google") return "Google Books";
   if (provider === "openlibrary") return "Open Library";
   return `ABS ${provider || "provider"}`;
@@ -667,6 +670,10 @@ function renderSearchAttempts(attempts) {
     const count = Number(attempt.resultCount || 0);
     const status = attempt.status === "results"
       ? `${count} result${count === 1 ? "" : "s"}`
+      : attempt.status === "evidence"
+        ? `${count} tagged file${count === 1 ? "" : "s"} used`
+        : attempt.status === "no_metadata"
+          ? "no usable tags"
       : attempt.status === "no_results"
         ? "no results"
         : attempt.status === "skipped"
@@ -772,6 +779,7 @@ function renderPreview(preview) {
             }
             <div class="confidence-line ${escapeHtml(decision.confidence || "none")}">${escapeHtml(decision.action || "unmatched")} · margin ${escapeHtml(decision.margin ?? 0)}${decision.reasons?.length ? ` · ${escapeHtml(decision.reasons.join("; "))}` : ""}</div>
             ${decision.advisories?.length ? `<div class="evidence-line">Match note: ${escapeHtml(decision.advisories.join("; "))}. This did not block approval.</div>` : ""}
+            ${renderEmbeddedMetadata(row.embeddedMetadata)}
             ${renderSearchAttempts(row.searchAttempts)}
             ${row.searchDiagnostics?.length ? `<div class="conflict-line">Provider warning: ${escapeHtml(row.searchDiagnostics.map((entry) => entry.message).join("; "))}</div>` : ""}
             ${best?.parts ? `<div class="meta">Title ${best.parts.title} | Author ${best.parts.author} | Year ${best.parts.year} | Duration ${best.parts.duration}</div>` : ""}
@@ -812,6 +820,28 @@ function cssCoverStyle(url, tone = "candidate") {
   return `style="background-image: ${overlay}, url('${escapeHtml(clean)}')"`;
 }
 
+function renderEmbeddedMetadata(metadata) {
+  if (!metadata || !metadata.status) return "";
+  if (metadata.status === "error") {
+    return `<div class="provider-warning"><strong>Embedded file metadata failed:</strong> ${escapeHtml(metadata.error || "unknown error")}</div>`;
+  }
+  const fileCount = Number(metadata.fileCount || 0);
+  const taggedCount = Number(metadata.taggedFileCount || 0);
+  if (metadata.status !== "found") {
+    return `<div class="meta">Embedded file metadata: no usable tags in ${fileCount} associated audio file${fileCount === 1 ? "" : "s"}.</div>`;
+  }
+  const evidence = [
+    metadata.title ? `Title: ${metadata.title}` : "",
+    metadata.author ? `Author: ${metadata.author}` : "",
+    metadata.series ? `Series: ${metadata.series}${metadata.seriesSequence ? ` #${metadata.seriesSequence}` : ""}` : "",
+    metadata.narrator ? `Narrator: ${metadata.narrator}` : "",
+    metadata.publishedYear ? `Year: ${metadata.publishedYear}` : "",
+    metadata.asin ? `ASIN: ${metadata.asin}` : "",
+    metadata.isbn ? `ISBN: ${metadata.isbn}` : "",
+  ].filter(Boolean);
+  return `<div class="evidence-line"><strong>Embedded file evidence (${taggedCount}/${fileCount} tagged):</strong> ${escapeHtml(evidence.join(" | ") || "tags found")}</div>`;
+}
+
 function renderCurrentBookCard(item) {
   return `
     <article class="compare-card source-card" ${cssCoverStyle(item.coverUrl, "source")}>
@@ -819,6 +849,7 @@ function renderCurrentBookCard(item) {
       <div class="candidate-title">${escapeHtml(item.title || "Untitled")}</div>
       <div class="meta">${escapeHtml(item.author || "Unknown author")}</div>
       <div class="source-score">Current Metadata</div>
+      ${renderEmbeddedMetadata(item.embeddedMetadata)}
       <details>
         <summary>More current info</summary>
         <div class="detail-grid">

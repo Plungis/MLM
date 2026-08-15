@@ -105,6 +105,25 @@ even when metadata overwrite is enabled. This avoids Audiobookshelf 2.36.0's
 `bookAuthors.bookId, bookAuthors.authorId` unique-constraint crash path without
 preventing a genuinely different author set from being applied.
 
+## Embedded file metadata (opt-in)
+
+`matching.useEmbeddedFileMetadata` is disabled by default. When enabled,
+ABSidekick uses the `metaTags` Audiobookshelf already extracted for the audio
+files associated with each library item; MyAnonaSuite does not open or modify
+the media files. Album/title, artist/album artist, composer, series, series
+sequence, year, ASIN, ISBN, publisher, and language are normalized into a
+consensus evidence record. Album is preferred over per-track title because MP3
+track titles are commonly chapter names. A multi-file value is accepted only
+when at least half of the tagged files agree.
+
+The embedded title and author are tried as an explicit primary-provider query
+and are included as alternate matching evidence. Current ABS metadata and file
+tags are both retained; embedded tags never directly overwrite ABS metadata.
+The live job log, preview, search path, and Review Desk show how many files had
+tags and every field that was used. If the library-items response omits audio
+files, the module loads the full ABS item once. That optional lookup fails open,
+records an actionable warning, and continues using normal ABS metadata.
+
 Search execution is deliberately bounded: numbering prefixes are cleaned,
 additional primary-provider queries run only after zero results, optional ABS
 fallback providers are opt-in, and search requests use a short timeout. Native

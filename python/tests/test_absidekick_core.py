@@ -14,9 +14,11 @@ from mlm.modules.absidekick.core import (
     build_review_row,
     candidate_metadata_payload,
     clean_search_title,
+    extract_embedded_file_metadata,
     google_books_key_fingerprint,
     match_decision,
     normalize_title,
+    prepare_item_for_matching,
     public_settings,
     rank_candidates,
     scan_review_items,
@@ -373,6 +375,167 @@ class OpenLibraryProviderTests(unittest.TestCase):
 
 
 class ScoringTests(unittest.TestCase):
+    def test_embedded_file_metadata_extracts_consensus_audio_tags(self):
+        item = sample_item()
+        item["media"]["audioFiles"] = [
+            {
+                "metadata": {"filename": "Part 01.mp3"},
+                "metaTags": {
+                    "tagAlbum": "The Masterharper of Pern",
+                    "tagTitle": "Chapter 1",
+                    "tagArtist": "Anne McCaffrey",
+                    "tagComposer": "Dick Hill",
+                    "tagSeries": "Pern",
+                    "tagSeriesPart": "17",
+                    "tagYear": "1998",
+                    "tagAsin": "B000TEST",
+                },
+            },
+            {
+                "metadata": {"filename": "Part 02.mp3"},
+                "metaTags": {
+                    "tagAlbum": "The Masterharper of Pern",
+                    "tagTitle": "Chapter 2",
+                    "tagArtist": "Anne McCaffrey",
+                    "tagComposer": "Dick Hill",
+                    "tagSeries": "Pern",
+                    "tagSeriesPart": "17",
+                    "tagYear": "1998",
+                    "tagAsin": "B000TEST",
+                },
+            },
+        ]
+
+        embedded = extract_embedded_file_metadata(item)
+
+        self.assertEqual(embedded["status"], "found")
+        self.assertEqual(embedded["title"], "The Masterharper of Pern")
+        self.assertEqual(embedded["author"], "Anne McCaffrey")
+        self.assertEqual(embedded["narrator"], "Dick Hill")
+        self.assertEqual(embedded["series"], "Pern")
+        self.assertEqual(embedded["seriesSequence"], "17")
+        self.assertEqual(embedded["publishedYear"], "1998")
+        self.assertEqual(embedded["asin"], "B000TEST")
+        self.assertEqual(embedded["taggedFileCount"], 2)
+        self.assertEqual(embedded["sourceFiles"], ["Part 01.mp3", "Part 02.mp3"])
+
+    def test_multitrack_chapter_titles_are_not_mistaken_for_book_title(self):
+        item = sample_item()
+        item["media"]["audioFiles"] = [
+            {"metaTags": {"tagTitle": "Chapter 1"}},
+            {"metaTags": {"tagTitle": "Chapter 2"}},
+            {"metaTags": {"tagTitle": "Chapter 3"}},
+        ]
+
+        embedded = extract_embedded_file_metadata(item)
+
+        self.assertNotIn("title", embedded)
+        self.assertEqual(embedded["status"], "empty")
+
+    def test_embedded_file_metadata_is_opt_in_and_hydrates_full_abs_item(self):
+        class ItemClient:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, path, params=None):
+                self.calls.append(path)
+                full = sample_item()
+                full["media"]["audioFiles"] = [
+                    {
+                        "metaTags": {
+                            "tagAlbum": "The Masterharper of Pern",
+                            "tagArtist": "Anne McCaffrey",
+                        }
+                    }
+                ]
+                return full
+
+        client = ItemClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        original = sample_item()
+
+        self.assertIs(prepare_item_for_matching(client, original, settings), original)
+        self.assertEqual(client.calls, [])
+
+        settings["matching"]["useEmbeddedFileMetadata"] = True
+        prepared = prepare_item_for_matching(client, original, settings)
+
+        self.assertEqual(client.calls, ["/api/items/li_test"])
+        self.assertEqual(
+            prepared["_absidekickEmbeddedMetadata"]["title"],
+            "The Masterharper of Pern",
+        )
+
+    def test_embedded_file_metadata_drives_search_and_scoring_when_enabled(self):
+        class SearchClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params.get("title") == "The Masterharper of Pern":
+                    return [
+                        {
+                            "title": "The Masterharper of Pern",
+                            "author": "Anne McCaffrey",
+                            "series": [{"name": "Pern", "sequence": "17"}],
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {"title": "Pern 17 - The Masterharper of Pern", "authorName": ""}
+        )
+        item["media"]["audioFiles"] = [
+            {
+                "metaTags": {
+                    "tagAlbum": "The Masterharper of Pern",
+                    "tagArtist": "Anne McCaffrey",
+                    "tagSeries": "Pern",
+                    "tagSeriesPart": "17",
+                }
+            }
+        ]
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["matching"]["useEmbeddedFileMetadata"] = True
+        settings["providers"]["openLibraryEnabled"] = False
+        client = SearchClient()
+        prepared = prepare_item_for_matching(client, item, settings)
+
+        candidates = search_candidates(client, prepared, settings)
+        ranked = rank_candidates(prepared, candidates, settings)
+        decision = match_decision(ranked, settings)
+
+        self.assertEqual(client.queries[0]["title"], "The Masterharper of Pern")
+        self.assertEqual(client.queries[0]["author"], "Anne McCaffrey")
+        self.assertEqual(candidates.attempts[0]["provider"], "embedded")
+        self.assertEqual(candidates.attempts[0]["status"], "evidence")
+        self.assertEqual(ranked[0]["parts"]["author"], 100)
+        self.assertEqual(decision["action"], "auto")
+
+    def test_embedded_series_sequence_can_resolve_stale_abs_sequence(self):
+        item = sample_item()
+        item["media"]["metadata"]["series"] = [{"name": "Pern", "sequence": "16"}]
+        item["_absidekickEmbeddedMetadata"] = {
+            "status": "found",
+            "series": "Pern",
+            "seriesSequence": "17",
+        }
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "series": [{"name": "Pern", "sequence": "17"}],
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        self.assertNotIn("series sequence differs", ranked[0]["conflicts"])
+
     def test_title_normalization_handles_edition_noise_unicode_and_roman_numbers(self):
         self.assertEqual(
             normalize_title("The Café—Book IV (Unabridged Audiobook Edition)"),

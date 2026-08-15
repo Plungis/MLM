@@ -104,6 +104,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "requireAuthor": False,
         "requireTitleToken": True,
         "durationToleranceMinutes": 7,
+        "useEmbeddedFileMetadata": False,
     },
     "weights": {
         "title": 50,
@@ -451,6 +452,163 @@ def item_author(item: dict[str, Any]) -> str:
     )
 
 
+def _normalized_file_tag_key(value: Any) -> str:
+    key = re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+    return key.removeprefix("tag")
+
+
+def _audio_file_tags(audio_file: dict[str, Any]) -> dict[str, Any]:
+    raw = first_present(
+        audio_file.get("metaTags"),
+        (audio_file.get("metadata") or {}).get("metaTags"),
+        {},
+    )
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        _normalized_file_tag_key(key): value
+        for key, value in raw.items()
+        if _normalized_file_tag_key(key) and str(value or "").strip()
+    }
+
+
+def _first_file_tag(tags: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = tags.get(_normalized_file_tag_key(name))
+        if isinstance(value, list):
+            value = ", ".join(
+                str(entry).strip() for entry in value if str(entry).strip()
+            )
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _consensus_file_tag(values: list[str]) -> str:
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned:
+        return ""
+    groups: dict[str, dict[str, Any]] = {}
+    for value in cleaned:
+        key = normalize_text(value)
+        if not key:
+            continue
+        row = groups.setdefault(key, {"value": value, "count": 0})
+        row["count"] += 1
+    if not groups:
+        return ""
+    winner = max(groups.values(), key=lambda row: int(row["count"]))
+    if len(cleaned) == 1 or len(groups) == 1:
+        return str(winner["value"])
+    # Multi-track title tags are commonly chapter names. Only trust a repeated
+    # value when at least half of the tagged files agree.
+    if int(winner["count"]) >= max(2, (len(cleaned) + 1) // 2):
+        return str(winner["value"])
+    return ""
+
+
+def extract_embedded_file_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    """Summarize audio tags already extracted by Audiobookshelf."""
+
+    media = item.get("media") or {}
+    raw_files = media.get("audioFiles") or []
+    audio_files = [
+        audio_file
+        for audio_file in raw_files
+        if isinstance(audio_file, dict) and not audio_file.get("exclude")
+    ]
+    tagged_files: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for audio_file in audio_files:
+        tags = _audio_file_tags(audio_file)
+        if tags:
+            tagged_files.append((audio_file, tags))
+
+    def consensus(*names: str) -> str:
+        return _consensus_file_tag(
+            [_first_file_tag(tags, *names) for _audio_file, tags in tagged_files]
+        )
+
+    title = consensus("album")
+    if not title:
+        title = consensus("title")
+    series_name = consensus("series", "mvnm")
+    series_sequence = consensus("seriespart", "mvin")
+    values = {
+        "title": title,
+        "subtitle": consensus("subtitle"),
+        "author": consensus("artist", "albumartist"),
+        "narrator": consensus("composer"),
+        "series": series_name,
+        "seriesSequence": series_sequence,
+        "publishedYear": consensus("year", "date"),
+        "asin": consensus("asin", "audibleasin"),
+        "isbn": consensus("isbn"),
+        "publisher": consensus("publisher"),
+        "language": consensus("language", "lang"),
+    }
+    values = {key: value for key, value in values.items() if value}
+    source_files: list[str] = []
+    for audio_file, _tags in tagged_files[:5]:
+        metadata = audio_file.get("metadata") or {}
+        filename = first_present(
+            metadata.get("filename"),
+            metadata.get("relPath"),
+            audio_file.get("filename"),
+        )
+        if filename:
+            source_files.append(str(filename))
+    return {
+        **values,
+        "fileCount": len(audio_files),
+        "taggedFileCount": len(tagged_files),
+        "sourceFiles": source_files,
+        "fields": list(values),
+        "status": "found" if values else "empty",
+    }
+
+
+def embedded_item_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    value = item.get("_absidekickEmbeddedMetadata") or {}
+    return value if isinstance(value, dict) else {}
+
+
+def prepare_item_for_matching(
+    client: Any, item: dict[str, Any], settings: dict[str, Any]
+) -> dict[str, Any]:
+    """Optionally hydrate and attach ABS-extracted audio-file metadata."""
+
+    if not settings.get("matching", {}).get("useEmbeddedFileMetadata", False):
+        return item
+    prepared = deepcopy(item)
+    media = prepared.get("media") or {}
+    if "audioFiles" not in media and prepared.get("id"):
+        try:
+            prepared = deepcopy(get_library_item(client, str(prepared["id"])))
+        except Exception as error:  # noqa: BLE001 - optional evidence must fail open
+            prepared["_absidekickEmbeddedMetadata"] = {
+                "status": "error",
+                "error": str(error),
+                "fileCount": 0,
+                "taggedFileCount": 0,
+                "fields": [],
+                "sourceFiles": [],
+            }
+            return prepared
+    prepared["_absidekickEmbeddedMetadata"] = extract_embedded_file_metadata(prepared)
+    return prepared
+
+
+def item_author_values(item: dict[str, Any]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            value
+            for value in (item_author(item), embedded_item_metadata(item).get("author"))
+            if value
+        )
+    )
+
+
 def candidate_author(candidate: dict[str, Any]) -> Any:
     return first_present(
         candidate.get("author"), candidate.get("authors"), candidate.get("authorName")
@@ -495,15 +653,22 @@ def _series_entries(value: Any) -> list[tuple[str, str]]:
 def item_series_entries(item: dict[str, Any]) -> list[tuple[str, str]]:
     metadata = item_metadata(item)
     entries = _series_entries(metadata.get("series"))
-    if entries:
-        return entries
-    name = first_present(metadata.get("seriesName"), metadata.get("series"))
-    sequence = first_present(
-        metadata.get("seriesSequence"),
-        metadata.get("sequence"),
-        metadata.get("seriesNumber"),
+    if not entries:
+        name = first_present(metadata.get("seriesName"), metadata.get("series"))
+        sequence = first_present(
+            metadata.get("seriesSequence"),
+            metadata.get("sequence"),
+            metadata.get("seriesNumber"),
+        )
+        entries = _series_entries({"name": name, "sequence": sequence})
+    embedded = embedded_item_metadata(item)
+    embedded_entries = _series_entries(
+        {
+            "name": embedded.get("series"),
+            "sequence": embedded.get("seriesSequence"),
+        }
     )
-    return _series_entries({"name": name, "sequence": sequence})
+    return list(dict.fromkeys([*entries, *embedded_entries]))
 
 
 def candidate_series_entries(candidate: dict[str, Any]) -> list[tuple[str, str]]:
@@ -521,25 +686,38 @@ def best_series_score(
 def series_sequence_conflict(
     left: list[tuple[str, str]], right: list[tuple[str, str]]
 ) -> bool:
+    comparisons: list[bool] = []
     for left_name, left_sequence in left:
         for right_name, right_sequence in right:
             if (
                 left_sequence
                 and right_sequence
                 and title_similarity(left_name, right_name) >= 80
-                and left_sequence != right_sequence
             ):
-                return True
-    return False
+                comparisons.append(left_sequence == right_sequence)
+    return bool(comparisons) and not any(comparisons)
 
 
 def item_identifier(item: dict[str, Any], name: str) -> str:
+    values = item_identifier_values(item, name)
+    return values[0] if values else ""
+
+
+def item_identifier_values(item: dict[str, Any], name: str) -> list[str]:
     metadata = item_metadata(item)
-    return normalize_identifier(
-        first_present(
-            metadata.get(name),
-            metadata.get(f"{name}13"),
-            metadata.get(f"{name}10"),
+    embedded = embedded_item_metadata(item)
+    return list(
+        dict.fromkeys(
+            normalized
+            for raw in (
+                metadata.get(name),
+                metadata.get(f"{name}13"),
+                metadata.get(f"{name}10"),
+                embedded.get(name),
+                embedded.get(f"{name}13"),
+                embedded.get(f"{name}10"),
+            )
+            if (normalized := normalize_identifier(raw))
         )
     )
 
@@ -565,6 +743,9 @@ def title_values(item: dict[str, Any]) -> list[str]:
     path_title = re.split(r"[/\\]", raw_path.rstrip("/\\"))[-1].strip()
     if path_title and normalize_title(path_title) != normalize_title(title):
         values.append(path_title)
+    embedded_title = str(embedded_item_metadata(item).get("title") or "").strip()
+    if embedded_title:
+        values.append(embedded_title)
     return list(
         dict.fromkeys(
             variant
@@ -625,15 +806,32 @@ def score_candidate(
     matching = settings.get("matching", {})
 
     title = item_title(item)
-    author = item_author(item)
-    narrator = first_present(metadata.get("narratorName"), metadata.get("narrators"))
+    author_values = item_author_values(item)
+    author = author_values[0] if author_values else ""
+    embedded = embedded_item_metadata(item)
+    narrator_values = list(
+        dict.fromkeys(
+            value
+            for value in (
+                first_present(metadata.get("narratorName"), metadata.get("narrators")),
+                embedded.get("narrator"),
+            )
+            if value
+        )
+    )
 
     candidate_title = candidate.get("title") or ""
     candidate_author_value = candidate_author(candidate)
     candidate_narrator_value = candidate_narrator(candidate)
     item_series = item_series_entries(item)
     result_series = candidate_series_entries(candidate)
-    item_year = metadata.get("publishedYear")
+    item_year_values = list(
+        dict.fromkeys(
+            value
+            for value in (metadata.get("publishedYear"), embedded.get("publishedYear"))
+            if value
+        )
+    )
     candidate_year = candidate.get("publishedYear")
     item_duration = item.get("media", {}).get("duration")
     candidate_duration = candidate.get("duration")
@@ -641,19 +839,25 @@ def score_candidate(
     parts: dict[str, float | None] = {
         "title": title_score,
         "author": (
-            best_people_ratio(author, candidate_author_value)
-            if author and candidate_author_value
+            max(
+                best_people_ratio(source_author, candidate_author_value)
+                for source_author in author_values
+            )
+            if author_values and candidate_author_value
             else None
         ),
         "series": best_series_score(item_series, result_series),
         "narrator": (
-            best_people_ratio(narrator, candidate_narrator_value)
-            if narrator and candidate_narrator_value
+            max(
+                best_people_ratio(source_narrator, candidate_narrator_value)
+                for source_narrator in narrator_values
+            )
+            if narrator_values and candidate_narrator_value
             else None
         ),
         "year": (
-            year_score(item_year, candidate_year)
-            if item_year and candidate_year
+            max(year_score(item_year, candidate_year) for item_year in item_year_values)
+            if item_year_values and candidate_year
             else None
         ),
         "duration": (
@@ -699,10 +903,10 @@ def score_candidate(
     conflicts: list[str] = []
     advisories: list[str] = []
     for name in ("asin", "isbn"):
-        left_identifier = item_identifier(item, name)
+        left_identifiers = item_identifier_values(item, name)
         right_identifier = candidate_identifier(candidate, name)
-        if left_identifier and right_identifier:
-            if left_identifier == right_identifier:
+        if left_identifiers and right_identifier:
+            if right_identifier in left_identifiers:
                 exact_identifiers.append(name.upper())
             else:
                 conflicts.append(f"{name.upper()} differs")
@@ -757,7 +961,12 @@ def score_candidate(
         "conflicts": conflicts,
         "advisories": advisories,
         "search": deepcopy(candidate.get("_absidekickSearch") or {}),
-        "source": {"title": title, "author": author},
+        "source": {
+            "title": title,
+            "author": author,
+            "authorValues": author_values,
+            "embeddedMetadata": embedded,
+        },
         "candidate": candidate,
     }
 
@@ -2002,6 +2211,9 @@ def search_candidates(
     matching = settings.get("matching", {})
     title = item_title(item)
     author = item_author(item)
+    embedded = embedded_item_metadata(item)
+    embedded_title = str(embedded.get("title") or "").strip()
+    embedded_author = str(embedded.get("author") or "").strip()
     candidate_limit = max(1, int(matching.get("candidateLimit", 8)))
     primary_provider = str(connection.get("provider") or "audible")
     adaptive = bool(matching.get("adaptiveSearch", True))
@@ -2021,15 +2233,38 @@ def search_candidates(
         possible_series_title
     ) != normalize_title(title)
     broad_title = possible_series_title if has_series_prefix_fallback else clean_title
-    primary_queries: list[tuple[str, str, str, str, bool]] = [
+    primary_queries: list[tuple[str, str, str, str, bool]] = []
+    if embedded_title:
+        embedded_clean_title = clean_search_title(embedded_title, series_entries)
+        primary_queries.append(
+            (
+                primary_provider,
+                embedded_clean_title,
+                embedded_author or author,
+                "embedded file metadata title + author",
+                False,
+            )
+        )
+        broad_title = embedded_clean_title
+    elif embedded_author and normalize_text(embedded_author) != normalize_text(author):
+        primary_queries.append(
+            (
+                primary_provider,
+                clean_title if title_was_cleaned else title,
+                embedded_author,
+                "ABS title + embedded file metadata author",
+                False,
+            )
+        )
+    primary_queries.append(
         (
             primary_provider,
             clean_title if title_was_cleaned else title,
             author,
             "parsed title + author" if title_was_cleaned else "precise title + author",
             False,
-        ),
-    ]
+        )
+    )
     if adaptive:
         if title_was_cleaned:
             primary_queries.append(
@@ -2088,6 +2323,43 @@ def search_candidates(
     candidates: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
+    if matching.get("useEmbeddedFileMetadata", False):
+        embedded_status = str(embedded.get("status") or "empty")
+        embedded_message = (
+            f"Read {int(embedded.get('taggedFileCount') or 0)} tagged audio file(s); "
+            f"usable fields: {', '.join(embedded.get('fields') or []) or 'none'}"
+        )
+        if embedded.get("error"):
+            embedded_message = (
+                f"Could not load embedded file metadata: {embedded['error']}"
+            )
+            diagnostics.append(
+                {
+                    "provider": "embedded",
+                    "strategy": "ABS-extracted audio-file tags",
+                    "error": str(embedded["error"]),
+                    "message": embedded_message,
+                }
+            )
+        attempts.append(
+            {
+                "provider": "embedded",
+                "stage": "Embedded file metadata",
+                "strategy": "ABS-extracted audio-file tags",
+                "queryTitle": embedded_title,
+                "queryAuthor": embedded_author,
+                "resultCount": int(embedded.get("taggedFileCount") or 0),
+                "status": (
+                    "evidence"
+                    if embedded_status == "found"
+                    else "error"
+                    if embedded_status == "error"
+                    else "no_metadata"
+                ),
+                "message": embedded_message,
+                "metadata": embedded,
+            }
+        )
     seen_queries: set[tuple[str, str, str]] = set()
     for provider, query_title, query_author, strategy, only_if_empty in primary_queries:
         if only_if_empty and candidates:
@@ -2164,12 +2436,19 @@ def search_candidates(
                 "provider": provider,
                 "strategy": strategy,
                 "queryTitle": query_title,
+                "queryAuthor": query_author,
                 "originalTitle": title,
                 "providerRank": provider_rank + 1,
                 "quickMatchEligible": (
                     provider == primary_provider
                     and provider not in {"google", "openlibrary"}
-                    and strategy in {"precise title + author", "parsed title + author"}
+                    and strategy
+                    in {
+                        "precise title + author",
+                        "parsed title + author",
+                        "embedded file metadata title + author",
+                        "ABS title + embedded file metadata author",
+                    }
                     and provider_rank == 0
                 ),
             }
@@ -2177,7 +2456,13 @@ def search_candidates(
             if identity not in candidates:
                 candidates[identity] = candidate
 
-        if candidates:
+        if (
+            candidates
+            and match_decision(
+                rank_candidates(item, list(candidates.values()), settings), settings
+            )["action"]
+            == "auto"
+        ):
             break
 
     primary_ranked = rank_candidates(item, list(candidates.values()), settings)
@@ -2195,7 +2480,7 @@ def search_candidates(
                 "stage": "Google second pass",
                 "strategy": "after ABS did not auto-match",
                 "queryTitle": broad_title,
-                "queryAuthor": author,
+                "queryAuthor": embedded_author or author,
                 "resultCount": 0,
                 "status": "skipped",
                 "message": "Google Books skipped: add and test an API key in Providers",
@@ -2208,7 +2493,7 @@ def search_candidates(
                 "stage": "Open Library third stage",
                 "strategy": "after ABS and Google did not auto-match",
                 "queryTitle": broad_title,
-                "queryAuthor": author,
+                "queryAuthor": embedded_author or author,
                 "resultCount": 0,
                 "status": "skipped",
                 "message": "Open Library skipped: enable it in Providers",
@@ -2216,7 +2501,11 @@ def search_candidates(
         )
 
     for provider in second_pass_providers:
-        query_key = (provider, normalize_title(broad_title), normalize_text(author))
+        query_key = (
+            provider,
+            normalize_title(broad_title),
+            normalize_text(embedded_author or author),
+        )
         if query_key in seen_queries or not query_key[1]:
             continue
         seen_queries.add(query_key)
@@ -2231,7 +2520,7 @@ def search_candidates(
         )
         params = {
             "title": broad_title,
-            "author": author,
+            "author": embedded_author or author,
             "provider": provider,
             "limit": candidate_limit,
         }
@@ -2251,7 +2540,7 @@ def search_candidates(
             ),
             "strategy": strategy,
             "queryTitle": broad_title,
-            "queryAuthor": author,
+            "queryAuthor": embedded_author or author,
             "resultCount": len(results),
             "status": (
                 "disabled"
@@ -2293,6 +2582,7 @@ def search_candidates(
                 "provider": provider,
                 "strategy": strategy,
                 "queryTitle": broad_title,
+                "queryAuthor": embedded_author or author,
                 "originalTitle": title,
                 "providerRank": provider_rank + 1,
                 "quickMatchEligible": False,
@@ -2365,7 +2655,9 @@ def search_review_candidates(
     if not 1 <= limit <= 30:
         raise ValueError("manual search limit must be between 1 and 30")
 
-    item = get_library_item(client, item_id)
+    item = prepare_item_for_matching(
+        client, get_library_item(client, item_id), settings
+    )
     results, search_error = _search_books_once(
         client,
         {
@@ -2479,6 +2771,7 @@ def summarize_item(item: dict[str, Any]) -> dict[str, Any]:
             if item_id
             else ""
         ),
+        "embeddedMetadata": embedded_item_metadata(item),
     }
 
 
@@ -2549,6 +2842,7 @@ def scan_review_items(
         )
     rows = []
     for index, item in enumerate(scan_items, start=1):
+        item = prepare_item_for_matching(client, item, scan_settings)
         title = item_title(item)
         if progress:
             progress(
@@ -2685,7 +2979,7 @@ def apply_match(
             params={
                 "provider": settings.get("connection", {}).get("provider") or "google",
                 "title": search.get("queryTitle") or item_title(item),
-                "author": item_author(item),
+                "author": search.get("queryAuthor") or item_author(item),
                 "overrideDefaults": "true"
                 if matching.get("overwriteMetadata")
                 else "false",
@@ -2853,6 +3147,7 @@ class MatchJob:
                     self.log("warning", "Job cancelled")
                     return
 
+                item = prepare_item_for_matching(self.client, item, self.settings)
                 title = item_title(item)
                 author = item_author(item)
                 with self.lock:
@@ -2861,6 +3156,29 @@ class MatchJob:
                         "title": title,
                         "author": author,
                     }
+                if self.settings.get("matching", {}).get(
+                    "useEmbeddedFileMetadata", False
+                ):
+                    embedded = embedded_item_metadata(item)
+                    if embedded.get("status") == "found":
+                        self.log(
+                            "info",
+                            (
+                                "Embedded file metadata found for "
+                                f"{title}: {', '.join(embedded.get('fields') or [])}"
+                            ),
+                            itemId=item.get("id"),
+                            title=title,
+                            embeddedMetadata=embedded,
+                        )
+                    elif embedded.get("status") == "error":
+                        self.log(
+                            "warning",
+                            f"Embedded file metadata unavailable for {title}",
+                            itemId=item.get("id"),
+                            title=title,
+                            error=embedded.get("error"),
+                        )
 
                 try:
                     candidates = search_candidates(self.client, item, self.settings)
@@ -3014,6 +3332,7 @@ def preview_matches(
     items = fetch_library_items(client, preview_settings)
     rows = []
     for item in items[:limit]:
+        item = prepare_item_for_matching(client, item, preview_settings)
         candidates = search_candidates(client, item, preview_settings)
         ranked = rank_candidates(item, candidates, preview_settings)
         rows.append(
@@ -3027,6 +3346,7 @@ def preview_matches(
                 "decision": match_decision(ranked, preview_settings),
                 "searchDiagnostics": candidates.diagnostics,
                 "searchAttempts": candidates.attempts,
+                "embeddedMetadata": embedded_item_metadata(item),
             }
         )
         primary_provider = str(
