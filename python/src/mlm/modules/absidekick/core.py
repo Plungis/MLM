@@ -603,9 +603,7 @@ def _strip_filename_author_suffix(value: str, author: str) -> str:
     if not value or not author:
         return value
     separators = list(
-        re.finditer(
-            r"\s+(?:-|\u2013|\u2014|\||\bby\b)\s+", value, re.IGNORECASE
-        )
+        re.finditer(r"\s+(?:-|\u2013|\u2014|\||\bby\b)\s+", value, re.IGNORECASE)
     )
     for separator in reversed(separators):
         suffix = value[separator.end() :].strip()
@@ -2953,13 +2951,10 @@ def search_candidates(
                 candidate_score = score_candidate(item, candidate, settings)["score"]
                 existing_search = existing.get("_absidekickSearch") or {}
                 candidate_search = candidate.get("_absidekickSearch") or {}
-                if (
-                    candidate_score > existing_score
-                    or (
-                        candidate_score == existing_score
-                        and candidate_search.get("quickMatchEligible")
-                        and not existing_search.get("quickMatchEligible")
-                    )
+                if candidate_score > existing_score or (
+                    candidate_score == existing_score
+                    and candidate_search.get("quickMatchEligible")
+                    and not existing_search.get("quickMatchEligible")
                 ):
                     # The same provider work can appear under a vague query and
                     # a later evidence-backed query. Keep the provenance that

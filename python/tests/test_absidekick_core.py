@@ -454,23 +454,17 @@ class ScoringTests(unittest.TestCase):
         item["media"]["audioFiles"] = [
             {
                 "metadata": {
-                    "filename": (
-                        "Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3"
-                    )
+                    "filename": ("Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3")
                 }
             },
             {
                 "metadata": {
-                    "filename": (
-                        "Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3"
-                    )
+                    "filename": ("Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3")
                 }
             },
             {
                 "metadata": {
-                    "filename": (
-                        "Star Wars - X-Wing 02 - The Krytos Trap - 03.mp3"
-                    )
+                    "filename": ("Star Wars - X-Wing 02 - The Krytos Trap - 03.mp3")
                 }
             },
         ]
@@ -514,16 +508,12 @@ class ScoringTests(unittest.TestCase):
         item["media"]["audioFiles"] = [
             {
                 "metadata": {
-                    "filename": (
-                        "Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3"
-                    )
+                    "filename": ("Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3")
                 }
             },
             {
                 "metadata": {
-                    "filename": (
-                        "Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3"
-                    )
+                    "filename": ("Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3")
                 }
             },
         ]
