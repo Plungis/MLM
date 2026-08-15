@@ -683,7 +683,7 @@ function renderSearchAttempts(attempts) {
             : "error";
     const query = attempt.provider === "embedded" || !attempt.queryTitle
       ? ""
-      : ` · “${escapeHtml(attempt.queryTitle)}”`;
+      : ` · “${escapeHtml(attempt.queryTitle)}”${attempt.queryAuthor ? ` by ${escapeHtml(attempt.queryAuthor)}` : " · title only"}`;
     const detail = [
       attempt.strategy,
       attempt.queryTitle ? `Title: ${attempt.queryTitle}` : "",

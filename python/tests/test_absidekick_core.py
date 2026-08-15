@@ -1331,6 +1331,30 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(clean_search_title("02 (7) Thunderball"), "Thunderball")
         self.assertEqual(clean_search_title("11(22)63"), "11(22)63")
 
+    def test_common_release_numbering_and_packaging_are_removed(self):
+        examples = {
+            "00.5 The Bone Farm": "The Bone Farm",
+            "01.7 The Prisoner of Limnos": "The Prisoner of Limnos",
+            "14b A Fire Within the Ways": "A Fire Within the Ways",
+            "05-06 Heir of Novron": "Heir of Novron",
+            "1-Chinna Achebe": "Chinna Achebe",
+            "01The Notebook": "The Notebook",
+            "A Big Little Life CD 1": "A Big Little Life",
+            "[HH Anthology] Echoes of Revelation": "Echoes of Revelation",
+        }
+
+        for original, expected in examples.items():
+            with self.subTest(original=original):
+                variants = title_search_variants(original)
+                self.assertEqual(variants[0]["title"], expected)
+                self.assertEqual(variants[-1]["title"], original)
+
+        for real_title in ("1984", "11(22)63", "1Q84", "Catch 22 - A Novel"):
+            with self.subTest(real_title=real_title):
+                self.assertEqual(
+                    title_search_variants(real_title)[0]["title"], real_title
+                )
+
     def test_cleaned_google_result_can_auto_match_parenthesized_track_title(self):
         class GoogleSecondPassClient:
             def __init__(self):
@@ -1489,6 +1513,71 @@ class ScoringTests(unittest.TestCase):
             ["Nerilka's Story", "Pern08-Nerilka's Story", original],
         )
         self.assertEqual(candidates[0]["title"], "Nerilka's Story")
+
+    def test_matching_accepts_list_shaped_abs_narrators(self):
+        item = sample_item()
+        item["media"]["metadata"]["narratorName"] = [
+            {"name": "Neil Dickson"},
+            "Second Narrator",
+        ]
+        candidate = {
+            "title": "Wizard's First Rule",
+            "author": "Terry Goodkind",
+            "narrators": ["Neil Dickson"],
+        }
+
+        scored = score_candidate(item, candidate, DEFAULT_SETTINGS)
+
+        self.assertEqual(scored["parts"]["narrator"], 100.0)
+
+    def test_same_embedded_title_prefers_paired_file_author_without_duplicate_query(
+        self,
+    ):
+        class EmbeddedAuthorClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                return [
+                    {
+                        "title": "A Cavern of Black Ice",
+                        "author": "J. V. Jones",
+                        "narrators": ["Neil Dickson"],
+                    }
+                ]
+
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {
+                "title": "A Cavern of Black Ice",
+                "authorName": "Incorrect ABS Author",
+                "narratorName": [{"name": "Neil Dickson"}],
+            }
+        )
+        item["media"]["audioFiles"] = [
+            {
+                "metaTags": {
+                    "tagAlbum": "A Cavern of Black Ice",
+                    "tagArtist": "J. V. Jones",
+                }
+            }
+        ]
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["matching"]["useEmbeddedFileMetadata"] = True
+        settings["providers"]["openLibraryEnabled"] = False
+        client = EmbeddedAuthorClient()
+        prepared = prepare_item_for_matching(client, item, settings)
+
+        candidates = search_candidates(client, prepared, settings)
+        decision = match_decision(
+            rank_candidates(prepared, candidates, settings), settings
+        )
+
+        self.assertEqual(len(client.queries), 1)
+        self.assertEqual(client.queries[0]["title"], "A Cavern of Black Ice")
+        self.assertEqual(client.queries[0]["author"], "J. V. Jones")
+        self.assertEqual(decision["action"], "auto")
 
     def test_quick_match_uses_the_evidence_backed_parsed_title(self):
         class RecordingClient:

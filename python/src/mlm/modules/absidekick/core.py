@@ -811,12 +811,13 @@ def score_candidate(
     embedded = embedded_item_metadata(item)
     narrator_values = list(
         dict.fromkeys(
-            value
+            person
             for value in (
                 first_present(metadata.get("narratorName"), metadata.get("narrators")),
                 embedded.get("narrator"),
             )
-            if value
+            for person in split_people(value)
+            if person
         )
     )
 
@@ -2153,21 +2154,43 @@ def _compact_series_code_details(
 
 def _leading_track_title(value: Any) -> str:
     title = html.unescape(str(value or "")).strip()
-    cleaned = re.sub(
+    # Release folders frequently contain a bracketed group/source marker that
+    # is not part of the book title (for example, "[HH Anthology] Title").
+    cleaned = re.sub(r"^\s*\[[^\]\r\n]{1,80}\]\s+", "", title).strip()
+    numbered_prefixes = (
+        # Multi-disc/track counters: 01(3), 05-06.
         r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
         r"0*\d{1,3}\s*\(\s*\d{1,3}\s*\)\s*[-_.:]?\s+",
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+        r"0*\d{1,3}\s*[-–—]\s*0*\d{1,3}\s+",
+        # Series decimals and lettered entries: 01.5, 14b.
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+        r"0*\d{1,3}(?:\.\d+)+\s*[-_.:]?\s+",
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+        r"0*\d{1,3}[a-z]\s*[-_.:]?\s+",
+        # Ordinary separated track/book numbers and attached separators.
+        r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+        r"0*\d{1,3}\s*[-_.:]?\s+",
+        r"^\s*0*\d{1,3}\s*[-_.:]\s*(?=[a-z])",
+    )
+    for pattern in numbered_prefixes:
+        candidate = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+        if candidate != cleaned:
+            cleaned = candidate
+            break
+    # Handle compact tags such as "01The Notebook" without damaging numeric
+    # titles like "1984", "11(22)63", or "1Q84".
+    compact = re.sub(r"^\s*0*\d{1,2}(?=[A-Z][a-z])", "", cleaned).strip()
+    if compact != cleaned:
+        cleaned = compact
+    # Disc suffixes narrow provider searches without identifying the work.
+    cleaned = re.sub(
+        r"\s+(?:cd|disc|disk)\s*#?\s*\d{1,3}"
+        r"(?:\s*(?:of|/)\s*\d{1,3})?\s*$",
         "",
-        title,
+        cleaned,
         flags=re.IGNORECASE,
     ).strip()
-    if cleaned == title:
-        cleaned = re.sub(
-            r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
-            r"0*\d{1,3}\s*[-_.:]?\s+",
-            "",
-            title,
-            flags=re.IGNORECASE,
-        ).strip()
     return cleaned or title
 
 
@@ -2383,19 +2406,37 @@ def search_candidates(
         embedded_variants = embedded_variants[:1]
 
     primary_author = author or embedded_author
+    embedded_variant_ids = {
+        normalize_title(str(variant["title"])) for variant in embedded_variants
+    }
+    current_variant_ids = {
+        normalize_title(str(variant["title"])) for variant in current_variants
+    }
     primary_queries: list[tuple[str, str, str, str, bool, bool]] = []
     for variant in current_variants:
+        variant_title = str(variant["title"])
+        variant_author = (
+            embedded_author
+            if embedded_author
+            and normalize_title(variant_title) in embedded_variant_ids
+            else primary_author
+        )
         primary_queries.append(
             (
                 primary_provider,
-                str(variant["title"]),
-                primary_author,
+                variant_title,
+                variant_author,
                 str(variant["strategy"]),
                 bool(variant["onlyIfEmpty"]),
                 bool(variant["quickMatchEligible"]),
             )
         )
     for variant in embedded_variants:
+        if normalize_title(str(variant["title"])) in current_variant_ids:
+            # The paired embedded author was already preferred for the same
+            # parsed title above. Avoid repeating the title with stale ABS
+            # author metadata.
+            continue
         primary_queries.append(
             (
                 primary_provider,
@@ -2423,7 +2464,7 @@ def search_candidates(
         )
 
     broad_title = str(current_variants[0]["title"] if current_variants else title)
-    broad_author = primary_author
+    broad_author = str(primary_queries[0][2] if primary_queries else primary_author)
     if (
         embedded_variants
         and normalize_title(broad_title) == normalize_title(title)

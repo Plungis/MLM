@@ -87,8 +87,13 @@ ambiguous prefixes keep the original title first, so names such as
 `Catch 22 - A Novel` are not destructively cleaned. The matcher stops as soon
 as a variant passes the normal auto-match policy, then uses native Google and
 Open Library stages before optional configured fallback providers. Every
-provider attempt records the exact title variant it searched. Missing provider
-fields are excluded from the weighted score. Contradictory authors, series
+provider attempt records the exact title variant and author it searched, and
+labels author-free broadening as `title only`. Decimal/lettered positions,
+multi-volume ranges, compact track numbers, bracketed release groups, and disc
+suffixes are recognized while numeric work titles remain intact. Identical
+current/embedded title variants are collapsed and use their paired embedded
+author rather than sending duplicate queries. Missing provider fields are
+excluded from the weighted score. Contradictory authors, series
 positions, collection status, or a close runner-up prevent automatic writes and
 are recorded as explicit Review Desk reasons. When an ASIN or ISBN matches
 exactly, a different secondary identifier or stored duration is treated as a
@@ -129,6 +134,8 @@ The live job log, preview, search path, and Review Desk show how many files had
 tags and every field that was used. If the library-items response omits audio
 files, the module loads the full ABS item once. That optional lookup fails open,
 records an actionable warning, and continues using normal ABS metadata.
+List-shaped narrator data returned by Audiobookshelf is normalized before
+deduplication and scoring.
 
 Search execution is deliberately bounded: no more than four evidence-ranked
 title variants are produced, duplicate queries are suppressed, optional ABS
