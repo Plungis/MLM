@@ -934,6 +934,108 @@ class ScoringTests(unittest.TestCase):
         self.assertIn("series sequence differs", decision["reasons"])
         self.assertNotIn("duration differs substantially", decision["reasons"])
 
+    def test_strong_title_and_author_make_isbn_difference_informational(self):
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {
+                "title": "Saint Peter's Fair",
+                "authorName": "Ellis Peters",
+                "isbn": "978-old-edition",
+            }
+        )
+        item["_absidekickEmbeddedMetadata"] = {
+            "title": "St. Peter's Fair",
+            "author": "Ellis Peters",
+        }
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "St. Peter's Fair",
+                    "author": "Ellis Peters",
+                    "isbn": "978-new-edition",
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(ranked[0]["conflicts"], ["ISBN differs"])
+        self.assertEqual(decision["action"], "auto")
+        self.assertEqual(decision["reasons"], [])
+        self.assertEqual(decision["overriddenEditionConflicts"], ["ISBN differs"])
+        self.assertIn("title and author strongly match", decision["advisories"][0])
+
+    def test_isbn_difference_stays_blocking_without_candidate_author(self):
+        item = sample_item()
+        item["media"]["metadata"]["isbn"] = "978-old-edition"
+        ranked = rank_candidates(
+            item,
+            [{"title": "Wizard's First Rule", "isbn": "978-new-edition"}],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("ISBN differs", decision["reasons"])
+        self.assertEqual(decision["overriddenEditionConflicts"], [])
+
+    def test_isbn_advisory_does_not_override_series_sequence_conflict(self):
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {
+                "isbn": "978-old-edition",
+                "series": [{"name": "Sword of Truth", "sequence": "1"}],
+            }
+        )
+        ranked = rank_candidates(
+            item,
+            [
+                {
+                    "title": "Wizard's First Rule",
+                    "author": "Terry Goodkind",
+                    "isbn": "978-new-edition",
+                    "series": [{"name": "Sword of Truth", "sequence": "2"}],
+                }
+            ],
+            DEFAULT_SETTINGS,
+        )
+
+        decision = match_decision(ranked, DEFAULT_SETTINGS)
+
+        self.assertEqual(decision["action"], "review")
+        self.assertNotIn("ISBN differs", decision["reasons"])
+        self.assertIn("series sequence differs", decision["reasons"])
+        self.assertEqual(decision["overriddenEditionConflicts"], ["ISBN differs"])
+
+    def test_isbn_advisory_does_not_override_tied_competing_volumes(self):
+        item = sample_item()
+        item["media"]["metadata"]["isbn"] = "978-old-edition"
+        candidates = [
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "isbn": "978-new-edition",
+                "series": [{"name": "Sword of Truth", "sequence": "1"}],
+            },
+            {
+                "title": "Wizard's First Rule",
+                "author": "Terry Goodkind",
+                "series": [{"name": "Sword of Truth", "sequence": "2"}],
+            },
+        ]
+
+        decision = match_decision(
+            rank_candidates(item, candidates, DEFAULT_SETTINGS), DEFAULT_SETTINGS
+        )
+
+        self.assertEqual(decision["score"], 100.0)
+        self.assertEqual(decision["action"], "review")
+        self.assertIn("meaningfully different", " ".join(decision["reasons"]))
+        self.assertEqual(decision["overriddenEditionConflicts"], ["ISBN differs"])
+
     def test_identifier_conflict_blocks_automatic_write(self):
         item = sample_item()
         item["media"]["metadata"]["asin"] = "B00ABC123"

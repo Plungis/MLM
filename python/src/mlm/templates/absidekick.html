@@ -281,7 +281,7 @@
                 </label>
               </div>
               <div class="note">
-                The similarity score measures how alike the available fields are; it is not an approval percentage. With safety checks enabled, a score of 100 can still require review when only the title is known, author data is missing, editions are tied, or the work identity conflicts. An exact ASIN or ISBN makes a different secondary identifier or stored duration non-blocking, while wrong-author, series-number, and collection conflicts still require review. A shorter or incorrect current ABS title does not veto a match when the folder/search title and the remaining evidence pass policy; it is shown as a match note instead. Every job log names the exact failed check or non-blocking note.
+                The similarity score measures how alike the available fields are; it is not an approval percentage. With safety checks enabled, a score of 100 can still require review when only the title is known, author data is missing, editions are tied, or the work identity conflicts. An ISBN difference is informational when title and author are both present and strongly agree. An exact ASIN or ISBN also makes a different secondary identifier or stored duration non-blocking, while ASIN, duration, wrong-author, series-number, collection, and tied-result conflicts otherwise still require review. A shorter or incorrect current ABS title does not veto a match when the folder/search title and the remaining evidence pass policy; it is shown as a match note instead. Every job log names the exact failed check or non-blocking note.
               </div>
               <div class="grid four">
                 <label class="field">

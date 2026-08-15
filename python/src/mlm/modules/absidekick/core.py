@@ -1096,36 +1096,59 @@ def match_decision(
     strong_signals = list(best.get("strongSignals") or [])
 
     exact_identifier = bool(best.get("exactIdentifiers"))
+    title_score = float(parts.get("title") or 0)
+    author_value = parts.get("author")
+    item_has_author = bool(item_author_from_scored(best))
+    candidate_has_author = bool(candidate_author(best.get("candidate") or {}))
     edition_conflicts = [
         reason
         for reason in reported_conflicts
         if reason in {"ASIN differs", "ISBN differs", "duration differs substantially"}
     ]
-    blocking_conflicts = [
-        reason for reason in reported_conflicts if reason not in edition_conflicts
-    ]
+    title_author_confirm_work = bool(
+        item_has_author
+        and candidate_has_author
+        and title_score >= 92
+        and float(author_value or 0) >= 90
+    )
     # An exact ASIN or ISBN identifies the selected edition more reliably than
     # stale duration or alternate-edition identifiers already stored in ABS.
-    # Keep genuine work-identity conflicts (series sequence, collection status,
-    # and the author/title gates below) blocking automatic writes.
-    edition_conflict_override = bool(exact_identifier and edition_conflicts)
-    safety_reasons = (
-        blocking_conflicts if edition_conflict_override else reported_conflicts
-    )
-    if edition_conflict_override:
-        exact_label = ", ".join(best.get("exactIdentifiers") or [])
-        advisories.extend(
-            f"{reason} (non-blocking because {exact_label} matched exactly)"
-            for reason in edition_conflicts
+    # A strongly agreeing title and author identify the work but not a specific
+    # edition, so only an ISBN mismatch becomes informational in that case.
+    # ASIN, duration, series, collection, author/title, and winner-margin gates
+    # remain blocking unless an exact identifier independently overrides the
+    # edition-level conflict.
+    overridden_edition_conflicts = (
+        list(edition_conflicts)
+        if exact_identifier
+        else (
+            [reason for reason in edition_conflicts if reason == "ISBN differs"]
+            if title_author_confirm_work
+            else []
         )
-    title_score = float(parts.get("title") or 0)
+    )
+    edition_conflict_override = bool(overridden_edition_conflicts)
+    safety_reasons = [
+        reason
+        for reason in reported_conflicts
+        if reason not in overridden_edition_conflicts
+    ]
+    if edition_conflict_override:
+        if exact_identifier:
+            exact_label = ", ".join(best.get("exactIdentifiers") or [])
+            advisories.extend(
+                f"{reason} (non-blocking because {exact_label} matched exactly)"
+                for reason in overridden_edition_conflicts
+            )
+        else:
+            advisories.extend(
+                f"{reason} (non-blocking because title and author strongly match)"
+                for reason in overridden_edition_conflicts
+            )
     if title_score < title_minimum and not exact_identifier:
         safety_reasons.append(
             f"title similarity {title_score:g} is below the required {title_minimum:g}"
         )
-    author_value = parts.get("author")
-    item_has_author = bool(item_author_from_scored(best))
-    candidate_has_author = bool(candidate_author(best.get("candidate") or {}))
     if (
         item_has_author
         and candidate_has_author
@@ -1184,6 +1207,7 @@ def match_decision(
         "exactIdentifier": exact_identifier,
         "editionConflictOverride": edition_conflict_override,
         "editionConflicts": edition_conflicts,
+        "overriddenEditionConflicts": overridden_edition_conflicts,
         "advisories": advisories,
         "policy": policy,
     }

@@ -97,9 +97,11 @@ excluded from the weighted score. Contradictory authors, series
 positions, collection status, or a close runner-up prevent automatic writes and
 are recorded as explicit Review Desk reasons. When an ASIN or ISBN matches
 exactly, a different secondary identifier or stored duration is treated as a
-non-blocking edition note; without an exact identifier those conflicts still
-require review. This policy and its thresholds live under the module's
-`matching` settings rather than in shared suite code.
+non-blocking edition note. An ISBN mismatch alone is also informational when
+both title and author are present and strongly agree. ASIN, duration,
+series-position, collection, weak/missing-author, and winner-margin conflicts
+remain blocking without an exact identifier. This policy and its thresholds
+live under the module's `matching` settings rather than in shared suite code.
 
 The current ABS title and the final folder name are both title evidence. When a
 folder or parsed search title clearly matches the candidate but the current ABS
@@ -107,7 +109,8 @@ title is short, incomplete, or incorrect, that disagreement is displayed as a
 non-blocking match note. It no longer vetoes an otherwise passing score, author,
 signal-count, and winner-margin decision. Author, series-position, collection,
 and competing-work conflicts remain blocking. Identifier and duration conflicts
-remain blocking unless another identifier matches exactly.
+remain blocking unless another identifier matches exactly, except for the
+strong-title-and-author ISBN rule above.
 
 Before metadata-patch mode calls Audiobookshelf, author names are normalized and
 deduplicated case-insensitively. If the candidate's normalized author set is
