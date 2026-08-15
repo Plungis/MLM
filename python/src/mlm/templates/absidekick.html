@@ -340,11 +340,11 @@
                 <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
                 <label class="check"><input id="requireAuthor" type="checkbox" /><span>Require a solid author score</span></label>
                 <label class="check"><input id="requireTitleToken" type="checkbox" /><span>Require at least one important title token</span></label>
-                <label class="check"><input id="useEmbeddedFileMetadata" type="checkbox" /><span>Use embedded audio-file metadata as additional matching evidence (opt-in)</span></label>
+                <label class="check"><input id="useEmbeddedFileMetadata" type="checkbox" /><span>Use embedded tags and audio filenames as additional matching evidence (opt-in)</span></label>
                 <label class="check"><input id="sortDesc" type="checkbox" /><span>Descending sort</span></label>
               </div>
               <div class="note">
-                Adaptive search peels strongly evidenced prefixes in layers, including decimal or lettered positions, ranges, compact track numbers, bracketed release labels, and disc suffixes. It tries the cleanest book title first and keeps intermediate and original titles as bounded fallbacks. Ambiguous numeric work titles keep their original form first. The Search path shows every exact title and author attempted, and marks author-free broadening as title only. Embedded metadata is separately opt-in: when enabled, ABSidekick reads the per-file tags Audiobookshelf already extracted. It does not open or modify media files.
+                Adaptive search peels strongly evidenced prefixes in layers, including decimal or lettered positions, ranges, compact track numbers, bracketed release labels, and disc suffixes. It tries the cleanest book title first and keeps intermediate and original titles as bounded fallbacks. Generic placeholders such as “Book 58” also try a distinct ABS folder name first. Ambiguous numeric work titles keep their original form first. The Search path shows every exact title and author attempted, and marks author-free broadening as title only. File evidence is separately opt-in: when enabled, ABSidekick reads the per-file tags and filenames Audiobookshelf already reports. Repeated track filenames must agree, while chapter-only names are rejected. It does not open or modify media files.
               </div>
               <h3>Score Weights</h3>
               <div class="grid six">

@@ -433,6 +433,151 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("title", embedded)
         self.assertEqual(embedded["status"], "empty")
 
+    def test_chapter_only_filenames_are_not_used_as_book_titles(self):
+        item = sample_item()
+        item["media"]["audioFiles"] = [
+            {"metadata": {"filename": "01 Chapter 1.mp3"}},
+            {"metadata": {"filename": "02 Chapter 2.mp3"}},
+            {"metadata": {"filename": "03 Chapter 3.mp3"}},
+        ]
+
+        embedded = extract_embedded_file_metadata(item)
+
+        self.assertEqual(embedded["fileTitleCandidates"], [])
+        self.assertEqual(embedded["status"], "empty")
+
+    def test_repeated_track_filenames_extract_a_real_title_candidate(self):
+        item = sample_item()
+        item["media"]["metadata"].update(
+            {"title": "Star Wars Book 58", "authorName": "Michael A. Stackpole"}
+        )
+        item["media"]["audioFiles"] = [
+            {
+                "metadata": {
+                    "filename": (
+                        "Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3"
+                    )
+                }
+            },
+            {
+                "metadata": {
+                    "filename": (
+                        "Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3"
+                    )
+                }
+            },
+            {
+                "metadata": {
+                    "filename": (
+                        "Star Wars - X-Wing 02 - The Krytos Trap - 03.mp3"
+                    )
+                }
+            },
+        ]
+
+        embedded = extract_embedded_file_metadata(item)
+
+        self.assertEqual(
+            embedded["fileTitleCandidates"],
+            [
+                {
+                    "title": "The Krytos Trap",
+                    "source": "repeated audio filename consensus",
+                    "supportingFileCount": 3,
+                }
+            ],
+        )
+        self.assertIn("fileTitleCandidates", embedded["fields"])
+
+    def test_generic_abs_title_searches_repeated_filename_title_first(self):
+        class FilenameEvidenceClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params.get("title") == "The Krytos Trap":
+                    return [
+                        {
+                            "title": "The Krytos Trap",
+                            "author": "Michael A. Stackpole",
+                            "asin": "B000KRYTOS",
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        item["path"] = "/audiobooks/Star Wars Book 58"
+        item["media"]["metadata"].update(
+            {"title": "Star Wars Book 58", "authorName": "Michael A. Stackpole"}
+        )
+        item["media"]["audioFiles"] = [
+            {
+                "metadata": {
+                    "filename": (
+                        "Star Wars - X-Wing 02 - The Krytos Trap - 01.mp3"
+                    )
+                }
+            },
+            {
+                "metadata": {
+                    "filename": (
+                        "Star Wars - X-Wing 02 - The Krytos Trap - 02.mp3"
+                    )
+                }
+            },
+        ]
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["matching"]["useEmbeddedFileMetadata"] = True
+        settings["providers"]["openLibraryEnabled"] = False
+        client = FilenameEvidenceClient()
+        prepared = prepare_item_for_matching(client, item, settings)
+
+        candidates = search_candidates(client, prepared, settings)
+        decision = match_decision(
+            rank_candidates(prepared, candidates, settings), settings
+        )
+
+        self.assertEqual(client.queries[0]["title"], "The Krytos Trap")
+        self.assertIn(
+            "repeated audio filename consensus",
+            candidates[0]["_absidekickSearch"]["strategy"],
+        )
+        self.assertEqual(decision["action"], "auto")
+
+    def test_generic_abs_title_searches_folder_title_first(self):
+        class FolderEvidenceClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params.get("title") == "The Krytos Trap":
+                    return [
+                        {
+                            "title": "The Krytos Trap",
+                            "author": "Michael A. Stackpole",
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        item["path"] = "/audiobooks/Michael A. Stackpole/The Krytos Trap"
+        item["media"]["metadata"].update(
+            {"title": "Star Wars Book 58", "authorName": "Michael A. Stackpole"}
+        )
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"]["openLibraryEnabled"] = False
+        client = FolderEvidenceClient()
+
+        candidates = search_candidates(client, item, settings)
+
+        self.assertEqual(client.queries[0]["title"], "The Krytos Trap")
+        self.assertIn(
+            "Audiobookshelf folder name",
+            candidates[0]["_absidekickSearch"]["strategy"],
+        )
+
     def test_embedded_file_metadata_is_opt_in_and_hydrates_full_abs_item(self):
         class ItemClient:
             def __init__(self):

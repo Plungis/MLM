@@ -508,6 +508,190 @@ def _consensus_file_tag(values: list[str]) -> str:
     return ""
 
 
+def _audio_file_name(audio_file: dict[str, Any]) -> str:
+    metadata = audio_file.get("metadata") or {}
+    return str(
+        first_present(
+            metadata.get("filename"),
+            metadata.get("relPath"),
+            audio_file.get("filename"),
+            audio_file.get("relPath"),
+            "",
+        )
+        or ""
+    ).strip()
+
+
+def _path_basename(value: Any) -> str:
+    raw = str(value or "").strip().rstrip("/\\")
+    return re.split(r"[/\\]", raw)[-1].strip() if raw else ""
+
+
+def _title_is_generic_placeholder(value: Any) -> bool:
+    normalized = normalize_title(value)
+    raw_normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        unicodedata.normalize("NFKD", html.unescape(str(value or "")))
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .casefold(),
+    ).strip()
+    if not normalized:
+        return True
+    if raw_normalized in {"unknown", "untitled", "unknown title", "audio book"}:
+        return True
+    if re.fullmatch(r"\d{1,4}", raw_normalized):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:[a-z0-9]+\s+){0,4}(?:audio\s*)?book\s+\d{1,4}",
+            raw_normalized,
+        )
+    )
+
+
+def _usable_evidence_title(value: Any, *, author: str = "") -> bool:
+    title = html.unescape(str(value or "")).strip(" ._-|[]()")
+    normalized = normalize_title(title)
+    if not normalized or _title_is_generic_placeholder(title):
+        return False
+    if re.fullmatch(
+        r"(?:chapter|chap|track|part|pt|disc|disk|cd|volume|vol)\s*\d*",
+        normalized,
+    ):
+        return False
+    words = title_tokens(title)
+    if not words or words <= {
+        "chapter",
+        "chap",
+        "track",
+        "part",
+        "disc",
+        "disk",
+        "audio",
+        "audiobook",
+    }:
+        return False
+    return not author or best_people_ratio(title, author) < 96
+
+
+def _filename_title(value: Any, *, strip_bare_counter: bool) -> str:
+    filename = _path_basename(value)
+    stem = re.sub(r"\.[a-z0-9]{2,5}$", "", filename, flags=re.IGNORECASE).strip()
+    if not stem:
+        return ""
+    cleaned = _leading_track_title(stem)
+    cleaned = re.sub(
+        r"\s*(?:-|_|\.)?\s*(?:chapter|chap|track|part|pt|disc|disk|cd)\s*"
+        r"#?\s*\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip(" ._-|")
+    if strip_bare_counter:
+        cleaned = re.sub(
+            r"\s*(?:-|_|\.)\s*0*\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip(" ._-|")
+    return cleaned
+
+
+def _strip_filename_author_suffix(value: str, author: str) -> str:
+    if not value or not author:
+        return value
+    separators = list(
+        re.finditer(
+            r"\s+(?:-|\u2013|\u2014|\||\bby\b)\s+", value, re.IGNORECASE
+        )
+    )
+    for separator in reversed(separators):
+        suffix = value[separator.end() :].strip()
+        prefix = value[: separator.start()].strip()
+        if prefix and best_people_ratio(suffix, author) >= 90:
+            return prefix
+    return value
+
+
+def _filename_release_title(value: str) -> str:
+    """Extract a work title from a clearly numbered multi-part release name."""
+
+    parts = [
+        part.strip()
+        for part in re.split(r"\s+(?:-|\u2013|\u2014|\|)\s+", value)
+        if part.strip()
+    ]
+    if len(parts) < 2:
+        return value
+    prefix = " - ".join(parts[:-1])
+    suffix = parts[-1]
+    numbered_release = len(parts) >= 3 and bool(re.search(r"\b\d{1,3}\b", prefix))
+    explicit_series_number = bool(
+        re.search(
+            r"(?:#|\b(?:book|volume|vol|series)\s*)\d{1,3}\s*$",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+    )
+    suffix_words = title_tokens(suffix)
+    if (
+        (numbered_release or explicit_series_number)
+        and suffix_words
+        and not suffix_words <= {"novel", "edition", "audiobook", "audio"}
+    ):
+        return suffix
+    return value
+
+
+def _audio_filename_title_candidates(
+    audio_files: list[dict[str, Any]], *, author: str = ""
+) -> list[dict[str, Any]]:
+    filenames = [_audio_file_name(audio_file) for audio_file in audio_files]
+    filenames = [filename for filename in filenames if filename]
+    if not filenames:
+        return []
+
+    if len(filenames) == 1:
+        candidate = _filename_title(filenames[0], strip_bare_counter=False)
+        candidate = _strip_filename_author_suffix(candidate, author)
+        candidate = _filename_release_title(candidate)
+        if _usable_evidence_title(candidate, author=author):
+            return [
+                {
+                    "title": candidate,
+                    "source": "single audio filename",
+                    "supportingFileCount": 1,
+                }
+            ]
+        return []
+
+    groups: dict[str, dict[str, Any]] = {}
+    for filename in filenames:
+        candidate = _filename_title(filename, strip_bare_counter=True)
+        candidate = _strip_filename_author_suffix(candidate, author)
+        candidate = _filename_release_title(candidate)
+        if not _usable_evidence_title(candidate, author=author):
+            continue
+        key = normalize_title(candidate)
+        row = groups.setdefault(key, {"title": candidate, "count": 0})
+        row["count"] += 1
+    if not groups:
+        return []
+    winner = max(groups.values(), key=lambda row: int(row["count"]))
+    minimum_support = max(2, (len(filenames) + 1) // 2)
+    if int(winner["count"]) < minimum_support:
+        return []
+    return [
+        {
+            "title": str(winner["title"]),
+            "source": "repeated audio filename consensus",
+            "supportingFileCount": int(winner["count"]),
+        }
+    ]
+
+
 def extract_embedded_file_metadata(item: dict[str, Any]) -> dict[str, Any]:
     """Summarize audio tags already extracted by Audiobookshelf."""
 
@@ -548,23 +732,25 @@ def extract_embedded_file_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "language": consensus("language", "lang"),
     }
     values = {key: value for key, value in values.items() if value}
+    file_title_candidates = _audio_filename_title_candidates(
+        audio_files, author=str(values.get("author") or item_author(item))
+    )
     source_files: list[str] = []
-    for audio_file, _tags in tagged_files[:5]:
-        metadata = audio_file.get("metadata") or {}
-        filename = first_present(
-            metadata.get("filename"),
-            metadata.get("relPath"),
-            audio_file.get("filename"),
-        )
+    for audio_file in audio_files[:5]:
+        filename = _audio_file_name(audio_file)
         if filename:
             source_files.append(str(filename))
+    fields = list(values)
+    if file_title_candidates:
+        fields.append("fileTitleCandidates")
     return {
         **values,
+        "fileTitleCandidates": file_title_candidates,
         "fileCount": len(audio_files),
         "taggedFileCount": len(tagged_files),
         "sourceFiles": source_files,
-        "fields": list(values),
-        "status": "found" if values else "empty",
+        "fields": fields,
+        "status": "found" if values or file_title_candidates else "empty",
     }
 
 
@@ -743,9 +929,16 @@ def title_values(item: dict[str, Any]) -> list[str]:
     path_title = re.split(r"[/\\]", raw_path.rstrip("/\\"))[-1].strip()
     if path_title and normalize_title(path_title) != normalize_title(title):
         values.append(path_title)
-    embedded_title = str(embedded_item_metadata(item).get("title") or "").strip()
+    embedded = embedded_item_metadata(item)
+    embedded_title = str(embedded.get("title") or "").strip()
     if embedded_title:
         values.append(embedded_title)
+    for candidate in embedded.get("fileTitleCandidates") or []:
+        candidate_title = str(
+            candidate.get("title") if isinstance(candidate, dict) else candidate
+        ).strip()
+        if candidate_title:
+            values.append(candidate_title)
     return list(
         dict.fromkeys(
             variant
@@ -2309,6 +2502,56 @@ def clean_search_title(
     return str(variants[0]["title"]) if variants else ""
 
 
+def evidence_title_candidates(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return bounded, trustworthy titles discovered outside ABS book metadata."""
+
+    title = item_title(item)
+    author_values = item_author_values(item)
+    author = author_values[-1] if author_values else ""
+    embedded = embedded_item_metadata(item)
+    ignored = {
+        normalize_title(title),
+        normalize_title(embedded.get("title")),
+    }
+    rows: list[dict[str, Any]] = []
+
+    def add(value: Any, source: str, supporting_file_count: int = 0) -> None:
+        candidate = str(value or "").strip()
+        identity = normalize_title(candidate)
+        if (
+            not identity
+            or identity in ignored
+            or any(normalize_title(row["title"]) == identity for row in rows)
+            or not _usable_evidence_title(candidate, author=author)
+        ):
+            return
+        rows.append(
+            {
+                "title": candidate,
+                "source": source,
+                "supportingFileCount": supporting_file_count,
+            }
+        )
+
+    raw_path = first_present(item.get("path"), item.get("relPath"), "")
+    path_title = _path_basename(raw_path)
+    if re.search(r"\.[a-z0-9]{2,5}$", path_title, flags=re.IGNORECASE):
+        path_title = _filename_title(path_title, strip_bare_counter=False)
+    if _title_is_generic_placeholder(title):
+        add(path_title, "Audiobookshelf folder name")
+
+    for candidate in embedded.get("fileTitleCandidates") or []:
+        if isinstance(candidate, dict):
+            add(
+                candidate.get("title"),
+                str(candidate.get("source") or "audio filename"),
+                int(candidate.get("supportingFileCount") or 0),
+            )
+        else:
+            add(candidate, "audio filename")
+    return rows[:3]
+
+
 def _search_books_once(
     client: ABSClient,
     params: dict[str, Any],
@@ -2430,6 +2673,25 @@ def search_candidates(
         embedded_variants = embedded_variants[:1]
 
     primary_author = author or embedded_author
+    evidence_rows = evidence_title_candidates(item)
+    evidence_queries: list[tuple[str, str, str, str, bool, bool]] = []
+    for evidence in evidence_rows[:2]:
+        evidence_variants = title_search_variants(
+            evidence["title"], variant_series_entries
+        )
+        if not adaptive:
+            evidence_variants = evidence_variants[:1]
+        for variant in evidence_variants[:2]:
+            evidence_queries.append(
+                (
+                    primary_provider,
+                    str(variant["title"]),
+                    embedded_author or author,
+                    f"{evidence['source']} / {variant['strategy']}",
+                    False,
+                    bool(variant["quickMatchEligible"]),
+                )
+            )
     embedded_variant_ids = {
         normalize_title(str(variant["title"])) for variant in embedded_variants
     }
@@ -2487,8 +2749,26 @@ def search_candidates(
             )
         )
 
+    if _title_is_generic_placeholder(title) and evidence_queries:
+        # A placeholder such as "Star Wars Book 58" is poor identifying
+        # evidence. Try trustworthy folder/file titles first so an ambiguous
+        # generic query cannot dominate the candidate set.
+        primary_queries = [*evidence_queries, *primary_queries]
+    else:
+        primary_queries.extend(evidence_queries)
+
     broad_title = str(current_variants[0]["title"] if current_variants else title)
     broad_author = str(primary_queries[0][2] if primary_queries else primary_author)
+    if _title_is_generic_placeholder(title) and evidence_rows:
+        evidence_variants = title_search_variants(
+            evidence_rows[0]["title"], variant_series_entries
+        )
+        broad_title = str(
+            evidence_variants[0]["title"]
+            if evidence_variants
+            else evidence_rows[0]["title"]
+        )
+        broad_author = embedded_author or author
     if (
         embedded_variants
         and normalize_title(broad_title) == normalize_title(title)
@@ -2665,8 +2945,27 @@ def search_candidates(
                 ),
             }
             identity = candidate_identity(candidate)
-            if identity not in candidates:
+            existing = candidates.get(identity)
+            if existing is None:
                 candidates[identity] = candidate
+            else:
+                existing_score = score_candidate(item, existing, settings)["score"]
+                candidate_score = score_candidate(item, candidate, settings)["score"]
+                existing_search = existing.get("_absidekickSearch") or {}
+                candidate_search = candidate.get("_absidekickSearch") or {}
+                if (
+                    candidate_score > existing_score
+                    or (
+                        candidate_score == existing_score
+                        and candidate_search.get("quickMatchEligible")
+                        and not existing_search.get("quickMatchEligible")
+                    )
+                ):
+                    # The same provider work can appear under a vague query and
+                    # a later evidence-backed query. Keep the provenance that
+                    # best identifies the item so scoring and quick-match use
+                    # the real title rather than the first placeholder search.
+                    candidates[identity] = candidate
 
         if (
             candidates

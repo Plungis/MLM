@@ -122,17 +122,21 @@ preventing a genuinely different author set from being applied.
 ## Embedded file metadata (opt-in)
 
 `matching.useEmbeddedFileMetadata` is disabled by default. When enabled,
-ABSidekick uses the `metaTags` Audiobookshelf already extracted for the audio
-files associated with each library item; MyAnonaSuite does not open or modify
-the media files. Album/title, artist/album artist, composer, series, series
-sequence, year, ASIN, ISBN, publisher, and language are normalized into a
+ABSidekick uses the `metaTags` and filenames Audiobookshelf already reports for
+the audio files associated with each library item; MyAnonaSuite does not open or
+modify the media files. Album/title, artist/album artist, composer, series,
+series sequence, year, ASIN, ISBN, publisher, and language are normalized into a
 consensus evidence record. Album is preferred over per-track title because MP3
-track titles are commonly chapter names. A multi-file value is accepted only
-when at least half of the tagged files agree.
+track titles are commonly chapter names. Repeated filenames can also supply a
+title after track counters and clearly numbered release prefixes are removed. A
+multi-file value is accepted only when at least half of the files agree, and
+chapter/part/track-only names are rejected.
 
-The embedded title and author are tried as an explicit primary-provider query
-and are included as alternate matching evidence. Current ABS metadata and file
-tags are both retained; embedded tags never directly overwrite ABS metadata.
+The embedded title, filename title, and author are tried as explicit
+primary-provider queries and are included as alternate matching evidence.
+Generic ABS placeholders such as `Star Wars Book 58` also try a distinct folder
+basename before the placeholder query. Current ABS metadata and file evidence
+are both retained; file evidence never directly overwrites ABS metadata.
 The live job log, preview, search path, and Review Desk show how many files had
 tags and every field that was used. If the library-items response omits audio
 files, the module loads the full ABS item once. That optional lookup fails open,

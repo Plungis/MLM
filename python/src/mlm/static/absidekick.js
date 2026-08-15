@@ -837,10 +837,14 @@ function renderEmbeddedMetadata(metadata) {
   const fileCount = Number(metadata.fileCount || 0);
   const taggedCount = Number(metadata.taggedFileCount || 0);
   if (metadata.status !== "found") {
-    return `<div class="meta">Embedded file metadata: no usable tags in ${fileCount} associated audio file${fileCount === 1 ? "" : "s"}.</div>`;
+    return `<div class="meta">Embedded file metadata: no usable tags or filename titles in ${fileCount} associated audio file${fileCount === 1 ? "" : "s"}.</div>`;
   }
+  const filenameTitles = (metadata.fileTitleCandidates || [])
+    .map((candidate) => candidate?.title || candidate)
+    .filter(Boolean);
   const evidence = [
     metadata.title ? `Title: ${metadata.title}` : "",
+    filenameTitles.length ? `Filename title: ${filenameTitles.join(", ")}` : "",
     metadata.author ? `Author: ${metadata.author}` : "",
     metadata.series ? `Series: ${metadata.series}${metadata.seriesSequence ? ` #${metadata.seriesSequence}` : ""}` : "",
     metadata.narrator ? `Narrator: ${metadata.narrator}` : "",
@@ -848,7 +852,7 @@ function renderEmbeddedMetadata(metadata) {
     metadata.asin ? `ASIN: ${metadata.asin}` : "",
     metadata.isbn ? `ISBN: ${metadata.isbn}` : "",
   ].filter(Boolean);
-  return `<div class="evidence-line"><strong>Embedded file evidence (${taggedCount}/${fileCount} tagged):</strong> ${escapeHtml(evidence.join(" | ") || "tags found")}</div>`;
+  return `<div class="evidence-line"><strong>File evidence (${taggedCount}/${fileCount} tagged):</strong> ${escapeHtml(evidence.join(" | ") || "usable filename evidence found")}</div>`;
 }
 
 function renderCurrentBookCard(item) {
