@@ -334,7 +334,7 @@
               </div>
               <div class="checks">
                 <label class="check"><input id="strictAutoMatch" type="checkbox" /><span>Require safety checks as well as the similarity score</span></label>
-                <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Clean track numbers and retry only when the precise search is empty</span></label>
+                <label class="check"><input id="adaptiveSearch" type="checkbox" /><span>Parse track, series, and nested release prefixes into ranked title searches</span></label>
                 <label class="check"><input id="automaticFallbackProviders" type="checkbox" /><span>Query extra providers after the automatic Google and Open Library stages</span></label>
                 <label class="check"><input id="overwriteMetadata" type="checkbox" /><span>Overwrite existing metadata fields</span></label>
                 <label class="check"><input id="quickMatchFirstResultOnly" type="checkbox" /><span>Only quick match when chosen candidate is ABS result #1</span></label>
@@ -344,7 +344,7 @@
                 <label class="check"><input id="sortDesc" type="checkbox" /><span>Descending sort</span></label>
               </div>
               <div class="note">
-                When enabled, ABSidekick reads the per-file tags Audiobookshelf already extracted from associated audio files. Album/title, artist, series, sequence, narrator, year, ASIN, and ISBN can improve search and scoring. It does not open or modify media files, and embedded tags are displayed as evidence before any match is applied.
+                Adaptive search peels strongly evidenced prefixes in layers, tries the cleanest book title first, and keeps intermediate and original titles as bounded fallbacks. Ambiguous numbered titles keep their original form first. The Search path shows every exact title attempted. Embedded metadata is separately opt-in: when enabled, ABSidekick reads the per-file tags Audiobookshelf already extracted. It does not open or modify media files.
               </div>
               <h3>Score Weights</h3>
               <div class="grid six">

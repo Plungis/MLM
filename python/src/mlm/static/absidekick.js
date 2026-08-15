@@ -681,8 +681,17 @@ function renderSearchAttempts(attempts) {
           : attempt.status === "disabled"
             ? "disabled"
             : "error";
-    const detail = attempt.message || attempt.error || attempt.strategy || "";
-    return `<span class="search-attempt ${escapeHtml(attempt.status || "")}" title="${escapeHtml(detail)}"><b>${escapeHtml(providerLabel(attempt.provider))}</b> ${escapeHtml(status)}</span>`;
+    const query = attempt.provider === "embedded" || !attempt.queryTitle
+      ? ""
+      : ` · “${escapeHtml(attempt.queryTitle)}”`;
+    const detail = [
+      attempt.strategy,
+      attempt.queryTitle ? `Title: ${attempt.queryTitle}` : "",
+      attempt.queryAuthor ? `Author: ${attempt.queryAuthor}` : "",
+      attempt.message,
+      attempt.error,
+    ].filter(Boolean).join(" | ");
+    return `<span class="search-attempt ${escapeHtml(attempt.status || "")}" title="${escapeHtml(detail)}"><b>${escapeHtml(providerLabel(attempt.provider))}</b> ${escapeHtml(status)}${query}</span>`;
   });
   return `<div class="search-trace"><span class="trace-label">Search path</span>${steps.join('<span class="trace-arrow">&rarr;</span>')}</div>`;
 }

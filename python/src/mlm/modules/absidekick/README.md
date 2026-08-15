@@ -78,17 +78,23 @@ The Review Desk also supports reviewer-controlled searches by title, optional
 author, and metadata provider. Manual results are rescored by `core.py` against
 the canonical Audiobookshelf item and use the normal review approval path.
 
-The automatic matcher is intentionally evidence-aware. It performs a precise
-title-and-author search first, broadens the query only after an empty result,
-then uses the native Google and Open Library stages before optional configured
-fallback providers. Missing provider fields are excluded
-from the weighted score. Contradictory authors, series positions, collection
-status, or a close runner-up prevent automatic writes and are recorded as
-explicit Review Desk reasons. When an ASIN or ISBN matches exactly, a different
-secondary identifier or stored duration is treated as a non-blocking edition
-note; without an exact identifier those conflicts still require review. This
-policy and its thresholds live under the module's `matching` settings rather
-than in shared suite code.
+The automatic matcher is intentionally evidence-aware. It derives a bounded,
+ranked set of title variants before searching. Strongly evidenced track,
+series, and nested release prefixes are peeled in layers—for example,
+`Dragonriders of Pern #3 - Pern08-Nerilka's Story` becomes `Nerilka's Story`,
+then the intermediate and original forms remain available as fallbacks. Weak or
+ambiguous prefixes keep the original title first, so names such as
+`Catch 22 - A Novel` are not destructively cleaned. The matcher stops as soon
+as a variant passes the normal auto-match policy, then uses native Google and
+Open Library stages before optional configured fallback providers. Every
+provider attempt records the exact title variant it searched. Missing provider
+fields are excluded from the weighted score. Contradictory authors, series
+positions, collection status, or a close runner-up prevent automatic writes and
+are recorded as explicit Review Desk reasons. When an ASIN or ISBN matches
+exactly, a different secondary identifier or stored duration is treated as a
+non-blocking edition note; without an exact identifier those conflicts still
+require review. This policy and its thresholds live under the module's
+`matching` settings rather than in shared suite code.
 
 The current ABS title and the final folder name are both title evidence. When a
 folder or parsed search title clearly matches the candidate but the current ABS
@@ -124,8 +130,8 @@ tags and every field that was used. If the library-items response omits audio
 files, the module loads the full ABS item once. That optional lookup fails open,
 records an actionable warning, and continues using normal ABS metadata.
 
-Search execution is deliberately bounded: numbering prefixes are cleaned,
-additional primary-provider queries run only after zero results, optional ABS
+Search execution is deliberately bounded: no more than four evidence-ranked
+title variants are produced, duplicate queries are suppressed, optional ABS
 fallback providers are opt-in, and search requests use a short timeout. Native
 Google and Open Library use a one-retry/three-strike transient-error policy;
 other timed-out providers are disabled on that `ABSClient` for the rest of the

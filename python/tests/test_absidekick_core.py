@@ -28,6 +28,7 @@ from mlm.modules.absidekick.core import (
     search_review_candidates,
     should_process_item,
     summarize_item,
+    title_search_variants,
 )
 from mlm.modules.absidekick.core import (
     test_google_books_api_key as validate_google_books_api_key,
@@ -1404,6 +1405,90 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(candidates[0]["_absidekickSearch"]["quickMatchEligible"])
         self.assertEqual(ranked[0]["parts"]["title"], 100.0)
         self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "auto")
+
+    def test_nested_series_release_prefixes_produce_ranked_search_variants(self):
+        title = "Dragonriders of Pern #3 - Pern08-Nerilka's Story"
+
+        variants = title_search_variants(title)
+
+        self.assertEqual(
+            [variant["title"] for variant in variants],
+            [
+                "Nerilka's Story",
+                "Pern08-Nerilka's Story",
+                title,
+            ],
+        )
+        self.assertEqual(variants[0]["strategy"], "parsed nested series title + author")
+        self.assertTrue(variants[0]["quickMatchEligible"])
+        self.assertEqual(clean_search_title(title), "Nerilka's Story")
+
+    def test_nested_series_title_is_searched_and_auto_matched(self):
+        class NerilkaClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["title"] == "Nerilka's Story":
+                    return [
+                        {
+                            "title": "Nerilka's Story",
+                            "author": "Anne McCaffrey",
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        item["media"]["metadata"]["title"] = (
+            "Dragonriders of Pern #3 - Pern08-Nerilka's Story"
+        )
+        item["media"]["metadata"]["authorName"] = "Anne McCaffrey"
+        client = NerilkaClient()
+
+        candidates = search_candidates(client, item, DEFAULT_SETTINGS)
+        ranked = rank_candidates(item, candidates, DEFAULT_SETTINGS)
+
+        self.assertEqual(
+            [query["title"] for query in client.queries], ["Nerilka's Story"]
+        )
+        self.assertEqual(
+            candidates[0]["_absidekickSearch"]["strategy"],
+            "parsed nested series title + author",
+        )
+        self.assertEqual(match_decision(ranked, DEFAULT_SETTINGS)["action"], "auto")
+
+    def test_nested_series_search_retains_intermediate_and_original_fallbacks(self):
+        class VariantClient:
+            def __init__(self):
+                self.queries = []
+
+            def get(self, path, params=None):
+                self.queries.append(dict(params or {}))
+                if params["title"].startswith("Dragonriders of Pern"):
+                    return [
+                        {
+                            "title": "Nerilka's Story",
+                            "author": "Anne McCaffrey",
+                        }
+                    ]
+                return []
+
+        item = sample_item()
+        original = "Dragonriders of Pern #3 - Pern08-Nerilka's Story"
+        item["media"]["metadata"]["title"] = original
+        item["media"]["metadata"]["authorName"] = "Anne McCaffrey"
+        client = VariantClient()
+        settings = deepcopy(DEFAULT_SETTINGS)
+        settings["providers"]["openLibraryEnabled"] = False
+
+        candidates = search_candidates(client, item, settings)
+
+        self.assertEqual(
+            [query["title"] for query in client.queries],
+            ["Nerilka's Story", "Pern08-Nerilka's Story", original],
+        )
+        self.assertEqual(candidates[0]["title"], "Nerilka's Story")
 
     def test_quick_match_uses_the_evidence_backed_parsed_title(self):
         class RecordingClient:

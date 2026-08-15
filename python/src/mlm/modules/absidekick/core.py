@@ -2038,42 +2038,41 @@ class CandidateResults(list[dict[str, Any]]):
         self.attempts = attempts or []
 
 
-def _series_prefix_title(
+def _normalized_series_sequence(value: Any) -> str:
+    normalized = normalize_text(value)
+    if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+        whole, dot, fraction = normalized.partition(".")
+        fraction = fraction.rstrip("0")
+        return f"{int(whole)}{dot}{fraction}" if fraction else str(int(whole))
+    return normalized
+
+
+def _series_prefix_details(
     value: Any,
     series_entries: list[tuple[str, str]] | None = None,
-    *,
-    require_evidence: bool,
-) -> str:
-    def normalized_sequence(value: Any) -> str:
-        normalized = normalize_text(value)
-        if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
-            whole, dot, fraction = normalized.partition(".")
-            fraction = fraction.rstrip("0")
-            return f"{int(whole)}{dot}{fraction}" if fraction else str(int(whole))
-        return normalized
-
+) -> dict[str, Any] | None:
     title = html.unescape(str(value or "")).strip()
     match = re.match(
         r"^\s*(?P<series>.{1,80}?)\s+"
-        r"(?:(?:book|volume|vol)\s*#?\s*|#\s*)?"
+        r"(?P<marker>(?:(?:book|volume|vol)\s*#?\s*|#\s*)?)"
         r"(?P<sequence>\d{1,3}(?:\.\d+)?|[ivxlcdm]{1,8})\s*"
-        r"(?:-|–|—|:|\|)\s*(?P<title>.+?)\s*$",
+        r"(?:-|â€“|â€”|–|—|:|\|)\s*(?P<title>.+?)\s*$",
         title,
         flags=re.IGNORECASE,
     )
     if not match:
-        return title
+        return None
 
     series_name = match.group("series").strip()
-    sequence = normalized_sequence(match.group("sequence"))
+    sequence = _normalized_series_sequence(match.group("sequence"))
     remainder = match.group("title").strip()
     remainder_tokens = title_tokens(remainder)
     if not remainder_tokens:
-        return title
+        return None
 
     metadata_match = False
     for known_name, known_sequence in series_entries or []:
-        normalized_known_sequence = normalized_sequence(known_sequence)
+        normalized_known_sequence = _normalized_series_sequence(known_sequence)
         name_matches = title_similarity(series_name, known_name) >= 88
         sequence_matches = (
             not normalized_known_sequence or normalized_known_sequence == sequence
@@ -2088,41 +2087,179 @@ def _series_prefix_title(
         if len(word) >= 4 and word not in {"saga", "series", "volume"}
     }
     repeated_series_word = bool(series_words & title_tokens(remainder))
+    explicit_marker = bool(str(match.group("marker") or "").strip())
+    strong = bool(
+        metadata_match
+        or repeated_series_word
+        or (explicit_marker and len(remainder_tokens) >= 2)
+    )
     if len(remainder_tokens) < 2 and not metadata_match:
-        return title
-    if require_evidence and not (metadata_match or repeated_series_word):
-        return title
-    return remainder
+        strong = False
+    return {
+        "original": title,
+        "series": series_name,
+        "sequence": sequence,
+        "title": remainder,
+        "strong": strong,
+        "metadataMatch": metadata_match,
+        "repeatedSeriesWord": repeated_series_word,
+        "explicitMarker": explicit_marker,
+    }
 
 
-def clean_search_title(
-    value: Any, series_entries: list[tuple[str, str]] | None = None
-) -> str:
+def _series_label_matches(label: str, series_names: list[str]) -> bool:
+    normalized_label = normalize_title(label)
+    if not normalized_label:
+        return False
+    label_tokens = title_tokens(label)
+    for series_name in series_names:
+        normalized_series = normalize_title(series_name)
+        if not normalized_series:
+            continue
+        if normalized_label == normalized_series:
+            return True
+        series_tokens = title_tokens(series_name)
+        if label_tokens and label_tokens <= series_tokens:
+            return True
+        if len(normalized_label) >= 4 and normalized_label in series_tokens:
+            return True
+        if title_similarity(label, series_name) >= 88:
+            return True
+    return False
+
+
+def _compact_series_code_details(
+    value: Any, series_names: list[str]
+) -> dict[str, str] | None:
     title = html.unescape(str(value or "")).strip()
-    # Track/disc numbering is common in folder names but poisons ABS provider
-    # searches (for example, "01 Northern Lights"). Do not touch titles that
-    # are themselves a number, such as "1984".
-    number_cleaned = re.sub(
+    match = re.match(
+        r"^\s*(?P<series>[a-z][a-z .&'â€™-]{1,50}?)\s*#?\s*"
+        r"0*(?P<sequence>\d{1,3}(?:\.\d+)?)\s*"
+        r"(?:-|â€“|â€”|–|—|:|\|)\s*(?P<title>.+?)\s*$",
+        title,
+        flags=re.IGNORECASE,
+    )
+    if not match or not _series_label_matches(match.group("series"), series_names):
+        return None
+    remainder = match.group("title").strip()
+    if not title_tokens(remainder):
+        return None
+    return {
+        "series": match.group("series").strip(),
+        "sequence": _normalized_series_sequence(match.group("sequence")),
+        "title": remainder,
+    }
+
+
+def _leading_track_title(value: Any) -> str:
+    title = html.unescape(str(value or "")).strip()
+    cleaned = re.sub(
         r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
         r"0*\d{1,3}\s*\(\s*\d{1,3}\s*\)\s*[-_.:]?\s+",
         "",
         title,
         flags=re.IGNORECASE,
     ).strip()
-    if number_cleaned == title:
-        number_cleaned = re.sub(
-            r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?0*\d{1,3}\s*[-_.:]?\s+",
+    if cleaned == title:
+        cleaned = re.sub(
+            r"^\s*(?:(?:book|disc|disk|track|cd)\s*)?"
+            r"0*\d{1,3}\s*[-_.:]?\s+",
             "",
             title,
             flags=re.IGNORECASE,
         ).strip()
-    if number_cleaned and number_cleaned != title:
-        return number_cleaned
-    return _series_prefix_title(
-        title,
-        series_entries,
-        require_evidence=True,
-    )
+    return cleaned or title
+
+
+def title_search_variants(
+    value: Any, series_entries: list[tuple[str, str]] | None = None
+) -> list[dict[str, Any]]:
+    """Return bounded, evidence-ranked provider-search variants for a title."""
+
+    original = html.unescape(str(value or "")).strip()
+    if not original:
+        return []
+    known_series = [name for name, _sequence in series_entries or [] if name]
+    base = _leading_track_title(original)
+    track_cleaned = normalize_title(base) != normalize_title(original)
+    prefix = _series_prefix_details(base, series_entries)
+    intermediate = str(prefix.get("title") or "") if prefix else ""
+    if prefix and prefix.get("series"):
+        known_series.append(str(prefix["series"]))
+    compact = _compact_series_code_details(intermediate or base, known_series)
+    deepest = str(compact.get("title") or "") if compact else intermediate
+    strong = bool(track_cleaned or (prefix and prefix.get("strong")) or compact)
+    rows: list[dict[str, Any]] = []
+
+    def add(title: str, strategy: str, *, quick: bool, only_if_empty: bool) -> None:
+        clean = str(title or "").strip()
+        identity = normalize_title(clean)
+        if not clean or not identity:
+            return
+        if any(normalize_title(row["title"]) == identity for row in rows):
+            return
+        rows.append(
+            {
+                "title": clean,
+                "strategy": strategy,
+                "quickMatchEligible": quick,
+                "onlyIfEmpty": only_if_empty,
+            }
+        )
+
+    if strong:
+        if deepest and normalize_title(deepest) != normalize_title(base):
+            add(
+                deepest,
+                (
+                    "parsed nested series title + author"
+                    if compact
+                    else "parsed title + author"
+                ),
+                quick=True,
+                only_if_empty=False,
+            )
+        if (
+            intermediate
+            and normalize_title(intermediate) != normalize_title(deepest)
+            and normalize_title(intermediate) != normalize_title(base)
+        ):
+            add(
+                intermediate,
+                "intermediate parsed title + author",
+                quick=False,
+                only_if_empty=False,
+            )
+        if track_cleaned and normalize_title(base) != normalize_title(deepest):
+            add(
+                base,
+                "track-number-cleaned title + author",
+                quick=True,
+                only_if_empty=False,
+            )
+        add(
+            original,
+            "original unparsed title + author",
+            quick=False,
+            only_if_empty=bool(track_cleaned and not prefix),
+        )
+    else:
+        add(original, "precise title + author", quick=True, only_if_empty=False)
+        if intermediate and normalize_title(intermediate) != normalize_title(original):
+            add(
+                intermediate,
+                "possible series-prefix title + author",
+                quick=False,
+                only_if_empty=True,
+            )
+    return rows[:4]
+
+
+def clean_search_title(
+    value: Any, series_entries: list[tuple[str, str]] | None = None
+) -> str:
+    variants = title_search_variants(value, series_entries)
+    return str(variants[0]["title"]) if variants else ""
 
 
 def _search_books_once(
@@ -2222,72 +2359,81 @@ def search_candidates(
     )
 
     series_entries = item_series_entries(item)
-    clean_title = clean_search_title(title, series_entries)
-    possible_series_title = _series_prefix_title(
-        title,
-        series_entries,
-        require_evidence=False,
-    )
-    title_was_cleaned = normalize_title(clean_title) != normalize_title(title)
-    has_series_prefix_fallback = not title_was_cleaned and normalize_title(
-        possible_series_title
-    ) != normalize_title(title)
-    broad_title = possible_series_title if has_series_prefix_fallback else clean_title
-    primary_queries: list[tuple[str, str, str, str, bool]] = []
-    if embedded_title:
-        embedded_clean_title = clean_search_title(embedded_title, series_entries)
-        primary_queries.append(
+    inferred_prefix = _series_prefix_details(title, series_entries)
+    variant_series_entries = list(series_entries)
+    if (
+        inferred_prefix
+        and inferred_prefix.get("strong")
+        and inferred_prefix.get("series")
+    ):
+        variant_series_entries.append(
             (
-                primary_provider,
-                embedded_clean_title,
-                embedded_author or author,
-                "embedded file metadata title + author",
-                False,
+                str(inferred_prefix["series"]),
+                str(inferred_prefix.get("sequence") or ""),
             )
         )
-        broad_title = embedded_clean_title
-    elif embedded_author and normalize_text(embedded_author) != normalize_text(author):
+    current_variants = title_search_variants(title, variant_series_entries)
+    embedded_variants = (
+        title_search_variants(embedded_title, variant_series_entries)
+        if embedded_title
+        else []
+    )
+    if not adaptive:
+        current_variants = current_variants[:1]
+        embedded_variants = embedded_variants[:1]
+
+    primary_author = author or embedded_author
+    primary_queries: list[tuple[str, str, str, str, bool, bool]] = []
+    for variant in current_variants:
         primary_queries.append(
             (
                 primary_provider,
-                clean_title if title_was_cleaned else title,
+                str(variant["title"]),
+                primary_author,
+                str(variant["strategy"]),
+                bool(variant["onlyIfEmpty"]),
+                bool(variant["quickMatchEligible"]),
+            )
+        )
+    for variant in embedded_variants:
+        primary_queries.append(
+            (
+                primary_provider,
+                str(variant["title"]),
+                embedded_author or author,
+                f"embedded file metadata / {variant['strategy']}",
+                bool(variant["onlyIfEmpty"]),
+                bool(variant["quickMatchEligible"]),
+            )
+        )
+    if (
+        embedded_author
+        and not embedded_title
+        and normalize_text(embedded_author) != normalize_text(author)
+    ):
+        primary_queries.append(
+            (
+                primary_provider,
+                str(current_variants[0]["title"] if current_variants else title),
                 embedded_author,
                 "ABS title + embedded file metadata author",
                 False,
+                True,
             )
         )
-    primary_queries.append(
-        (
-            primary_provider,
-            clean_title if title_was_cleaned else title,
-            author,
-            "parsed title + author" if title_was_cleaned else "precise title + author",
-            False,
-        )
-    )
+
+    broad_title = str(current_variants[0]["title"] if current_variants else title)
+    broad_author = primary_author
+    if (
+        embedded_variants
+        and normalize_title(broad_title) == normalize_title(title)
+        and normalize_title(embedded_variants[0]["title"]) != normalize_title(title)
+    ):
+        broad_title = str(embedded_variants[0]["title"])
+        broad_author = embedded_author or author
     if adaptive:
-        if title_was_cleaned:
-            primary_queries.append(
-                (
-                    primary_provider,
-                    title,
-                    author,
-                    "original unparsed title + author",
-                    True,
-                )
-            )
-        elif has_series_prefix_fallback:
-            primary_queries.append(
-                (
-                    primary_provider,
-                    possible_series_title,
-                    author,
-                    "possible series-prefix title + author",
-                    True,
-                )
-            )
         primary_queries.append(
-            (primary_provider, broad_title, "", "parsed title only", True)
+            (primary_provider, broad_title, "", "best parsed title only", True, False)
         )
 
     configured_fallbacks = matching.get("fallbackProviders") or []
@@ -2361,7 +2507,14 @@ def search_candidates(
             }
         )
     seen_queries: set[tuple[str, str, str]] = set()
-    for provider, query_title, query_author, strategy, only_if_empty in primary_queries:
+    for (
+        provider,
+        query_title,
+        query_author,
+        strategy,
+        only_if_empty,
+        quick_match_eligible,
+    ) in primary_queries:
         if only_if_empty and candidates:
             continue
         query_key = (
@@ -2442,13 +2595,7 @@ def search_candidates(
                 "quickMatchEligible": (
                     provider == primary_provider
                     and provider not in {"google", "openlibrary"}
-                    and strategy
-                    in {
-                        "precise title + author",
-                        "parsed title + author",
-                        "embedded file metadata title + author",
-                        "ABS title + embedded file metadata author",
-                    }
+                    and quick_match_eligible
                     and provider_rank == 0
                 ),
             }
@@ -2480,7 +2627,7 @@ def search_candidates(
                 "stage": "Google second pass",
                 "strategy": "after ABS did not auto-match",
                 "queryTitle": broad_title,
-                "queryAuthor": embedded_author or author,
+                "queryAuthor": broad_author,
                 "resultCount": 0,
                 "status": "skipped",
                 "message": "Google Books skipped: add and test an API key in Providers",
@@ -2493,7 +2640,7 @@ def search_candidates(
                 "stage": "Open Library third stage",
                 "strategy": "after ABS and Google did not auto-match",
                 "queryTitle": broad_title,
-                "queryAuthor": embedded_author or author,
+                "queryAuthor": broad_author,
                 "resultCount": 0,
                 "status": "skipped",
                 "message": "Open Library skipped: enable it in Providers",
@@ -2504,7 +2651,7 @@ def search_candidates(
         query_key = (
             provider,
             normalize_title(broad_title),
-            normalize_text(embedded_author or author),
+            normalize_text(broad_author),
         )
         if query_key in seen_queries or not query_key[1]:
             continue
@@ -2520,7 +2667,7 @@ def search_candidates(
         )
         params = {
             "title": broad_title,
-            "author": embedded_author or author,
+            "author": broad_author,
             "provider": provider,
             "limit": candidate_limit,
         }
@@ -2540,7 +2687,7 @@ def search_candidates(
             ),
             "strategy": strategy,
             "queryTitle": broad_title,
-            "queryAuthor": embedded_author or author,
+            "queryAuthor": broad_author,
             "resultCount": len(results),
             "status": (
                 "disabled"
@@ -2582,7 +2729,7 @@ def search_candidates(
                 "provider": provider,
                 "strategy": strategy,
                 "queryTitle": broad_title,
-                "queryAuthor": embedded_author or author,
+                "queryAuthor": broad_author,
                 "originalTitle": title,
                 "providerRank": provider_rank + 1,
                 "quickMatchEligible": False,
