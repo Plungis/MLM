@@ -84,6 +84,7 @@ const checkboxIds = [
   "skipMissingItems",
   "skipInvalidItems",
   "overwriteMetadata",
+  "repairSeries",
   "adaptiveSearch",
   "automaticFallbackProviders",
   "strictAutoMatch",
@@ -536,6 +537,7 @@ function getSettingsFromForm() {
       minimumStrongSignals: Number($("minimumStrongSignals").value || 2),
       applyMode: $("applyMode").value,
       overwriteMetadata: $("overwriteMetadata").checked,
+      repairSeries: $("repairSeries").checked,
       coverMode: $("coverMode").value,
       quickMatchFirstResultOnly: $("quickMatchFirstResultOnly").checked,
       requireAuthor: $("requireAuthor").checked,
@@ -809,8 +811,14 @@ function candidateAuthor(candidate) {
 
 function candidateSeries(candidate) {
   const series = candidate.series;
-  if (Array.isArray(series)) return series.map((entry) => entry.name || entry).join(", ");
-  if (series && typeof series === "object") return series.name || "";
+  const label = (entry) => {
+    if (!entry || typeof entry !== "object") return String(entry || "");
+    const name = entry.name || entry.series || entry.title || "";
+    const sequence = entry.sequence || entry.seq || entry.number || "";
+    return sequence ? `${name} #${sequence}` : name;
+  };
+  if (Array.isArray(series)) return series.map(label).filter(Boolean).join(", ");
+  if (series && typeof series === "object") return label(series);
   return series || "";
 }
 
@@ -890,7 +898,8 @@ function authorMatchInfo(scored) {
 function renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex = 0) {
   const candidate = scored.candidate || {};
   const checked = candidateIndex === selectedIndex ? "checked" : "";
-  const meta = [candidateSeries(candidate), candidateNarrator(candidate), candidate.publishedYear].filter(Boolean).join(" | ");
+  const series = candidateSeries(candidate);
+  const meta = [series, candidateNarrator(candidate), candidate.publishedYear].filter(Boolean).join(" | ");
   const author = candidateAuthor(candidate) || "Unknown author";
   const authorInfo = authorMatchInfo(scored);
   const searchOrigin = scored.searchSource === "manual"
@@ -911,6 +920,7 @@ function renderCandidateCard(scored, rowIndex, candidateIndex, selectedIndex = 0
         ${authorInfo.matches ? `<strong>Author match ${Math.round(authorInfo.score)}</strong>` : `<em>Author ${Math.round(authorInfo.score)}</em>`}
       </div>
       <div class="match-score"><span class="score">${scored.score}</span> match score</div>
+      ${series ? `<div class="evidence-line">Series to write: ${escapeHtml(series)}${candidate._absidekickSeriesSource ? ` · ${escapeHtml(candidate._absidekickSeriesSource)}` : ""}</div>` : ""}
       ${scored.strongSignals?.length ? `<div class="evidence-line">Strong: ${escapeHtml(scored.strongSignals.join(", "))}</div>` : ""}
       ${scored.conflicts?.length ? `<div class="conflict-line">Check: ${escapeHtml(scored.conflicts.join("; "))}</div>` : ""}
       ${scored.advisories?.length ? `<div class="evidence-line">Note: ${escapeHtml(scored.advisories.join("; "))}</div>` : ""}

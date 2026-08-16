@@ -14,6 +14,7 @@ from mlm.modules.absidekick.core import (
     build_review_row,
     candidate_metadata_payload,
     clean_search_title,
+    enrich_candidate_series,
     extract_embedded_file_metadata,
     google_books_key_fingerprint,
     match_decision,
@@ -26,6 +27,7 @@ from mlm.modules.absidekick.core import (
     search_candidates,
     search_open_library,
     search_review_candidates,
+    series_payload,
     should_process_item,
     summarize_item,
     title_search_variants,
@@ -761,6 +763,77 @@ class ScoringTests(unittest.TestCase):
         self.assertNotIn("authors", payload)
         self.assertEqual(payload["asin"], "B000123")
 
+    def test_audible_series_shape_is_written_as_abs_series_sequence(self):
+        payload = series_payload(
+            {
+                "series": [
+                    {"series": "Sword of Truth", "sequence": "01"},
+                    {"series": "Chronicles", "sequence": "2.50"},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            payload,
+            [
+                {"name": "Sword of Truth", "sequence": "1"},
+                {"name": "Chronicles", "sequence": "2.5"},
+            ],
+        )
+
+    def test_series_repair_updates_missing_number_without_metadata_overwrite(self):
+        payload = candidate_metadata_payload(
+            {"seriesName": "Sword of Truth"},
+            {
+                "series": [
+                    {"series": "Sword of Truth", "sequence": "1"},
+                    {"series": "The First Law World", "sequence": "2"},
+                ]
+            },
+            overwrite=False,
+        )
+
+        self.assertEqual(
+            payload["series"],
+            [
+                {"name": "Sword of Truth", "sequence": "1"},
+                {"name": "The First Law World", "sequence": "2"},
+            ],
+        )
+
+    def test_series_repair_preserves_a_known_number_when_provider_omits_it(self):
+        payload = candidate_metadata_payload(
+            {"series": [{"name": "Sword of Truth", "sequence": "1"}]},
+            {"series": [{"series": "Sword of Truth", "sequence": None}]},
+            overwrite=False,
+        )
+
+        self.assertNotIn("series", payload)
+
+    def test_series_repair_can_be_disabled(self):
+        payload = candidate_metadata_payload(
+            {"seriesName": "Sword of Truth"},
+            {"series": [{"series": "Sword of Truth", "sequence": "1"}]},
+            overwrite=False,
+            repair_series=False,
+        )
+
+        self.assertNotIn("series", payload)
+
+    def test_explicit_provider_subtitle_can_supply_series_and_number(self):
+        candidate = {
+            "title": "Wizard's First Rule",
+            "subtitle": "Sword of Truth, Book I",
+        }
+
+        enrich_candidate_series(candidate, sample_item(), DEFAULT_SETTINGS)
+
+        self.assertEqual(
+            candidate["series"],
+            [{"name": "Sword of Truth", "sequence": "1"}],
+        )
+        self.assertEqual(candidate["_absidekickSeriesSource"], "provider subtitle")
+
     def test_metadata_payload_deduplicates_case_variant_authors(self):
         payload = candidate_metadata_payload(
             {},
@@ -1494,6 +1567,7 @@ class ScoringTests(unittest.TestCase):
                 "googleBooksApiKeyFingerprint": google_books_key_fingerprint(
                     "tested-key"
                 ),
+                "openLibraryEnabled": False,
             }
         )
 
@@ -1820,12 +1894,14 @@ class ScoringTests(unittest.TestCase):
         class RecordingClient:
             def __init__(self):
                 self.posts = []
+                self.patches = []
 
             def post(self, path, params=None, body=None):
                 self.posts.append((path, params, body))
                 return {"ok": True}
 
             def patch(self, path, body):
+                self.patches.append((path, body))
                 return {"ok": True, "path": path, "body": body}
 
         item = sample_item()
@@ -1834,6 +1910,7 @@ class ScoringTests(unittest.TestCase):
         candidate = {
             "title": "The Masterharper of Pern",
             "author": "Anne McCaffrey",
+            "series": [{"series": "Pern", "sequence": "17"}],
             "_absidekickSearch": {
                 "strategy": "parsed title + author",
                 "queryTitle": "The Masterharper of Pern",
@@ -1849,6 +1926,10 @@ class ScoringTests(unittest.TestCase):
         apply_match(client, item, scored, settings)
 
         self.assertEqual(client.posts[0][1]["title"], "The Masterharper of Pern")
+        self.assertEqual(
+            client.patches[0][1]["metadata"]["series"],
+            [{"name": "Pern", "sequence": "17"}],
+        )
 
     def test_abs_series_metadata_can_confirm_a_non_repeating_prefix(self):
         entries = [("Discworld", "4")]

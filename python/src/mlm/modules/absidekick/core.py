@@ -99,6 +99,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "minimumStrongSignals": 2,
         "applyMode": "metadata_patch",
         "overwriteMetadata": False,
+        "repairSeries": True,
         "coverMode": "if_missing",
         "quickMatchFirstResultOnly": True,
         "requireAuthor": False,
@@ -804,14 +805,40 @@ def candidate_narrator(candidate: dict[str, Any]) -> Any:
 
 
 def candidate_series(candidate: dict[str, Any]) -> Any:
-    series = candidate.get("series")
-    if isinstance(series, list):
-        return ", ".join(
-            str(s.get("name") if isinstance(s, dict) else s) for s in series
-        )
-    if isinstance(series, dict):
-        return series.get("name")
-    return series
+    return ", ".join(
+        f"{entry['name']} #{entry['sequence']}"
+        if entry.get("sequence")
+        else str(entry["name"])
+        for entry in series_payload(candidate)
+    )
+
+
+def _normalized_series_sequence(value: Any) -> str:
+    """Normalize a series position without destroying decimals or ranges."""
+
+    raw = html.unescape(str(value or "")).strip()
+    raw = re.sub(
+        r"^\s*(?:(?:book|volume|vol)\.?\s*#?\s*|#\s*)",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not raw:
+        return ""
+
+    roman = raw.lower()
+    if re.fullmatch(r"[ivxlcdm]+", roman):
+        if roman == "i":
+            return "1"
+        if roman in ROMAN_NUMERALS:
+            return ROMAN_NUMERALS[roman]
+
+    numeric = re.fullmatch(r"0*(\d+)(?:\.(\d+))?", raw)
+    if numeric:
+        whole = str(int(numeric.group(1)))
+        fraction = str(numeric.group(2) or "").rstrip("0")
+        return f"{whole}.{fraction}" if fraction else whole
+    return re.sub(r"\s+", " ", raw).strip()
 
 
 def _series_entries(value: Any) -> list[tuple[str, str]]:
@@ -830,7 +857,7 @@ def _series_entries(value: Any) -> list[tuple[str, str]]:
             name = str(entry).strip()
             sequence = ""
         if name:
-            entries.append((name, normalize_identifier(sequence)))
+            entries.append((name, _normalized_series_sequence(sequence)))
     return entries
 
 
@@ -1549,28 +1576,175 @@ def empty_value(value: Any) -> bool:
 
 
 def series_payload(candidate: dict[str, Any]) -> list[dict[str, str | None]]:
-    series = candidate.get("series")
-    if isinstance(series, list):
-        payload = []
-        for item in series:
-            if isinstance(item, dict) and item.get("name"):
-                payload.append(
-                    {"name": str(item.get("name")), "sequence": item.get("sequence")}
+    """Translate provider series shapes to ABS Series Sequence objects.
+
+    Audiobookshelf's Audible search returns ``{"series": name, "sequence": n}``,
+    while stored book metadata and some other providers use ``name``. Accept both
+    without flattening multiple series memberships.
+    """
+
+    raw_series = candidate.get("series")
+    values = raw_series if isinstance(raw_series, list) else [raw_series]
+    if empty_value(raw_series) and candidate.get("seriesName"):
+        values = [
+            {
+                "name": candidate.get("seriesName"),
+                "sequence": candidate.get("seriesSequence"),
+            }
+        ]
+
+    payload: list[dict[str, str | None]] = []
+    positions: dict[str, int] = {}
+    for item in values:
+        if isinstance(item, dict):
+            name = str(
+                first_present(
+                    item.get("name"), item.get("series"), item.get("title"), ""
                 )
-            elif item:
-                payload.append({"name": str(item), "sequence": None})
-        return payload
-    if isinstance(series, dict) and series.get("name"):
-        return [{"name": str(series.get("name")), "sequence": series.get("sequence")}]
-    if isinstance(series, str) and series.strip():
-        return [{"name": series.strip(), "sequence": None}]
+                or ""
+            ).strip()
+            sequence = first_present(
+                item.get("sequence"),
+                item.get("seq"),
+                item.get("number"),
+                item.get("position"),
+                item.get("seriesSequence"),
+            )
+        else:
+            name = str(item or "").strip()
+            sequence = candidate.get("seriesSequence")
+        identity = normalize_text(name)
+        if not identity:
+            continue
+        normalized_sequence = _normalized_series_sequence(sequence) or None
+        if identity in positions:
+            existing = payload[positions[identity]]
+            if not existing.get("sequence") and normalized_sequence:
+                existing["sequence"] = normalized_sequence
+            continue
+        positions[identity] = len(payload)
+        payload.append({"name": name, "sequence": normalized_sequence})
+    return payload
+
+
+def _existing_series_payload(
+    existing_metadata: dict[str, Any],
+) -> list[dict[str, str | None]]:
+    rows = series_payload({"series": existing_metadata.get("series")})
+    if rows:
+        return rows
+    return series_payload(
+        {
+            "seriesName": existing_metadata.get("seriesName"),
+            "seriesSequence": first_present(
+                existing_metadata.get("seriesSequence"),
+                existing_metadata.get("sequence"),
+                existing_metadata.get("seriesNumber"),
+            ),
+        }
+    )
+
+
+def _series_payload_identity(
+    rows: list[dict[str, str | None]],
+) -> list[tuple[str, str]]:
+    return [
+        (
+            normalize_text(row.get("name")),
+            _normalized_series_sequence(row.get("sequence")).casefold(),
+        )
+        for row in rows
+        if normalize_text(row.get("name"))
+    ]
+
+
+def _preserve_known_series_sequences(
+    candidate_rows: list[dict[str, str | None]],
+    existing_rows: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    existing_by_name = {
+        normalize_text(row.get("name")): row
+        for row in existing_rows
+        if normalize_text(row.get("name"))
+    }
+    merged = deepcopy(candidate_rows)
+    for row in merged:
+        existing = existing_by_name.get(normalize_text(row.get("name")))
+        if existing and not row.get("sequence") and existing.get("sequence"):
+            row["sequence"] = existing["sequence"]
+    return merged
+
+
+def _series_from_subtitle(candidate: dict[str, Any]) -> list[dict[str, str | None]]:
+    subtitle = html.unescape(str(candidate.get("subtitle") or "")).strip()
+    if not subtitle or len(subtitle) > 180:
+        return []
+    patterns = (
+        re.compile(
+            r"^(?P<name>.+?)(?:\s*[,|:\-–—]\s*)"
+            r"(?:book|volume|vol)\.?\s*#?\s*"
+            r"(?P<sequence>\d{1,3}(?:\.\d+)?|[ivxlcdm]{1,8})$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^(?:book|volume|vol)\.?\s*#?\s*"
+            r"(?P<sequence>\d{1,3}(?:\.\d+)?|[ivxlcdm]{1,8})\s+"
+            r"(?:of|in)\s+(?:the\s+)?(?P<name>.+?)(?:\s+series)?$",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in patterns:
+        match = pattern.fullmatch(subtitle)
+        if not match:
+            continue
+        name = match.group("name").strip(" ,:|-–—")
+        if len(normalize_text(name)) < 3:
+            continue
+        return [
+            {
+                "name": name,
+                "sequence": _normalized_series_sequence(match.group("sequence")),
+            }
+        ]
     return []
+
+
+def enrich_candidate_series(
+    candidate: dict[str, Any],
+    item: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach normalized, high-confidence series metadata to a candidate."""
+
+    rows = series_payload(candidate)
+    source = "provider"
+    if (
+        not rows
+        and item
+        and (settings or {}).get("matching", {}).get("useEmbeddedFileMetadata", False)
+    ):
+        embedded = embedded_item_metadata(item)
+        rows = series_payload(
+            {
+                "seriesName": embedded.get("series"),
+                "seriesSequence": embedded.get("seriesSequence"),
+            }
+        )
+        source = "embedded file metadata"
+    if not rows:
+        rows = _series_from_subtitle(candidate)
+        source = "provider subtitle"
+    if rows:
+        candidate["series"] = rows
+        candidate["_absidekickSeriesSource"] = source
+    return candidate
 
 
 def candidate_metadata_payload(
     existing_metadata: dict[str, Any],
     candidate: dict[str, Any],
     overwrite: bool,
+    repair_series: bool = True,
 ) -> dict[str, Any]:
     mapped: dict[str, Any] = {
         "title": candidate.get("title"),
@@ -1617,8 +1791,16 @@ def candidate_metadata_payload(
                 continue
         if key == "narrators" and existing_metadata.get("narratorName"):
             existing_value = existing_metadata.get("narratorName")
-        if key == "series" and existing_metadata.get("seriesName"):
-            existing_value = existing_metadata.get("seriesName")
+        if key == "series":
+            existing_series = _existing_series_payload(existing_metadata)
+            value = _preserve_known_series_sequences(value, existing_series)
+            if repair_series:
+                if _series_payload_identity(value) != _series_payload_identity(
+                    existing_series
+                ):
+                    payload[key] = value
+                continue
+            existing_value = existing_series
         if overwrite or empty_value(existing_value):
             payload[key] = value
     return payload
@@ -2252,15 +2434,6 @@ class CandidateResults(list[dict[str, Any]]):
         super().__init__(values or [])
         self.diagnostics = diagnostics or []
         self.attempts = attempts or []
-
-
-def _normalized_series_sequence(value: Any) -> str:
-    normalized = normalize_text(value)
-    if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
-        whole, dot, fraction = normalized.partition(".")
-        fraction = fraction.rstrip("0")
-        return f"{int(whole)}{dot}{fraction}" if fraction else str(int(whole))
-    return normalized
 
 
 def _series_prefix_details(
@@ -2928,6 +3101,7 @@ def search_candidates(
             if not isinstance(candidate, dict):
                 continue
             candidate = deepcopy(candidate)
+            enrich_candidate_series(candidate, item, settings)
             candidate["_absidekickSearch"] = {
                 "provider": provider,
                 "strategy": strategy,
@@ -3084,6 +3258,7 @@ def search_candidates(
             if not isinstance(candidate, dict):
                 continue
             candidate = deepcopy(candidate)
+            enrich_candidate_series(candidate, item, settings)
             candidate["_absidekickSearch"] = {
                 "provider": provider,
                 "strategy": strategy,
@@ -3194,11 +3369,14 @@ def search_review_candidates(
     scoring_metadata["title"] = title
     scoring_metadata["authorName"] = author
     scoring_metadata.pop("authors", None)
-    ranked = rank_candidates(
-        scoring_item,
-        [candidate for candidate in results if isinstance(candidate, dict)][:limit],
-        settings,
-    )
+    normalized_results = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        candidate = deepcopy(result)
+        enrich_candidate_series(candidate, item, settings)
+        normalized_results.append(candidate)
+    ranked = rank_candidates(scoring_item, normalized_results[:limit], settings)
     candidates = [
         {
             **scored,
@@ -3255,11 +3433,15 @@ def get_library_item(client: ABSClient, item_id: str) -> dict[str, Any]:
 def summarize_item(item: dict[str, Any]) -> dict[str, Any]:
     metadata = item_metadata(item)
     item_id = item.get("id")
+    series = ", ".join(
+        f"{name} #{sequence}" if sequence else name
+        for name, sequence in item_series_entries(item)
+    )
     return {
         "id": item_id,
         "title": item_title(item),
         "author": item_author(item),
-        "series": first_present(metadata.get("seriesName"), metadata.get("series"), ""),
+        "series": series,
         "narrator": first_present(
             metadata.get("narratorName"), metadata.get("narrators"), ""
         ),
@@ -3491,7 +3673,18 @@ def apply_match(
                 else "false",
             },
         )
-        return patch_item_tags(client, item, new_tags) or {
+        followup_payload: dict[str, Any] = {"tags": new_tags}
+        if matching.get("repairSeries", True):
+            repaired_series = candidate_metadata_payload(
+                item_metadata(item),
+                candidate,
+                overwrite=False,
+                repair_series=True,
+            ).get("series")
+            if repaired_series:
+                followup_payload["metadata"] = {"series": repaired_series}
+        result = client.patch(f"/api/items/{item_id}/media", followup_payload)
+        return result or {
             "updated": True,
             "tags": new_tags,
         }
@@ -3507,6 +3700,7 @@ def apply_match(
         item_metadata(item),
         candidate,
         overwrite=bool(matching.get("overwriteMetadata", False)),
+        repair_series=bool(matching.get("repairSeries", True)),
     )
     if metadata:
         payload["metadata"] = metadata
@@ -3744,6 +3938,10 @@ class MatchJob:
                             author=author,
                             score=best_score,
                             candidate=best["candidate"].get("title"),
+                            series=series_payload(best["candidate"]),
+                            seriesSource=best["candidate"].get(
+                                "_absidekickSeriesSource"
+                            ),
                             confidence=decision["confidence"],
                             margin=decision["margin"],
                             signals=best.get("strongSignals", []),

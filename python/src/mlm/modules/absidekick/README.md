@@ -144,6 +144,22 @@ records an actionable warning, and continues using normal ABS metadata.
 List-shaped narrator data returned by Audiobookshelf is normalized before
 deduplication and scoring.
 
+## Series repair
+
+`matching.repairSeries` is enabled by default and is independent of the broad
+`overwriteMetadata` switch. After a match, ABSidekick writes Audiobookshelf's
+structured series array with both the series name and its sequence. Audible
+search responses use `series` for the series name while stored ABS metadata uses
+`name`; the module accepts both shapes, preserves multiple series memberships,
+deduplicates repeated entries, and retains decimal sequence values.
+
+Provider-supplied structured series data has priority. If it is absent, opted-in
+embedded file tags may supply the series name and number; a clearly structured
+provider subtitle such as `Sword of Truth, Book 1` is the final fallback.
+Existing sequence data is preserved when the provider supplies the same series
+without a number. Disable **Repair ABS series names and book numbers** in Match
+Policy to retain the older fill-empty-only behavior.
+
 Search execution is deliberately bounded: no more than four evidence-ranked
 title variants are produced, duplicate queries are suppressed, optional ABS
 fallback providers are opt-in, and search requests use a short timeout. Native
