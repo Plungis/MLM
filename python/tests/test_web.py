@@ -92,6 +92,16 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
                 canonical_json(event),
             ),
         )
+    Repository(database).add_selected(
+        {
+            "mam_id": 1001,
+            "title_search": "A queued book",
+            "created_at": "2025-01-01T00:00:00Z",
+            "started_at": None,
+            "removed_at": None,
+            "meta": {"title": "A queued book"},
+        }
+    )
     app = create_app(config, database)
     client = TestClient(app)
 
@@ -107,9 +117,17 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Request Portal" in dashboard.text
     assert 'href="/request"' in dashboard.text
     assert "Library Control" not in dashboard.text
-    assert "Run pipeline" in dashboard.text
+    assert "Your library, at a glance" in dashboard.text
+    assert "How HeavyMLM works" in dashboard.text
+    assert "The queue contains releases HeavyMLM selected" in dashboard.text
+    assert "Selected and waiting; it is not stuck" in dashboard.text
+    assert 'action="/actions/lists"' in dashboard.text
+    assert 'action="/actions/autograb"' in dashboard.text
+    assert 'action="/actions/downloader"' in dashboard.text
+    assert 'action="/actions/organizer"' in dashboard.text
+    assert 'action="/actions/cleaner"' in dashboard.text
     assert 'class="nav-link active"' in dashboard.text
-    assert "Show background activity" in triggered_dashboard.text
+    assert "View live details" in triggered_dashboard.text
     assert 'data-focus-job="organizer"' in triggered_dashboard.text
     assert client.get("/static/app.css").status_code == 200
     events = client.get("/records/events")
@@ -147,8 +165,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b53"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b53"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b54"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b54"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -252,7 +270,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b53" in spender_config.text
+    assert "0.5.0b54" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -278,6 +296,10 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             }
         ],
     )
+    live_dashboard = client.get("/")
+    assert "40 left" in live_dashboard.text
+    assert "5 spendable" in live_dashboard.text
+    assert "1 running now" in live_dashboard.text
     job_status = client.get("/api/jobs")
     assert job_status.status_code == 200
     assert job_status.json()["jobs"]["organizer:0"]["running"] is True

@@ -273,7 +273,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "index.html",
             await context(
                 request,
-                title="Dashboard",
+                title="Home",
                 triggered=request.query_params.get("triggered"),
             ),
         )
