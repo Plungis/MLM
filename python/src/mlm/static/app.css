@@ -1679,6 +1679,12 @@ input::placeholder {
   font-size: 11px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .home-header {
   margin-bottom: 20px;
 }
@@ -1905,7 +1911,7 @@ input::placeholder {
 
 .workflow-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .workflow-step {
@@ -2698,24 +2704,6 @@ pre {
   text-transform: uppercase;
 }
 
-@media (max-width: 1280px) {
-  .workflow-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .workflow-step:nth-child(2) {
-    border-right: 0;
-  }
-
-  .workflow-step:nth-child(-n + 2) {
-    border-bottom: 1px dashed var(--line-soft);
-  }
-
-  .workflow-step:nth-child(2)::after {
-    display: none;
-  }
-}
-
 @media (max-width: 1100px) {
   .metric-grid,
   .config-summary,
@@ -2729,6 +2717,24 @@ pre {
 
   .home-overview {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-step {
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px dashed var(--line-soft);
+  }
+
+  .workflow-step:last-child {
+    border-bottom: 0;
+  }
+
+  .workflow-step::after {
+    display: none;
   }
 
   .hm-filter-grid {
@@ -2958,6 +2964,12 @@ pre {
   margin: 0;
 }
 
+.error-center-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
 .operations-view-header p {
   color: var(--muted);
   margin-top: 0.35rem;
@@ -2998,6 +3010,11 @@ pre {
 @media (max-width: 720px) {
   .operations-view-header {
     display: grid;
+  }
+
+  .error-center-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

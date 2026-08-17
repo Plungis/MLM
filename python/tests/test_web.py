@@ -119,13 +119,17 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Library Control" not in dashboard.text
     assert "Your library, at a glance" in dashboard.text
     assert "How HeavyMLM works" in dashboard.text
-    assert "The queue contains releases HeavyMLM selected" in dashboard.text
-    assert "Selected and waiting; it is not stuck" in dashboard.text
+    assert "There is no download queue to manage" in dashboard.text
+    assert "Download &amp; organize" in dashboard.text
+    assert "HeavyMLM sends selected releases automatically" in dashboard.text
+    assert "Download Queue" not in dashboard.text
+    assert 'href="/records/selected_torrents"' not in dashboard.text
     assert 'action="/actions/lists"' in dashboard.text
     assert 'action="/actions/autograb"' in dashboard.text
-    assert 'action="/actions/downloader"' in dashboard.text
-    assert 'action="/actions/organizer"' in dashboard.text
-    assert 'action="/actions/cleaner"' in dashboard.text
+    assert 'action="/actions/downloader"' not in dashboard.text
+    assert 'action="/actions/organizer"' not in dashboard.text
+    assert 'action="/actions/cleaner"' not in dashboard.text
+    assert Repository(database).has_pending_mam_id(1001) is True
     assert 'class="nav-link active"' in dashboard.text
     assert "View live details" in triggered_dashboard.text
     assert 'data-focus-job="organizer"' in triggered_dashboard.text
@@ -165,8 +169,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b54"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b54"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b55"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b55"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -270,7 +274,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b54" in spender_config.text
+    assert "0.5.0b55" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -443,7 +447,7 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     repository.record_grab_error(selected, RuntimeError("temporary failure"))
     repository.delete_selected(42)
     stale_page = client.get("/records/errored_torrents")
-    assert "No longer queued" in stale_page.text
+    assert "No longer pending" in stale_page.text
     assert "Retry now" not in stale_page.text
     stale_retry = client.post(
         "/errors/retry",
@@ -488,6 +492,35 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
     assert "Disabled (strict)" in wedge_page.text
     assert "/tor/download.php?tid=42&amp;fl" in wedge_page.text
     assert "test rejection" in wedge_page.text
+
+    repository.add_selected(selected)
+    repository.record_grab_error(selected, RuntimeError("wedge rejected by tracker"))
+    repository.record_organizer_error(
+        "organizer-hash",
+        "Another Book",
+        "copy failed",
+        {"source": "D:\\Book.m4b", "destination": "E:\\Library\\Book.m4b"},
+    )
+    dismiss_all_page = client.get("/operations?view=errors")
+    assert "unresolved" in dismiss_all_page.text
+    assert 'action="/errors/dismiss-all"' in dismiss_all_page.text
+    assert (
+        "will not delete torrents, downloads, files, or job history"
+        in dismiss_all_page.text
+    )
+
+    dismissed_all = client.post("/errors/dismiss-all", follow_redirects=False)
+    assert dismissed_all.status_code == 303
+    assert dismissed_all.headers["location"].endswith("dismissed_all=2")
+    assert repository.table_rows("errored_torrents") == []
+    assert repository.has_pending_mam_id(42) is True
+
+    dismissal_confirmation = client.get(dismissed_all.headers["location"])
+    assert "Dismissed 2 stored errors" in dismissal_confirmation.text
+    assert (
+        "Torrents, downloads, files, and job history were not changed"
+        in dismissal_confirmation.text
+    )
 
 
 def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(

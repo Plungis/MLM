@@ -357,6 +357,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 last_record=(page - 1) * page_size + len(rows),
                 retried=request.query_params.get("retried") == "1",
                 dismissed=request.query_params.get("dismissed") == "1",
+                dismissed_all=(
+                    int(request.query_params["dismissed_all"])
+                    if request.query_params.get("dismissed_all", "").isdigit()
+                    else None
+                ),
             ),
         )
 
@@ -511,10 +516,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         except json.JSONDecodeError as error:
             raise HTTPException(400, "invalid error identifier") from error
         if mam_id is None or not repository.has_pending_mam_id(mam_id):
-            raise HTTPException(
-                409, "release is no longer waiting in the download queue"
-            )
+            raise HTTPException(409, "release is no longer pending for download")
         repository.delete_error(identifier)
+        snapshot_cache["expires"] = 0.0
         asyncio.create_task(app.state.services.trigger("downloader"))
         return RedirectResponse("/operations?view=errors&retried=1", status_code=303)
 
@@ -525,7 +529,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         except json.JSONDecodeError as error:
             raise HTTPException(400, "invalid error identifier") from error
         repository.delete_error(identifier)
+        snapshot_cache["expires"] = 0.0
         return RedirectResponse("/operations?view=errors&dismissed=1", status_code=303)
+
+    @app.post("/errors/dismiss-all")
+    async def dismiss_all_errors() -> RedirectResponse:
+        dismissed = repository.dismiss_all_errors()
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse(
+            f"/operations?view=errors&dismissed_all={dismissed}", status_code=303
+        )
 
     mam_spender_views = {"dashboard", "config", "history", "analytics", "mam-data"}
     mam_spender_aliases = {

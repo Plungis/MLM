@@ -44,9 +44,6 @@
         <a class="nav-link{% if path == '/library' %} active{% endif %}" href="/library">
           <span>MLM Processed Library</span><span class="nav-count">{{ counts.get("torrents", 0) }}</span>
         </a>
-        <a class="nav-link{% if path == '/records/selected_torrents' %} active{% endif %}" href="/records/selected_torrents">
-          <span>Download Queue</span><span class="nav-count">{{ counts.get("selected_torrents", 0) }}</span>
-        </a>
         <a class="nav-link{% if path == '/lists' %} active{% endif %}" href="/lists">
           <span>Lists</span><span class="nav-count">{{ counts.get("list_items", 0) }}</span>
         </a>

@@ -11,6 +11,14 @@ document.querySelectorAll(".nav-link").forEach((link) => {
   link.addEventListener("click", () => document.body.classList.remove("nav-open"));
 });
 
+document.querySelectorAll("form[data-confirm]").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    if (!window.confirm(form.dataset.confirm || "Continue?")) {
+      event.preventDefault();
+    }
+  });
+});
+
 function localizeTimes(root = document) {
   root.querySelectorAll("[data-local-time]").forEach((element) => {
     const value = element.getAttribute("data-local-time");

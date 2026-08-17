@@ -1,10 +1,17 @@
 <section class="operations-view-header">
   <div><h2>Recovery center</h2><p>Every failure includes its exact reason, a recovery path, and a direct way to retry or dismiss it.</p></div>
-  <span class="chip">{{ total }} unresolved</span>
+  <div class="error-center-actions">
+    <span class="chip">{{ total }} unresolved</span>
+    <form action="/errors/dismiss-all" method="post" data-confirm="Dismiss all {{ total }} stored errors? This only clears the error reports; it will not delete torrents, downloads, files, or job history.">
+      <button class="danger" type="submit"{% if not total %} disabled{% endif %}>Dismiss all</button>
+    </form>
+  </div>
 </section>
 
 {% if retried %}
 <div class="flash">The stored error was cleared and the downloader was asked to retry it.</div>
+{% elif dismissed_all is not none %}
+<div class="flash">Dismissed {{ dismissed_all }} stored error{% if dismissed_all != 1 %}s{% endif %}. Torrents, downloads, files, and job history were not changed.</div>
 {% elif dismissed %}
 <div class="flash">The stored error was dismissed.</div>
 {% endif %}
@@ -36,7 +43,7 @@
             <button class="primary" type="submit">Retry now</button>
           </form>
           {% elif row.get("_mam_id") %}
-          <span class="status waiting">No longer queued</span>
+          <span class="status waiting">No longer pending</span>
           {% endif %}
           <form action="/errors/dismiss" method="post">
             <input type="hidden" name="error_id" value="{{ row.get('_error_id') }}">

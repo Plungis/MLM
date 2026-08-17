@@ -629,6 +629,11 @@ class Repository:
                 (canonical_json(id_json),),
             )
 
+    def dismiss_all_errors(self) -> int:
+        with connect(self.path) as connection:
+            cursor = connection.execute("DELETE FROM errored_torrents")
+            return max(0, int(cursor.rowcount))
+
     def add_metadata_torrent(self, meta: dict[str, Any], linker: str | None) -> str:
         torrent_id = str(uuid4())
         now = datetime.now(UTC).isoformat()

@@ -2,7 +2,6 @@
 {% block content %}
 {% set error_count = counts.get("errored_torrents", 0) %}
 {% set request_count = request_tracking.get("pending", 0) %}
-{% set queue_count = pipeline.awaiting %}
 {% set download_count = pipeline.downloading %}
 {% set duplicate_count = counts.get("duplicate_torrents", 0) %}
 {% set urgent_count = error_count + request_count %}
@@ -18,7 +17,7 @@
   <div>
     <p class="eyebrow">HeavyMLM / Home</p>
     <h1>Your library, at a glance</h1>
-    <p class="subtitle">See what needs you, move books through the pipeline, or let the scheduled jobs keep working.</p>
+    <p class="subtitle">See what needs you while HeavyMLM searches, downloads, and organizes in the background.</p>
   </div>
   <div class="page-meta">
     <span class="chip"><span class="status-dot"></span> MaM connected</span>
@@ -75,9 +74,6 @@
         {% if urgent_count %}
           <h2>{{ urgent_count }} item{% if urgent_count != 1 %}s{% endif %} need your attention</h2>
           <p>Handle these first; routine downloads and organization can continue in the background.</p>
-        {% elif queue_count %}
-          <h2>Your next downloads are ready</h2>
-          <p>{{ queue_count }} selected release{% if queue_count != 1 %}s are{% else %} is{% endif %} waiting to be sent to qBittorrent.</p>
         {% else %}
           <h2>Everything important is under control</h2>
           <p>No requests or errors need you right now. Search for a book or refresh your lists when you are ready.</p>
@@ -96,11 +92,6 @@
         <span class="home-task-icon" aria-hidden="true">!</span>
         <span><strong>Errors</strong><small>{% if error_count %}Open the reason and the recommended recovery steps.{% else %}No failed downloads or organizer operations.{% endif %}</small></span>
         <span class="home-task-count">{% if error_count %}{{ error_count }} open{% else %}Clear{% endif %}</span>
-      </a>
-      <a class="home-task {% if queue_count %}ready{% else %}clear{% endif %}" href="/records/selected_torrents">
-        <span class="home-task-icon" aria-hidden="true">Q</span>
-        <span><strong>Download queue</strong><small>{% if queue_count %}Selected and waiting; it is not stuck. Process the queue now or let the scheduler do it.{% else %}Nothing is waiting to be sent to qBittorrent.{% endif %}</small></span>
-        <span class="home-task-count">{{ queue_count }} ready</span>
       </a>
       <a class="home-task {% if duplicate_count %}quiet{% else %}clear{% endif %}" href="/library?view=duplicates">
         <span class="home-task-icon" aria-hidden="true">D</span>
@@ -146,7 +137,7 @@
     <div>
       <p class="eyebrow">The big picture</p>
       <h2 id="workflow-title">How HeavyMLM works</h2>
-      <p>Books move from left to right. Use a button only when you want that step to run immediately.</p>
+      <p>Books move from left to right automatically. There is no download queue to manage.</p>
     </div>
     <span class="chip">Schedules remain active</span>
   </header>
@@ -169,31 +160,17 @@
     <article class="workflow-step">
       <span class="workflow-number">02</span>
       <div class="workflow-copy">
-        <h3>Send downloads</h3>
-        <strong>{{ queue_count }} ready</strong>
-        <p>The queue contains releases HeavyMLM selected but has not sent to qBittorrent yet.</p>
+        <h3>Download &amp; organize</h3>
+        <strong>{{ download_count }} active in qBittorrent</strong>
+        <p>HeavyMLM sends selected releases automatically. qBittorrent downloads them, then HeavyMLM organizes completed books.</p>
       </div>
       <div class="workflow-actions">
-        <form action="/actions/downloader" method="post"><button class="primary" type="submit">Process queue now</button></form>
-        <a class="button" href="/records/selected_torrents">View queue</a>
+        <a class="button" href="/operations?view=diagnostics">View background activity</a>
       </div>
     </article>
 
     <article class="workflow-step">
       <span class="workflow-number">03</span>
-      <div class="workflow-copy">
-        <h3>Finish downloads</h3>
-        <strong>{{ download_count }} in qBittorrent</strong>
-        <p>qBittorrent handles the transfer. HeavyMLM waits for completion before organizing files.</p>
-      </div>
-      <div class="workflow-actions">
-        <form action="/actions/organizer" method="post"><button class="primary" type="submit">Organize completed</button></form>
-        <a class="button" href="/operations?view=diagnostics&component=organizer">View organizer trace</a>
-      </div>
-    </article>
-
-    <article class="workflow-step">
-      <span class="workflow-number">04</span>
       <div class="workflow-copy">
         <h3>Enjoy the library</h3>
         <strong>{{ counts.get("torrents", 0) }} processed</strong>
@@ -201,7 +178,7 @@
       </div>
       <div class="workflow-actions">
         <a class="button primary" href="/library">Open processed library</a>
-        <form action="/actions/cleaner" method="post"><button type="submit">Clean duplicates</button></form>
+        {% if duplicate_count %}<a class="button" href="/library?view=duplicates">Review duplicates</a>{% endif %}
       </div>
     </article>
   </div>
