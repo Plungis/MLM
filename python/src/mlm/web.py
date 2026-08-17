@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -147,11 +147,24 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             return False
 
     def request_portal_host(request: Request) -> bool:
-        hostname = (request.url.hostname or "").casefold()
-        return hostname in {
+        configured_domains = {
             domain.strip().casefold()
             for domain in active_config().request_portal_domains
         }
+        hostnames = {(request.url.hostname or "").casefold()}
+        # Nginx Proxy Manager normally preserves Host, but custom Advanced
+        # configurations sometimes retain the public name only here. Accepting
+        # a configured forwarded host can only reduce access to the request-only
+        # surface; it can never expose an administration route.
+        forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0]
+        if forwarded_host.strip():
+            try:
+                forwarded_hostname = urlsplit(f"//{forwarded_host.strip()}").hostname
+            except ValueError:
+                forwarded_hostname = None
+            if forwarded_hostname:
+                hostnames.add(forwarded_hostname.casefold())
+        return bool(hostnames & configured_domains)
 
     def request_portal_root(request: Request) -> str:
         return "/" if request_portal_host(request) else "/request"
@@ -253,6 +266,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     def request_login_mode(config: Config) -> str:
         if configured_request_users(config):
             return "credentials"
+        if config.request_portal_require_account_login:
+            return "setup_required"
         if config.request_portal_access_code:
             return "access_code"
         return "public"
@@ -261,20 +276,28 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         return config.request_portal_username if not config.request_portal_users else ""
 
     def request_portal_authorized(request: Request) -> bool:
-        # Keep localhost preview convenient, but never let a same-machine reverse
-        # proxy make the configured public hostname look like a local request.
-        if local_request(request) and not request_portal_host(request):
-            return True
         current = active_config()
-        if request_login_mode(current) == "public":
-            return True
-        supplied = request.cookies.get("mysuite_request_access", "")
-        if request_portal_identity(request) is not None:
-            return True
-        if not (
-            current.request_portal_password_hash or current.request_portal_access_code
+        login_mode = request_login_mode(current)
+        # Account-only mode deliberately has no localhost exception. Every
+        # submission must carry a named identity so its owner and quota can be
+        # audited. Anonymous local preview remains available only when the admin
+        # explicitly opts out of account-only mode.
+        if (
+            local_request(request)
+            and not request_portal_host(request)
+            and not current.request_portal_require_account_login
         ):
+            return True
+        if login_mode == "public":
+            return True
+        identity = request_portal_identity(request)
+        if login_mode == "credentials":
+            # Do not accept a legacy shared-access cookie once named credentials
+            # are active. That bypass lost the requester identity on submission.
+            return identity is not None
+        if login_mode != "access_code":
             return False
+        supplied = request.cookies.get("mysuite_request_access", "")
         return hmac.compare_digest(
             supplied,
             legacy_request_access_token(current),
@@ -967,6 +990,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         grab_both_formats: str | None = Form(None),
         add_torrents_stopped: str | None = Form(None),
         request_portal_enabled: str | None = Form(None),
+        request_portal_require_account_login: str | None = Form(None),
         request_portal_domains: str = Form(""),
         request_portal_title: str = Form("Library Requests"),
         request_portal_rate_limit: str = Form("20"),
@@ -996,6 +1020,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "grab_both_formats": grab_both_formats is not None,
                 "add_torrents_stopped": add_torrents_stopped is not None,
                 "request_portal_enabled": request_portal_enabled is not None,
+                "request_portal_require_account_login": (
+                    request_portal_require_account_login is not None
+                ),
                 "request_portal_domains": tuple(
                     domain.strip()
                     for domain in request_portal_domains.replace("\n", ",").split(",")
@@ -1324,6 +1351,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if not current.request_portal_enabled:
             raise HTTPException(404, "request portal is disabled")
         if not request_portal_authorized(request):
+            login_mode = request_login_mode(current)
             return templates.TemplateResponse(
                 request,
                 "request_unlock.html",
@@ -1331,10 +1359,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "request": request,
                     "version": __version__,
                     "portal_title": current.request_portal_title,
-                    "login_mode": request_login_mode(current),
+                    "login_mode": login_mode,
                     "portal_username": request_login_username_hint(current),
                     "error": None,
                 },
+                status_code=503 if login_mode == "setup_required" else 200,
             )
 
         identity = request_portal_identity(request)
@@ -1506,6 +1535,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             credentials_valid = hmac.compare_digest(
                 access_code, current.request_portal_access_code
             )
+        elif login_mode == "setup_required":
+            credentials_valid = False
         else:
             credentials_valid = True
         valid = allowed and credentials_valid
@@ -1523,13 +1554,24 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                         "Too many attempts. Wait one minute."
                         if not allowed
                         else (
-                            "That username or password is not valid."
-                            if login_mode == "credentials"
-                            else "That access code is not valid."
+                            "Create at least one request login account from the "
+                            "local Configuration screen before using this portal."
+                            if login_mode == "setup_required"
+                            else (
+                                "That username or password is not valid."
+                                if login_mode == "credentials"
+                                else "That access code is not valid."
+                            )
                         )
                     ),
                 },
-                status_code=429 if not allowed else 403,
+                status_code=(
+                    429
+                    if not allowed
+                    else 503
+                    if login_mode == "setup_required"
+                    else 403
+                ),
             )
         response = RedirectResponse(request_portal_root(request), status_code=303)
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0]
@@ -1630,6 +1672,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if website.strip():
             return RedirectResponse(f"{root}?submitted=pending", status_code=303)
         identity = request_portal_identity(request)
+        if current.request_portal_require_account_login and identity is None:
+            raise HTTPException(403, "named request account login required")
         if identity and identity.weekly_request_limit > 0:
             used = await asyncio.to_thread(
                 repository.request_count_since,

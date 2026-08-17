@@ -356,6 +356,9 @@ class ServiceState:
                 "notion_lists": len(config.notion_lists),
                 "libraries": len(config.libraries),
                 "request_portal_enabled": config.request_portal_enabled,
+                "request_portal_require_account_login": (
+                    config.request_portal_require_account_login
+                ),
                 "request_portal_domains": list(config.request_portal_domains),
                 "request_portal_accounts": len(config.request_portal_users),
             },

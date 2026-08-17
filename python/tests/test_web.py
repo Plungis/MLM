@@ -146,6 +146,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "Download if wedge fails" in config_page.text
     assert "Enable request portal" in config_page.text
     assert 'name="request_portal_domains"' in config_page.text
+    assert 'name="request_portal_require_account_login"' in config_page.text
     assert 'name="request_portal_username"' in config_page.text
     assert 'name="request_portal_password"' in config_page.text
     assert "Request login accounts" in config_page.text
@@ -174,8 +175,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b57"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b57"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b58"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b58"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -279,7 +280,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b57" in spender_config.text
+    assert "0.5.0b58" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -327,6 +328,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "download_on_wedge_failure": "true",
             "grab_both_formats": "true",
             "request_portal_enabled": "true",
+            "request_portal_require_account_login": "true",
             "request_portal_domains": "requests.example.test",
             "request_portal_title": "Family Requests",
             "request_portal_rate_limit": "15",
@@ -347,6 +349,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert updated.download_on_wedge_failure is True
     assert updated.grab_both_formats is True
     assert updated.request_portal_enabled is True
+    assert updated.request_portal_require_account_login is True
     assert updated.request_portal_domains == ("requests.example.test",)
     assert updated.request_portal_title == "Family Requests"
     assert updated.request_portal_username == "family"

@@ -218,13 +218,23 @@ requests.example.com {
 Then set `request_portal_domains = ["requests.example.com"]` and enable the
 portal. That hostname serves only the request form and static assets; dashboard,
 configuration, API documentation, and approval routes return 404. Do not expose
-port 3157 directly to the public internet. Configure requester credentials, or
-put an authentication layer such as Cloudflare Access in front of the domain.
+port 3157 directly to the public internet. `request_portal_require_account_login`
+defaults to `true`: the portal fails closed until at least one request account is
+created, old shared-access cookies are rejected, and every accepted submission
+records the authenticated username. Set it to `false` only if anonymous or
+legacy shared-code access is intentionally required.
+
+For Nginx Proxy Manager, use `bookrequest.example.com` as the Domain Name,
+`http` as the scheme, the MyAnonaSuite host/IP as Forward Hostname, and `3157`
+as Forward Port. Leave NPM's Access List set to **Publicly Accessible** if the
+MyAnonaSuite account login should be the only prompt; an NPM Basic Auth access
+list creates a separate first login. The app recognizes either the preserved
+`Host` header or a matching `X-Forwarded-Host` header.
 
 Administrators can open the portal in a new tab from **Requests → Request
 Portal** in the sidebar or the **Open request portal** button in the request
-inbox. On the admin machine, that direct preview remains available even while
-the external hostname requires a login.
+inbox. When individual account login is required, the local preview also asks
+for a request account so preview submissions cannot become anonymous records.
 
 Visitors can combine title, author, series, narrator, format, category,
 language, availability, seeder, and sort filters. They can also paste a public

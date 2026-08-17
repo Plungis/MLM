@@ -183,6 +183,7 @@ request_portal_rate_limit = 12
     config = load_config(path)
 
     assert config.request_portal_enabled is True
+    assert config.request_portal_require_account_login is True
     assert config.request_portal_domains == ("requests.example.com",)
     assert config.request_portal_title == "Family Requests"
     assert config.request_portal_username == "family"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 from pathlib import Path
 
@@ -79,6 +81,8 @@ def portal_config(
     username: str = "",
     password: str = "",
     users: tuple[dict[str, object], ...] = (),
+    require_account_login: bool = False,
+    domain: str = "requests.example.test",
 ) -> None:
     password_hash = hash_request_password(password) if password else ""
     user_rows = []
@@ -100,7 +104,8 @@ def portal_config(
         f"""
 mam_id = "session"
 request_portal_enabled = true
-request_portal_domains = ["requests.example.test"]
+request_portal_require_account_login = {str(require_account_login).lower()}
+request_portal_domains = [{json.dumps(domain)}]
 request_portal_title = "Randy's Library Requests"
 request_portal_access_code = {json.dumps(access_code)}
 request_portal_username = {json.dumps(username)}
@@ -389,6 +394,7 @@ def test_named_request_accounts_apply_auto_approval_permission(
     config_path = tmp_path / "config.toml"
     portal_config(
         config_path,
+        require_account_login=True,
         users=(
             {
                 "username": "admin",
@@ -412,6 +418,9 @@ def test_named_request_accounts_apply_auto_approval_permission(
     app = create_app(config_path, database)
     services = PortalServices(load_config(config_path))
     app.state.services = services
+    local_preview = TestClient(app).get("/request")
+    assert 'name="username"' in local_preview.text
+    assert "Goodreads link reader" not in local_preview.text
 
     async def exercise() -> None:
         transport = httpx.ASGITransport(
@@ -539,6 +548,103 @@ def test_named_request_accounts_apply_auto_approval_permission(
     assert "Account: reader" in inbox.text
 
 
+def test_account_only_portal_fails_closed_and_rejects_shared_cookie(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    portal_config(
+        config_path,
+        access_code="old-family-code",
+        require_account_login=True,
+        users=(
+            {
+                "username": "reader",
+                "password": "reader password",
+                "display_name": "Tracked Reader",
+            },
+        ),
+    )
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    app = create_app(config_path, database)
+    app.state.services = PortalServices(load_config(config_path))
+    legacy_cookie = hmac.new(
+        b"session",
+        b"old-family-code",
+        hashlib.sha256,
+    ).hexdigest()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(
+            app=app,
+            client=("203.0.113.20", 41234),
+        )
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="https://requests.example.test",
+            cookies={"mysuite_request_access": legacy_cookie},
+        ) as client:
+            locked = await client.get("/")
+            assert 'name="username"' in locked.text
+            assert "Goodreads link reader" not in locked.text
+            rejected = await client.post(
+                "/request/submit",
+                data={"mam_id": "321"},
+            )
+            assert rejected.status_code == 403
+            assert repository.request_rows() == []
+
+            logged_in = await client.post(
+                "/request/unlock",
+                data={"username": "reader", "password": "reader password"},
+                follow_redirects=False,
+            )
+            assert logged_in.status_code == 303
+            submitted = await client.post(
+                "/request/submit",
+                data={"mam_id": "321"},
+                follow_redirects=False,
+            )
+            assert submitted.status_code == 303
+            assert repository.request_rows()[0]["requester_username"] == "reader"
+
+    asyncio.run(exercise())
+
+
+def test_account_only_portal_needs_an_account_and_honors_forwarded_host(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    portal_config(
+        config_path,
+        require_account_login=True,
+        domain="bookrequest.randyplungis.com",
+    )
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    app = create_app(config_path, database)
+    app.state.services = PortalServices(load_config(config_path))
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app, client=("172.20.0.4", 41234))
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://mlm:3157",
+            headers={
+                "x-forwarded-host": "bookrequest.randyplungis.com",
+                "x-forwarded-proto": "https",
+            },
+        ) as client:
+            locked = await client.get("/")
+            assert locked.status_code == 503
+            assert "Account setup required" in locked.text
+            assert 'name="access_code"' not in locked.text
+            assert (await client.get("/config")).status_code == 404
+
+    asyncio.run(exercise())
+
+
 def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
     tmp_path: Path,
 ) -> None:
@@ -563,7 +669,7 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b57"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b58"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())

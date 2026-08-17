@@ -85,6 +85,10 @@
         <input type="checkbox" name="request_portal_enabled" value="true"{% if config.request_portal_enabled %} checked{% endif %}>
         <span><strong>Enable request portal</strong><small>The configured custom domain serves only the request portal and blocks HeavyMLM administration routes.</small></span>
       </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="request_portal_require_account_login" value="true"{% if config.request_portal_require_account_login %} checked{% endif %}>
+        <span><strong>Require individual account login</strong><small>Recommended. Disables anonymous access, shared-code cookies, and the localhost preview bypass so every submission is tied to a configured username.</small></span>
+      </label>
       <label class="setting-field">
         <span>Custom request domains</span>
         <input type="text" name="request_portal_domains" value="{{ config.request_portal_domains | join(', ') }}" placeholder="requests.example.com">
@@ -165,6 +169,7 @@
   </header>
   <div class="panel-body">
     <div class="security-note"><strong>Permission boundary:</strong> Auto-approve only skips the request inbox decision. It does not grant access to HeavyMLM administration, configuration, or other MyAnonaSuite modules. Download guardrails and format rules still apply.</div>
+    {% if config.request_portal_enabled and config.request_portal_require_account_login and not config.request_portal_users and not config.request_portal_username %}<div class="flash error-flash"><span>The public request domain is safely locked because no request accounts exist yet. Create the first account below.</span><span class="status waiting">Setup required</span></div>{% endif %}
     {% if config.request_portal_users %}
     <div class="request-account-grid">
       {% for user in config.request_portal_users %}

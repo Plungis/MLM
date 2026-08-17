@@ -16,6 +16,7 @@ import_interval = 135
 # Optional custom-domain request portal. Point your HTTPS reverse proxy at port 3157
 # and preserve the original Host header.
 request_portal_enabled = false
+request_portal_require_account_login = true # fail closed; every request records a named account
 request_portal_domains = ["requests.example.com"]
 request_portal_title = "Library Requests"
 # Create named requester accounts from the Configuration screen. Each password

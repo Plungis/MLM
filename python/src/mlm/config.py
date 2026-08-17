@@ -56,6 +56,7 @@ class Config:
     music_types: tuple[str, ...] = ("pdf", "mp3")
     radio_types: tuple[str, ...] = ("mp3",)
     request_portal_enabled: bool = False
+    request_portal_require_account_login: bool = True
     request_portal_domains: tuple[str, ...] = ()
     request_portal_title: str = "Library Requests"
     request_portal_username: str = ""
