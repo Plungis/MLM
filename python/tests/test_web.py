@@ -126,9 +126,11 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'href="/records/selected_torrents"' not in dashboard.text
     assert 'action="/actions/lists"' in dashboard.text
     assert 'action="/actions/autograb"' in dashboard.text
-    assert 'action="/actions/downloader"' not in dashboard.text
-    assert 'action="/actions/organizer"' not in dashboard.text
-    assert 'action="/actions/cleaner"' not in dashboard.text
+    assert 'action="/actions/downloader"' in dashboard.text
+    assert 'action="/actions/organizer"' in dashboard.text
+    assert 'action="/actions/cleaner"' in dashboard.text
+    assert "Run HeavyMLM now" in dashboard.text
+    assert "Schedules remain enabled" in dashboard.text
     assert Repository(database).has_pending_mam_id(1001) is True
     assert 'class="nav-link active"' in dashboard.text
     assert "View live details" in triggered_dashboard.text
@@ -146,6 +148,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'name="request_portal_domains"' in config_page.text
     assert 'name="request_portal_username"' in config_page.text
     assert 'name="request_portal_password"' in config_page.text
+    assert "Request login accounts" in config_page.text
+    assert 'action="/config/request-users/save"' in config_page.text
     assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
@@ -169,8 +173,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b55"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b55"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b56"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b56"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -274,7 +278,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b55" in spender_config.text
+    assert "0.5.0b56" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -351,6 +355,37 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "correct horse" not in config.read_text(encoding="utf-8")
     assert updated.request_portal_access_code == "family-only"
     assert updated.request_portal_rate_limit == 15
+
+    account_created = client.post(
+        "/config/request-users/save",
+        data={
+            "username": "trusted-reader",
+            "display_name": "Trusted Reader",
+            "password": "reader password",
+            "auto_approve": "true",
+        },
+        follow_redirects=False,
+    )
+    assert account_created.status_code == 303
+    account_config = load_config(config)
+    assert len(account_config.request_portal_users) == 1
+    account = account_config.request_portal_users[0]
+    assert account.username == "trusted-reader"
+    assert account.display_name == "Trusted Reader"
+    assert account.permissions == ("auto_approve",)
+    assert verify_request_password("reader password", account.password_hash)
+    account_page = client.get("/config#request-accounts")
+    assert "Trusted Reader" in account_page.text
+    assert "Auto-approve" in account_page.text
+    assert "does not grant access to HeavyMLM administration" in account_page.text
+
+    account_deleted = client.post(
+        "/config/request-users/delete",
+        data={"username": "trusted-reader"},
+        follow_redirects=False,
+    )
+    assert account_deleted.status_code == 303
+    assert load_config(config).request_portal_users == ()
 
     full_saved = client.post(
         "/config/full",

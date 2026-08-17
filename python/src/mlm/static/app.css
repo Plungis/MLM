@@ -1989,6 +1989,44 @@ button:disabled {
   font-size: 10px;
 }
 
+.home-manual-controls {
+  margin-bottom: 22px;
+}
+
+.manual-run-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.manual-run-grid form {
+  display: grid;
+  min-width: 0;
+  gap: 13px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 4px;
+  background: var(--surface);
+  padding: 13px;
+}
+
+.manual-run-grid span,
+.manual-run-grid strong,
+.manual-run-grid small {
+  display: block;
+}
+
+.manual-run-grid small {
+  margin-top: 5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.manual-run-grid button {
+  width: 100%;
+  align-self: end;
+}
+
 .home-scheduler {
   overflow: hidden;
 }
@@ -2248,6 +2286,64 @@ pre {
 
 .full-config-panel {
   margin-top: 18px;
+}
+
+.request-account-panel {
+  margin-top: 18px;
+}
+
+.request-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.request-account-card {
+  display: grid;
+  gap: 14px;
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px;
+}
+
+.request-account-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.request-account-card h3 {
+  margin: 7px 0 3px;
+}
+
+.request-account-card code {
+  color: var(--muted);
+}
+
+.request-account-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.request-account-form .request-account-permission,
+.request-account-form > button {
+  grid-column: 1 / -1;
+}
+
+.request-account-card > form:last-child {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 12px;
+}
+
+.request-account-new {
+  margin-top: 16px;
+  border-color: var(--line);
 }
 
 .full-config-editor {
@@ -2852,6 +2948,10 @@ pre {
   .capacity-grid,
   .setting-grid,
   .setting-grid.three {
+    grid-template-columns: 1fr;
+  }
+
+  .request-account-form {
     grid-template-columns: 1fr;
   }
 

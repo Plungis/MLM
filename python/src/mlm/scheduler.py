@@ -357,6 +357,7 @@ class ServiceState:
                 "libraries": len(config.libraries),
                 "request_portal_enabled": config.request_portal_enabled,
                 "request_portal_domains": list(config.request_portal_domains),
+                "request_portal_accounts": len(config.request_portal_users),
             },
         )
         self.start()

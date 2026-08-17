@@ -202,3 +202,64 @@ request_portal_rate_limit = 12
     )
     with pytest.raises(ConfigError, match="request_portal_username"):
         load_config(path)
+
+
+def test_request_portal_named_accounts_validate_permissions_and_round_trip(
+    tmp_path: Path,
+) -> None:
+    admin_hash = hash_request_password("admin password")
+    reader_hash = hash_request_password("reader password")
+    path = tmp_path / "config.toml"
+    path.write_text('mam_id = "secret"\n', encoding="utf-8")
+
+    config = save_root_config_values(
+        path,
+        {
+            "request_portal_users": (
+                {
+                    "username": "admin",
+                    "password_hash": admin_hash,
+                    "display_name": "Library Admin",
+                    "permissions": ("auto_approve",),
+                },
+                {
+                    "username": "reader",
+                    "password_hash": reader_hash,
+                    "display_name": "Reader",
+                    "permissions": (),
+                },
+            )
+        },
+    )
+
+    assert [user.username for user in config.request_portal_users] == [
+        "admin",
+        "reader",
+    ]
+    assert config.request_portal_users[0].permissions == ("auto_approve",)
+    assert config.request_portal_users[1].permissions == ()
+    text = path.read_text(encoding="utf-8")
+    assert "request_portal_users = [" in text
+    assert 'permissions = ["auto_approve"]' in text
+    assert "admin password" not in text
+
+    duplicate = f'''
+mam_id = "secret"
+request_portal_users = [
+  {{ username = "Reader", password_hash = "{reader_hash}" }},
+  {{ username = "reader", password_hash = "{reader_hash}" }}
+]
+'''
+    path.write_text(duplicate, encoding="utf-8")
+    with pytest.raises(ConfigError, match="duplicate request portal account"):
+        load_config(path)
+
+    unknown_permission = (
+        'mam_id = "secret"\n'
+        'request_portal_users = [{ username = "reader", '
+        f'password_hash = "{reader_hash}", '
+        'permissions = ["admin_everything"] }]\n'
+    )
+    path.write_text(unknown_permission, encoding="utf-8")
+    with pytest.raises(ConfigError, match="unknown request portal permissions"):
+        load_config(path)

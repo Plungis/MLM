@@ -25,6 +25,14 @@ class QbitConfig:
 
 
 @dataclass(frozen=True)
+class RequestPortalUser:
+    username: str
+    password_hash: str
+    display_name: str = ""
+    permissions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Config:
     mam_id: str
     web_host: str = "0.0.0.0"
@@ -53,6 +61,7 @@ class Config:
     request_portal_password_hash: str = ""
     request_portal_access_code: str = ""
     request_portal_rate_limit: int = 20
+    request_portal_users: tuple[RequestPortalUser, ...] = ()
     qbittorrent: tuple[QbitConfig, ...] = ()
     search: dict[str, Any] = field(default_factory=dict)
     audiobookshelf: dict[str, Any] | None = None
@@ -71,6 +80,7 @@ _ALIASES = {
     "notion_list": "notion_lists",
     "tag": "tags",
     "library": "libraries",
+    "request_portal_user": "request_portal_users",
 }
 
 
@@ -113,8 +123,27 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
         raise ConfigError("missing required configuration field: mam_id")
 
     qbit_rows = raw.pop("qbittorrent", [])
+    request_user_rows = raw.pop("request_portal_users", [])
     try:
         qbit = tuple(QbitConfig(**row) for row in qbit_rows)
+        request_users_list: list[RequestPortalUser] = []
+        for row in request_user_rows:
+            if not isinstance(row, Mapping):
+                raise ValueError("request portal accounts must be TOML objects")
+            permissions = row.get("permissions", ())
+            if isinstance(permissions, str) or not isinstance(
+                permissions, (list, tuple)
+            ):
+                raise ValueError("request portal account permissions must be a list")
+            request_users_list.append(
+                RequestPortalUser(
+                    username=str(row.get("username", "")).strip(),
+                    password_hash=str(row.get("password_hash", "")),
+                    display_name=str(row.get("display_name", "")).strip(),
+                    permissions=tuple(str(value) for value in permissions),
+                )
+            )
+        request_users = tuple(request_users_list)
         tuple_fields = {
             "ignore_torrents",
             "audio_types",
@@ -131,7 +160,11 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
         }
         for name in tuple_fields & raw.keys():
             raw[name] = tuple(raw[name])
-        config = Config(qbittorrent=qbit, **raw)
+        config = Config(
+            qbittorrent=qbit,
+            request_portal_users=request_users,
+            **raw,
+        )
         if config.min_ratio <= 0:
             raise ConfigError("min_ratio must be greater than zero")
         if config.unsat_buffer < 0:
@@ -154,6 +187,38 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
             )
         if len(config.request_portal_username) > 100:
             raise ConfigError("request_portal_username cannot exceed 100 characters")
+        request_usernames: set[str] = set()
+        for user in config.request_portal_users:
+            if not user.username:
+                raise ConfigError("request portal account username cannot be empty")
+            if len(user.username) > 100:
+                raise ConfigError(
+                    "request portal account username cannot exceed 100 characters"
+                )
+            if any(character in user.username for character in "\r\n\0"):
+                raise ConfigError(
+                    "request portal account usernames cannot contain control characters"
+                )
+            if not user.password_hash:
+                raise ConfigError(
+                    f"request portal account {user.username!r} requires a password hash"
+                )
+            if len(user.display_name) > 120:
+                raise ConfigError(
+                    "request portal account display name cannot exceed 120 characters"
+                )
+            normalized_username = user.username.casefold()
+            if normalized_username in request_usernames:
+                raise ConfigError(
+                    f"duplicate request portal account username: {user.username}"
+                )
+            request_usernames.add(normalized_username)
+            unknown_permissions = sorted(set(user.permissions) - {"auto_approve"})
+            if unknown_permissions:
+                raise ConfigError(
+                    "unknown request portal permissions for "
+                    f"{user.username}: {', '.join(unknown_permissions)}"
+                )
         if config.request_portal_enabled and not config.request_portal_domains:
             raise ConfigError(
                 "request_portal_domains must contain a custom domain when the "
@@ -177,10 +242,14 @@ def _toml_scalar(value: object) -> str:
         return str(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, (list, tuple)) and all(
-        isinstance(item, str) for item in value
-    ):
-        return "[" + ", ".join(json.dumps(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        return (
+            "{ "
+            + ", ".join(f"{key} = {_toml_scalar(item)}" for key, item in value.items())
+            + " }"
+        )
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_scalar(item) for item in value) + "]"
     raise ConfigError(f"unsupported editable value: {value!r}")
 
 

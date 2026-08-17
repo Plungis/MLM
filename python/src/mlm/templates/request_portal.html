@@ -12,15 +12,19 @@
   <header class="request-portal-header">
     <div class="request-portal-brand-row">
       <div class="request-portal-brand"><span class="request-brand-mark">R_</span><span>MyAnonaSuite</span></div>
-      {% if login_required %}<form action="/request/logout" method="post" class="request-logout"><span>{{ portal_username or "Requester" }}</span><button class="button" type="submit">Sign out</button></form>{% endif %}
+      {% if login_required %}<form action="/request/logout" method="post" class="request-logout"><span>{{ portal_username or "Requester" }}{% if portal_auto_approve %} · auto-approval enabled{% endif %}</span><button class="button" type="submit">Sign out</button></form>{% endif %}
     </div>
     <p class="eyebrow">Private library acquisition portal</p>
     <h1>{{ portal_title }}</h1>
-    <p>Find the exact audiobook or ebook release you want, then send it for approval.</p>
+    <p>Find the exact audiobook or ebook release you want, then submit it{% if portal_auto_approve %} directly to the automated download policy{% else %} for approval{% endif %}.</p>
   </header>
 
-  {% if submitted %}
-  <div class="request-success" role="status"><strong>Request received.</strong><span>It is waiting in the approval inbox.</span></div>
+  {% if submission_result %}
+  <div class="request-success" role="status">
+    {% if submission_result == "approved" %}<strong>Request automatically approved.</strong><span>HeavyMLM scheduled it under the normal download guardrails.</span>
+    {% elif submission_result == "fulfilled" %}<strong>You already have this release.</strong><span>It is already in the library or pending for download.</span>
+    {% else %}<strong>Request received.</strong><span>It is waiting in the approval inbox.</span>{% endif %}
+  </div>
   {% endif %}
 
   <section class="request-goodreads-card">
@@ -103,10 +107,10 @@
           <input type="hidden" name="mam_id" value="{{ row.id }}">
           <input type="hidden" name="goodreads_url" value="{{ goodreads_url }}">
           <label><span>Your name <small>optional</small></span><input type="text" name="requester_name" maxlength="120" autocomplete="name" value="{{ requester_name }}"></label>
-          <label><span>Contact <small>optional</small></span><input type="text" name="requester_contact" maxlength="200" placeholder="Email, Discord, etc."></label>
-          <label class="request-note"><span>Request note <small>optional</small></span><textarea name="note" maxlength="1000" rows="3" placeholder="Edition preferences or anything the library owner should know."></textarea></label>
+          <label><span>Contact <small>optional</small></span><input type="text" name="requester_contact" maxlength="200" value="{{ requester_contact }}" placeholder="Email, Discord, etc."></label>
+          <label class="request-note"><span>Request note <small>optional</small></span><textarea name="note" maxlength="1000" rows="3" placeholder="Edition preferences or anything the library owner should know.">{{ note }}</textarea></label>
           <label class="request-honeypot" aria-hidden="true"><span>Website</span><input type="text" name="website" tabindex="-1" autocomplete="off"></label>
-          <button class="primary" type="submit">Send request for approval</button>
+          <button class="primary" type="submit">{% if portal_auto_approve %}Request and schedule automatically{% else %}Send request for approval{% endif %}</button>
         </form>
       </details>
     </article>
@@ -118,7 +122,7 @@
   <section class="request-empty"><span>R?</span><div><strong>Start with a Goodreads link or advanced search</strong><p>Results include format, author, series, language, cost, size, and seed health.</p></div></section>
   {% endif %}
 
-  <footer class="request-portal-footer"><span>MyAnonaSuite {{ version }}</span><span>Requests require library-owner approval</span></footer>
+  <footer class="request-portal-footer"><span>MyAnonaSuite {{ version }}</span><span>{% if portal_auto_approve %}Trusted account · automatic approval{% else %}Requests require library-owner approval{% endif %}</span></footer>
 </main>
 </body>
 </html>

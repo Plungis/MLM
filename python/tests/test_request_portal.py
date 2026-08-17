@@ -54,7 +54,7 @@ class PortalMam:
         return {"found": 1, "data": [self.row]}
 
     async def get_torrent_info_by_id(self, mam_id: int) -> dict | None:
-        return self.row if mam_id == 321 else None
+        return self.row if mam_id == self.row["id"] else None
 
 
 class PortalServices:
@@ -78,8 +78,23 @@ def portal_config(
     access_code: str = "",
     username: str = "",
     password: str = "",
+    users: tuple[dict[str, object], ...] = (),
 ) -> None:
     password_hash = hash_request_password(password) if password else ""
+    user_rows = []
+    for user in users:
+        permissions = user.get("permissions", ())
+        permission_values = ", ".join(json.dumps(item) for item in permissions)
+        user_password_hash = hash_request_password(str(user["password"]))
+        user_rows.append(
+            "{ "
+            f"username = {json.dumps(user['username'])}, "
+            f"password_hash = {json.dumps(user_password_hash)}, "
+            f"display_name = {json.dumps(user.get('display_name', ''))}, "
+            f"permissions = [{permission_values}]"
+            " }"
+        )
+    users_toml = "[" + ", ".join(user_rows) + "]"
     path.write_text(
         f"""
 mam_id = "session"
@@ -90,6 +105,7 @@ request_portal_access_code = {json.dumps(access_code)}
 request_portal_username = {json.dumps(username)}
 request_portal_password_hash = {json.dumps(password_hash)}
 request_portal_rate_limit = 20
+request_portal_users = {users_toml}
 audio_types = ["m4b", "mp3"]
 """,
         encoding="utf-8",
@@ -208,7 +224,7 @@ def test_custom_domain_is_request_only_and_approval_queues_release(
     )
 
     assert submitted.status_code == 303
-    assert submitted.headers["location"] == "/?submitted=1"
+    assert submitted.headers["location"] == "/?submitted=pending"
     requests = repository.request_rows(status="pending")
     assert len(requests) == 1
     assert requests[0]["release"]["filetypes"] == ["m4b"]
@@ -366,6 +382,124 @@ def test_remote_request_portal_uses_username_and_password(tmp_path: Path) -> Non
     asyncio.run(exercise())
 
 
+def test_named_request_accounts_apply_auto_approval_permission(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    portal_config(
+        config_path,
+        users=(
+            {
+                "username": "admin",
+                "password": "admin password",
+                "display_name": "Library Admin",
+                "permissions": ("auto_approve",),
+            },
+            {
+                "username": "reader",
+                "password": "reader password",
+                "display_name": "Regular Reader",
+                "permissions": (),
+            },
+        ),
+    )
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    app = create_app(config_path, database)
+    services = PortalServices(load_config(config_path))
+    app.state.services = services
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(
+            app=app,
+            client=("203.0.113.20", 41234),
+        )
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="https://requests.example.test",
+        ) as client:
+            locked = await client.get("/")
+            assert 'name="username"' in locked.text
+            assert "Goodreads link reader" not in locked.text
+            admin_login = await client.post(
+                "/request/unlock",
+                data={"username": "admin", "password": "admin password"},
+                follow_redirects=False,
+            )
+            assert admin_login.status_code == 303
+            admin_portal = await client.get("/", params={"q": "Dungeon"})
+            assert "Library Admin · auto-approval enabled" in admin_portal.text
+            assert "Request and schedule automatically" in admin_portal.text
+
+            auto_submitted = await client.post(
+                "/request/submit",
+                data={
+                    "mam_id": "321",
+                    "requester_name": "Library Admin",
+                    "requester_contact": "",
+                    "note": "Trusted request",
+                    "goodreads_url": "",
+                    "website": "",
+                },
+                follow_redirects=False,
+            )
+            assert auto_submitted.status_code == 303
+            assert auto_submitted.headers["location"] == "/?submitted=approved"
+            await asyncio.sleep(0)
+
+            auto_record = repository.request_rows()[0]
+            assert auto_record["status"] == "approved"
+            assert auto_record["requester_username"] == "admin"
+            assert auto_record["requester_permissions"] == ["auto_approve"]
+            assert auto_record["decision_by"] == "admin"
+            assert "Automatically approved" in auto_record["decision_note"]
+            assert repository.pending_selected()[0]["mam_id"] == 321
+            assert services.triggered == ["downloader"]
+
+            await client.post("/request/logout")
+            reader_login = await client.post(
+                "/request/unlock",
+                data={"username": "reader", "password": "reader password"},
+                follow_redirects=False,
+            )
+            assert reader_login.status_code == 303
+            services.mam.row = {
+                **services.mam.row,
+                "id": 322,
+                "title": "The Eye of the Bedlam Bride",
+            }
+            reader_portal = await client.get("/", params={"q": "Bedlam"})
+            assert "Regular Reader · auto-approval enabled" not in reader_portal.text
+            assert "Send request for approval" in reader_portal.text
+
+            pending_submitted = await client.post(
+                "/request/submit",
+                data={
+                    "mam_id": "322",
+                    "requester_name": "Regular Reader",
+                    "requester_contact": "",
+                    "note": "Please approve",
+                    "goodreads_url": "",
+                    "website": "",
+                },
+                follow_redirects=False,
+            )
+            assert pending_submitted.headers["location"] == "/?submitted=pending"
+
+            pending_record = repository.request_rows(status="pending")[0]
+            assert pending_record["requester_username"] == "reader"
+            assert pending_record["requester_permissions"] == []
+            assert repository.has_pending_mam_id(322) is False
+
+    asyncio.run(exercise())
+
+    inbox = TestClient(app).get("/requests?status=all")
+    assert "Account: admin · trusted for auto-approval" in inbox.text
+    assert "Decision by admin" in inbox.text
+    assert "Account: reader" in inbox.text
+
+
 def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
     tmp_path: Path,
 ) -> None:
@@ -390,7 +524,7 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b55"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b56"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())

@@ -18,8 +18,9 @@ import_interval = 135
 request_portal_enabled = false
 request_portal_domains = ["requests.example.com"]
 request_portal_title = "Library Requests"
-# Set the requester username and password from the Configuration screen. The
-# password is saved here only as a salted PBKDF2 hash.
+# Create named requester accounts from the Configuration screen. Each password
+# is saved here only as a salted PBKDF2 hash. Trusted accounts can receive the
+# auto_approve permission; ordinary accounts continue to require inbox review.
 request_portal_rate_limit = 20
 
 audio_types = ["m4b", "m4a", "mp4", "mp3", "ogg"]

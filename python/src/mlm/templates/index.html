@@ -152,8 +152,6 @@
       </div>
       <div class="workflow-actions">
         <a class="button primary" href="/search">Search MaM</a>
-        <form action="/actions/lists" method="post"><button type="submit">Refresh lists</button></form>
-        <form action="/actions/autograb" method="post"><button type="submit">Check autograbs</button></form>
       </div>
     </article>
 
@@ -181,6 +179,24 @@
         {% if duplicate_count %}<a class="button" href="/library?view=duplicates">Review duplicates</a>{% endif %}
       </div>
     </article>
+  </div>
+</section>
+
+<section class="panel home-manual-controls" aria-labelledby="manual-controls-title">
+  <header class="panel-header">
+    <div>
+      <p class="eyebrow">Manual overrides</p>
+      <h2 id="manual-controls-title">Run HeavyMLM now</h2>
+      <p>Schedules remain enabled. These buttons simply start a worker immediately when you do not want to wait for its next interval.</p>
+    </div>
+    <span class="chip">Optional controls</span>
+  </header>
+  <div class="manual-run-grid">
+    <form action="/actions/lists" method="post"><span><strong>Refresh lists</strong><small>Pull Goodreads and Notion changes now.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/autograb" method="post"><span><strong>Check autograbs</strong><small>Search bookmarks and configured automatic rules.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/downloader" method="post"><span><strong>Download handoff</strong><small>Send eligible selected releases to qBittorrent now.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/organizer" method="post"><span><strong>Organize completed</strong><small>Check qBittorrent and publish completed books.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/cleaner" method="post"><span><strong>Clean duplicates</strong><small>Run the configured replacement and cleanup policy.</small></span><button type="submit">Run now</button></form>
   </div>
 </section>
 

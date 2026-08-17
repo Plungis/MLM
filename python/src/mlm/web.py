@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import ipaddress
@@ -24,6 +25,7 @@ from .autograbber import select_row
 from .config import (
     Config,
     ConfigError,
+    RequestPortalUser,
     load_config,
     save_config_text,
     save_root_config_values,
@@ -89,6 +91,9 @@ def _redacted_config(config: Config) -> dict:
         value["request_portal_access_code"] = "***"
     if value.get("request_portal_password_hash"):
         value["request_portal_password_hash"] = "***"
+    for row in value.get("request_portal_users", []):
+        if row.get("password_hash"):
+            row["password_hash"] = "***"
     return value
 
 
@@ -151,7 +156,35 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     def request_portal_root(request: Request) -> str:
         return "/" if request_portal_host(request) else "/request"
 
-    def request_access_token(config: Config) -> str:
+    def configured_request_users(config: Config) -> tuple[RequestPortalUser, ...]:
+        users = list(config.request_portal_users)
+        known = {user.username.casefold() for user in users}
+        if (
+            config.request_portal_username
+            and config.request_portal_password_hash
+            and config.request_portal_username.casefold() not in known
+        ):
+            users.append(
+                RequestPortalUser(
+                    username=config.request_portal_username,
+                    password_hash=config.request_portal_password_hash,
+                    display_name=config.request_portal_username,
+                )
+            )
+        return tuple(users)
+
+    def request_user(config: Config, username: str) -> RequestPortalUser | None:
+        normalized = username.strip().casefold()
+        return next(
+            (
+                user
+                for user in configured_request_users(config)
+                if user.username.casefold() == normalized
+            ),
+            None,
+        )
+
+    def legacy_request_access_token(config: Config) -> str:
         if config.request_portal_password_hash:
             credential = "\0".join(
                 (
@@ -169,12 +202,63 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             hashlib.sha256,
         ).hexdigest()
 
+    def request_user_signature(
+        config: Config,
+        user: RequestPortalUser,
+        payload: str,
+    ) -> str:
+        return hmac.new(
+            config.mam_id.encode("utf-8"),
+            f"request-user\0{payload}\0{user.password_hash}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def request_user_access_token(config: Config, user: RequestPortalUser) -> str:
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps(
+                    {"username": user.username, "issued_at": int(time.time())},
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
+        signature = request_user_signature(config, user, payload)
+        return f"user-v1.{payload}.{signature}"
+
+    def request_portal_identity(request: Request) -> RequestPortalUser | None:
+        supplied = request.cookies.get("mysuite_request_access", "")
+        if not supplied.startswith("user-v1."):
+            return None
+        try:
+            _, payload, signature = supplied.split(".", 2)
+            padding = "=" * (-len(payload) % 4)
+            claims = json.loads(
+                base64.urlsafe_b64decode(payload + padding).decode("utf-8")
+            )
+            username = str(claims["username"])
+            issued_at = int(claims["issued_at"])
+        except (KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
+            return None
+        if issued_at > int(time.time()) + 60 or int(time.time()) - issued_at > 2678400:
+            return None
+        current = active_config()
+        user = request_user(current, username)
+        if user is None:
+            return None
+        expected = request_user_signature(current, user, payload)
+        return user if hmac.compare_digest(signature, expected) else None
+
     def request_login_mode(config: Config) -> str:
-        if config.request_portal_password_hash:
+        if configured_request_users(config):
             return "credentials"
         if config.request_portal_access_code:
             return "access_code"
         return "public"
+
+    def request_login_username_hint(config: Config) -> str:
+        return config.request_portal_username if not config.request_portal_users else ""
 
     def request_portal_authorized(request: Request) -> bool:
         # Keep localhost preview convenient, but never let a same-machine reverse
@@ -185,7 +269,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if request_login_mode(current) == "public":
             return True
         supplied = request.cookies.get("mysuite_request_access", "")
-        return hmac.compare_digest(supplied, request_access_token(current))
+        if request_portal_identity(request) is not None:
+            return True
+        if not (
+            current.request_portal_password_hash or current.request_portal_access_code
+        ):
+            return False
+        return hmac.compare_digest(
+            supplied,
+            legacy_request_access_token(current),
+        )
 
     def request_client_key(request: Request) -> str:
         client_host = request.client.host if request.client else "unknown"
@@ -854,7 +947,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 title="Configuration",
                 config=_redacted_config(active_config()),
                 saved=request.query_params.get("saved") == "1",
-                error=None,
+                error=request.query_params.get("user_error") or None,
                 config_path=str(config_path),
                 config_toml=(
                     config_path.read_text(encoding="utf-8") if editable else None
@@ -961,6 +1054,142 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 status_code=400,
             )
         return RedirectResponse("/config?saved=1", status_code=303)
+
+    def request_user_rows_for_save(
+        users: list[RequestPortalUser],
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "username": user.username,
+                "password_hash": user.password_hash,
+                "display_name": user.display_name,
+                "permissions": tuple(user.permissions),
+            }
+            for user in users
+        )
+
+    @app.post("/config/request-users/save")
+    async def save_request_portal_user(
+        request: Request,
+        original_username: str = Form(""),
+        username: str = Form(...),
+        display_name: str = Form(""),
+        password: str = Form(""),
+        auto_approve: str | None = Form(None),
+    ) -> RedirectResponse:
+        try:
+            if not local_request(request):
+                raise ConfigError(
+                    "request account changes are only allowed from this computer"
+                )
+            username = username.strip()
+            display_name = display_name.strip()
+            if not username:
+                raise ConfigError("request account username cannot be empty")
+            current = active_config()
+            users = list(current.request_portal_users)
+            lookup = (original_username or username).strip().casefold()
+            existing_index = next(
+                (
+                    index
+                    for index, user in enumerate(users)
+                    if user.username.casefold() == lookup
+                ),
+                None,
+            )
+            duplicate = next(
+                (
+                    user
+                    for index, user in enumerate(users)
+                    if user.username.casefold() == username.casefold()
+                    and index != existing_index
+                ),
+                None,
+            )
+            if duplicate:
+                raise ConfigError(
+                    f"request account username {username!r} already exists"
+                )
+            password_hash = (
+                users[existing_index].password_hash
+                if existing_index is not None
+                else ""
+            )
+            if password:
+                password_hash = await asyncio.to_thread(
+                    hash_request_password,
+                    password,
+                )
+            if not password_hash:
+                raise ConfigError("new request accounts require a password")
+            updated_user = RequestPortalUser(
+                username=username,
+                password_hash=password_hash,
+                display_name=display_name,
+                permissions=("auto_approve",) if auto_approve is not None else (),
+            )
+            if existing_index is None:
+                users.append(updated_user)
+            else:
+                users[existing_index] = updated_user
+            updated = save_root_config_values(
+                config_path,
+                {"request_portal_users": request_user_rows_for_save(users)},
+            )
+            await app.state.services.reconfigure(updated)
+            repository.log_activity(
+                "configuration",
+                f"Saved request account: {username}",
+                level="success",
+                context={
+                    "username": username,
+                    "permissions": list(updated_user.permissions),
+                },
+            )
+        except (ConfigError, ValueError) as error:
+            return RedirectResponse(
+                f"/config?{urlencode({'user_error': str(error)})}#request-accounts",
+                status_code=303,
+            )
+        return RedirectResponse(
+            "/config?saved=1#request-accounts",
+            status_code=303,
+        )
+
+    @app.post("/config/request-users/delete")
+    async def delete_request_portal_user(
+        request: Request,
+        username: str = Form(...),
+    ) -> RedirectResponse:
+        if not local_request(request):
+            raise HTTPException(
+                403,
+                "request account changes are only allowed from this computer",
+            )
+        current = active_config()
+        normalized = username.strip().casefold()
+        users = [
+            user
+            for user in current.request_portal_users
+            if user.username.casefold() != normalized
+        ]
+        if len(users) == len(current.request_portal_users):
+            raise HTTPException(404, "request account was not found")
+        updated = save_root_config_values(
+            config_path,
+            {"request_portal_users": request_user_rows_for_save(users)},
+        )
+        await app.state.services.reconfigure(updated)
+        repository.log_activity(
+            "configuration",
+            f"Deleted request account: {username.strip()}",
+            level="warning",
+            context={"username": username.strip()},
+        )
+        return RedirectResponse(
+            "/config?saved=1#request-accounts",
+            status_code=303,
+        )
 
     @app.post("/config/full", response_class=HTMLResponse)
     async def save_full_config(
@@ -1097,11 +1326,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "version": __version__,
                     "portal_title": current.request_portal_title,
                     "login_mode": request_login_mode(current),
-                    "portal_username": current.request_portal_username,
+                    "portal_username": request_login_username_hint(current),
                     "error": None,
                 },
             )
 
+        identity = request_portal_identity(request)
+        portal_username = (
+            (identity.display_name or identity.username) if identity else ""
+        )
+        portal_auto_approve = bool(identity and "auto_approve" in identity.permissions)
         params = request.query_params
         goodreads_url = params.get("goodreads_url", "").strip()
         goodreads = None
@@ -1136,7 +1370,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "version": __version__,
                     "portal_title": current.request_portal_title,
                     "portal_root": request_portal_root(request),
-                    "portal_username": current.request_portal_username,
+                    "portal_username": portal_username,
+                    "portal_auto_approve": portal_auto_approve,
                     "login_required": request_login_mode(current) != "public",
                     "filters": manual_search_filters(**values),
                     "searched": True,
@@ -1148,12 +1383,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "goodreads": None,
                     "goodreads_error": None,
                     "requester_name": (
-                        params.get("requester_name", "").strip()
-                        or current.request_portal_username
+                        params.get("requester_name", "").strip() or portal_username
                     )[:120],
                     "requester_contact": params.get("requester_contact", "")[:200],
                     "note": params.get("note", "")[:1000],
-                    "submitted": False,
+                    "submission_result": "",
                 },
                 status_code=429,
             )
@@ -1194,7 +1428,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "version": __version__,
                 "portal_title": current.request_portal_title,
                 "portal_root": request_portal_root(request),
-                "portal_username": current.request_portal_username,
+                "portal_username": portal_username,
+                "portal_auto_approve": portal_auto_approve,
                 "login_required": request_login_mode(current) != "public",
                 "filters": filters,
                 "searched": searched,
@@ -1206,12 +1441,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "goodreads": goodreads,
                 "goodreads_error": goodreads_error,
                 "requester_name": (
-                    params.get("requester_name", "").strip()
-                    or current.request_portal_username
+                    params.get("requester_name", "").strip() or portal_username
                 )[:120],
                 "requester_contact": params.get("requester_contact", "")[:200],
                 "note": params.get("note", "")[:1000],
-                "submitted": params.get("submitted") == "1",
+                "submission_result": params.get("submitted", ""),
             },
         )
 
@@ -1231,14 +1465,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             raise HTTPException(404, "request portal is disabled")
         allowed = await request_rate_allowed(request, "unlock")
         login_mode = request_login_mode(current)
+        authenticated_user = None
         if login_mode == "credentials":
-            username_valid = hmac.compare_digest(
-                username, current.request_portal_username
+            authenticated_user = request_user(current, username)
+            credentials_valid = bool(
+                authenticated_user
+                and verify_request_password(
+                    password,
+                    authenticated_user.password_hash,
+                )
             )
-            password_valid = verify_request_password(
-                password, current.request_portal_password_hash
-            )
-            credentials_valid = username_valid and password_valid
         elif login_mode == "access_code":
             credentials_valid = hmac.compare_digest(
                 access_code, current.request_portal_access_code
@@ -1255,7 +1491,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "version": __version__,
                     "portal_title": current.request_portal_title,
                     "login_mode": login_mode,
-                    "portal_username": current.request_portal_username,
+                    "portal_username": username,
                     "error": (
                         "Too many attempts. Wait one minute."
                         if not allowed
@@ -1272,7 +1508,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0]
         response.set_cookie(
             "mysuite_request_access",
-            request_access_token(current),
+            (
+                request_user_access_token(current, authenticated_user)
+                if authenticated_user is not None
+                else legacy_request_access_token(current)
+            ),
             max_age=60 * 60 * 24 * 30,
             httponly=True,
             secure=request.url.scheme == "https" or forwarded_proto == "https",
@@ -1291,6 +1531,56 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             samesite="strict",
         )
         return response
+
+    async def approve_stored_request(
+        record: dict,
+        *,
+        decision_by: str,
+        automatic: bool,
+    ) -> tuple[str, str]:
+        request_id = str(record["id"])
+        mam_id = int(record["mam_id"])
+        if repository.has_mam_id(mam_id):
+            await asyncio.to_thread(
+                repository.update_request,
+                request_id,
+                "fulfilled",
+                decision_note="Already present in the library or pending for download",
+                decision_by="system",
+            )
+            return "fulfilled", ""
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            return "pending", "The selected MaM release no longer exists"
+        selected = await select_row(
+            app.state.services.config,
+            repository,
+            row,
+            {
+                "cost": "ratio",
+                "name": (
+                    f"request:auto:{decision_by}"
+                    if automatic
+                    else f"request:{request_id}"
+                ),
+            },
+        )
+        if not selected:
+            return "pending", "Release does not match configured formats"
+        decision_note = (
+            f"Automatically approved for request account {decision_by}"
+            if automatic
+            else "Approved by administrator and scheduled for download"
+        )
+        await asyncio.to_thread(
+            repository.update_request,
+            request_id,
+            "approved",
+            decision_note=decision_note,
+            decision_by=decision_by,
+        )
+        asyncio.create_task(app.state.services.trigger("downloader"))
+        return "approved", ""
 
     @app.post("/request/submit")
     async def submit_request(
@@ -1311,7 +1601,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             raise HTTPException(429, "too many requests; wait one minute")
         root = request_portal_root(request)
         if website.strip():
-            return RedirectResponse(f"{root}?submitted=1", status_code=303)
+            return RedirectResponse(f"{root}?submitted=pending", status_code=303)
         row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
         if not row:
             raise HTTPException(404, f"MaM torrent {mam_id} was not found")
@@ -1326,34 +1616,64 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 }
             except GoodreadsLookupError:
                 source = {"kind": "manual"}
+        identity = request_portal_identity(request)
+        identity_name = identity.username if identity else ""
+        identity_permissions = identity.permissions if identity else ()
         record = await asyncio.to_thread(
             repository.create_request,
             mam_id=mam_id,
             release=release,
             requester_name=requester_name[:120],
             requester_contact=requester_contact[:200],
+            requester_username=identity_name,
+            requester_permissions=identity_permissions,
             note=note[:1000],
             source=source,
         )
+        submission_result = "pending"
+        auto_approval_error = ""
         if repository.has_mam_id(mam_id):
-            await asyncio.to_thread(
-                repository.update_request,
-                record["id"],
-                "fulfilled",
-                decision_note="Already present in the library or download queue",
+            submission_result, _ = await approve_stored_request(
+                record,
+                decision_by="system",
+                automatic=False,
             )
+        elif identity and "auto_approve" in identity.permissions:
+            submission_result, auto_approval_error = await approve_stored_request(
+                record,
+                decision_by=identity.username,
+                automatic=True,
+            )
+            if auto_approval_error:
+                await asyncio.to_thread(
+                    repository.update_request,
+                    record["id"],
+                    "pending",
+                    decision_note=("Automatic approval paused: " + auto_approval_error),
+                    decision_by="system",
+                )
         repository.log_activity(
             "requests",
-            f"New request: {release['title']}",
-            level="success",
+            (
+                f"Auto-approved request: {release['title']}"
+                if submission_result == "approved"
+                else f"New request: {release['title']}"
+            ),
+            level=("success" if not auto_approval_error else "warning"),
             context={
                 "request_id": record["id"],
                 "mam_id": mam_id,
                 "requester_name": requester_name[:120],
+                "requester_username": identity_name,
+                "auto_approved": submission_result == "approved",
+                "auto_approval_error": auto_approval_error,
             },
         )
         snapshot_cache["expires"] = 0.0
-        return RedirectResponse(f"{root}?submitted=1", status_code=303)
+        return RedirectResponse(
+            f"{root}?submitted={submission_result}",
+            status_code=303,
+        )
 
     @app.get("/requests", response_class=HTMLResponse)
     async def request_inbox(
@@ -1398,38 +1718,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if record["status"] != "pending":
             raise HTTPException(409, "request has already been decided")
         mam_id = int(record["mam_id"])
-        if repository.has_mam_id(mam_id):
-            await asyncio.to_thread(
-                repository.update_request,
-                request_id,
-                "fulfilled",
-                decision_note="Already present in the library or download queue",
+        _, approval_error = await approve_stored_request(
+            record,
+            decision_by="administrator",
+            automatic=False,
+        )
+        if approval_error:
+            return RedirectResponse(
+                f"/requests?{urlencode({'error': approval_error})}",
+                status_code=303,
             )
-        else:
-            row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
-            if not row:
-                return RedirectResponse(
-                    "/requests?error=The+selected+MaM+release+no+longer+exists",
-                    status_code=303,
-                )
-            selected = await select_row(
-                app.state.services.config,
-                repository,
-                row,
-                {"cost": "ratio", "name": f"request:{request_id}"},
-            )
-            if not selected:
-                return RedirectResponse(
-                    "/requests?error=Release+does+not+match+configured+formats",
-                    status_code=303,
-                )
-            await asyncio.to_thread(
-                repository.update_request,
-                request_id,
-                "approved",
-                decision_note="Approved and added to the download queue",
-            )
-            asyncio.create_task(app.state.services.trigger("downloader"))
         repository.log_activity(
             "requests",
             f"Approved request: {record['release']['title']}",

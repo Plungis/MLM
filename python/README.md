@@ -185,10 +185,18 @@ parsed title when applicable.
 
 The Configuration screen can enable a separate request portal without exposing
 the HeavyMLM dashboard on that hostname. Set the request domain, a portal title,
-a shared requester username/password, and a per-client request limit there.
-Changes apply immediately. The password is never written to `config.toml` in
-plain text; MyAnonaSuite saves a salted PBKDF2-SHA256 hash. The old shared access
-code remains available under **Legacy shared access code** for upgraded installs.
+named requester accounts, and a per-client request limit there. Changes apply
+immediately. Passwords are never written to `config.toml` in plain text;
+MyAnonaSuite saves salted PBKDF2-SHA256 hashes. The old shared username/password
+and access code remain available as compatibility options for upgraded installs.
+
+Each named account has its own permissions. Ordinary accounts send requests to
+the Requests inbox for review. Trusted accounts can be given **Auto-approve
+requests**, which schedules valid releases immediately under the same format,
+slot, ratio, and freeleech-wedge safeguards as manually approved requests. This
+permission does not grant access to the HeavyMLM dashboard, configuration, or
+other MyAnonaSuite modules. Removing an account or resetting its password
+invalidates that account's existing portal login session.
 
 Point an HTTPS reverse proxy at the MyAnonaSuite service and preserve the
 original `Host` header. For example, a minimal Caddy site is:
@@ -212,6 +220,8 @@ the external hostname requires a login.
 
 Visitors can combine title, author, series, narrator, format, category,
 language, availability, seeder, and sort filters. They can also paste a public
-Goodreads book URL to prefill its metadata and run the search. Submissions never
-download automatically: they enter the Requests inbox for approval, and approval
-revalidates the MaM release before adding it to the normal download queue.
+Goodreads book URL to prefill its metadata and run the search. Submissions from
+ordinary accounts enter the Requests inbox for approval. Submissions from
+trusted auto-approve accounts are revalidated and scheduled immediately. Every
+decision records the account that submitted it and remains visible in request
+history.

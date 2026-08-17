@@ -77,7 +77,7 @@
 
   <section class="panel">
     <header class="panel-header">
-      <div><h2>Request portal</h2><p>Expose only the searchable request form on a dedicated custom domain.</p></div>
+      <div><h2>Request portal</h2><p>Expose only the searchable request form on a dedicated custom domain. Named login accounts and permissions are managed below.</p></div>
       <span class="chip">Applies immediately</span>
     </header>
     <div class="panel-body setting-grid">
@@ -101,18 +101,18 @@
         <small>Per-client limit for searches, unlock attempts, and submissions.</small>
       </label>
       <label class="setting-field">
-        <span>Requester username</span>
+        <span>Legacy shared username</span>
         <input type="text" name="request_portal_username" maxlength="100" value="{{ config.request_portal_username }}" autocomplete="username" placeholder="family">
-        <small>Shared username required before anyone can search or submit requests.</small>
+        <small>Compatibility login for existing installations. New named accounts below are recommended.</small>
       </label>
       <label class="setting-field">
-        <span>New requester password</span>
+        <span>New legacy shared password</span>
         <input type="password" name="request_portal_password" minlength="8" value="" autocomplete="new-password" placeholder="{% if config.request_portal_password_hash %}Configured — leave blank to keep{% else %}At least 8 characters{% endif %}">
         <small>Saved as a salted PBKDF2 hash. Leave blank to preserve the current password.</small>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="clear_request_portal_credentials" value="true">
-        <span><strong>Remove requester login</strong><small>Clears the username and password. The legacy access code below may still protect the portal.</small></span>
+        <span><strong>Remove legacy shared login</strong><small>Named request accounts remain active. The shared access code below may also protect the portal.</small></span>
       </label>
       <details class="setting-field config-legacy-auth">
         <summary>Legacy shared access code</summary>
@@ -157,6 +157,48 @@
     <button class="primary" type="submit">Save and apply</button>
   </div>
 </form>
+
+<section class="panel request-account-panel" id="request-accounts">
+  <header class="panel-header">
+    <div><h2>Request login accounts</h2><p>Give each requester a separate login and control whether their requests require review.</p></div>
+    <span class="chip">{{ config.request_portal_users | length }} named</span>
+  </header>
+  <div class="panel-body">
+    <div class="security-note"><strong>Permission boundary:</strong> Auto-approve only skips the request inbox decision. It does not grant access to HeavyMLM administration, configuration, or other MyAnonaSuite modules. Download guardrails and format rules still apply.</div>
+    {% if config.request_portal_users %}
+    <div class="request-account-grid">
+      {% for user in config.request_portal_users %}
+      <article class="request-account-card">
+        <header><div><span class="status ok">Active account</span><h3>{{ user.display_name or user.username }}</h3><code>{{ user.username }}</code></div>{% if "auto_approve" in user.permissions %}<span class="status running">Auto-approve</span>{% else %}<span class="status waiting">Review required</span>{% endif %}</header>
+        <form action="/config/request-users/save" method="post" class="request-account-form">
+          <input type="hidden" name="original_username" value="{{ user.username }}">
+          <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required value="{{ user.username }}" autocomplete="off"></label>
+          <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" value="{{ user.display_name }}" placeholder="Optional friendly name"></label>
+          <label class="setting-field"><span>Reset password</span><input type="password" name="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep current password"></label>
+          <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"{% if "auto_approve" in user.permissions %} checked{% endif %}><span><strong>Auto-approve requests</strong><small>Immediately schedules valid requests from this account without inbox approval.</small></span></label>
+          <button class="primary" type="submit">Save account</button>
+        </form>
+        <form action="/config/request-users/delete" method="post" data-confirm="Delete request account {{ user.username }}? Existing request history will be kept, but this login will stop working immediately.">
+          <input type="hidden" name="username" value="{{ user.username }}">
+          <button class="danger" type="submit">Delete account</button>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <article class="request-account-card request-account-new">
+      <header><div><p class="eyebrow">Add login</p><h3>New request account</h3></div><span class="chip">Password required</span></header>
+      <form action="/config/request-users/save" method="post" class="request-account-form">
+        <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required autocomplete="off" placeholder="reader-name"></label>
+        <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" placeholder="Optional friendly name"></label>
+        <label class="setting-field"><span>Password</span><input type="password" name="password" minlength="8" required autocomplete="new-password" placeholder="At least 8 characters"></label>
+        <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"><span><strong>Auto-approve requests</strong><small>Use only for trusted accounts. All other accounts require your approval.</small></span></label>
+        <button class="primary" type="submit">Create account</button>
+      </form>
+    </article>
+  </div>
+</section>
 
 <section class="panel full-config-panel">
   <header class="panel-header">

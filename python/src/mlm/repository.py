@@ -139,6 +139,8 @@ class Repository:
         release: dict[str, Any],
         requester_name: str = "",
         requester_contact: str = "",
+        requester_username: str = "",
+        requester_permissions: tuple[str, ...] = (),
         note: str = "",
         source: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -149,12 +151,15 @@ class Repository:
             "status": "pending",
             "requester_name": requester_name.strip(),
             "requester_contact": requester_contact.strip(),
+            "requester_username": requester_username.strip(),
+            "requester_permissions": list(requester_permissions),
             "note": note.strip(),
             "source": source or {},
             "release": release,
             "created_at": now,
             "updated_at": now,
             "decision_note": "",
+            "decision_by": "",
         }
         with connect(self.path) as connection:
             connection.execute(
@@ -203,6 +208,7 @@ class Repository:
         status: str,
         *,
         decision_note: str = "",
+        decision_by: str = "",
     ) -> dict[str, Any] | None:
         with connect(self.path) as connection:
             stored = connection.execute(
@@ -214,6 +220,7 @@ class Repository:
             row.update(
                 status=status,
                 decision_note=decision_note.strip(),
+                decision_by=decision_by.strip(),
                 updated_at=datetime.now(UTC).isoformat(),
             )
             connection.execute(
