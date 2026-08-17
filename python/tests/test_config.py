@@ -221,12 +221,14 @@ def test_request_portal_named_accounts_validate_permissions_and_round_trip(
                     "password_hash": admin_hash,
                     "display_name": "Library Admin",
                     "permissions": ("auto_approve",),
+                    "weekly_request_limit": 10,
                 },
                 {
                     "username": "reader",
                     "password_hash": reader_hash,
                     "display_name": "Reader",
                     "permissions": (),
+                    "weekly_request_limit": 20,
                 },
             )
         },
@@ -238,9 +240,12 @@ def test_request_portal_named_accounts_validate_permissions_and_round_trip(
     ]
     assert config.request_portal_users[0].permissions == ("auto_approve",)
     assert config.request_portal_users[1].permissions == ()
+    assert config.request_portal_users[0].weekly_request_limit == 10
+    assert config.request_portal_users[1].weekly_request_limit == 20
     text = path.read_text(encoding="utf-8")
     assert "request_portal_users = [" in text
     assert 'permissions = ["auto_approve"]' in text
+    assert "weekly_request_limit = 10" in text
     assert "admin password" not in text
 
     duplicate = f'''

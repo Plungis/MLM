@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -9,6 +9,16 @@ from uuid import uuid4
 from .database import connect
 from .migration import canonical_json
 from .search import normalize_title
+
+
+class RequestLimitReached(RuntimeError):
+    def __init__(self, username: str, limit: int, used: int) -> None:
+        self.username = username
+        self.limit = limit
+        self.used = used
+        super().__init__(
+            f"request account {username!r} has used its {limit}-request weekly limit"
+        )
 
 
 class Repository:
@@ -141,10 +151,12 @@ class Repository:
         requester_contact: str = "",
         requester_username: str = "",
         requester_permissions: tuple[str, ...] = (),
+        requester_weekly_limit: int = 0,
         note: str = "",
         source: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        now = datetime.now(UTC).isoformat()
+        now_datetime = datetime.now(UTC)
+        now = now_datetime.isoformat()
         row = {
             "id": str(uuid4()),
             "mam_id": mam_id,
@@ -153,6 +165,7 @@ class Repository:
             "requester_contact": requester_contact.strip(),
             "requester_username": requester_username.strip(),
             "requester_permissions": list(requester_permissions),
+            "requester_weekly_limit": max(0, int(requester_weekly_limit)),
             "note": note.strip(),
             "source": source or {},
             "release": release,
@@ -162,6 +175,19 @@ class Repository:
             "decision_by": "",
         }
         with connect(self.path) as connection:
+            if requester_username and requester_weekly_limit > 0:
+                connection.execute("BEGIN IMMEDIATE")
+                used = self._request_count_since(
+                    connection,
+                    requester_username,
+                    now_datetime - timedelta(days=7),
+                )
+                if used >= requester_weekly_limit:
+                    raise RequestLimitReached(
+                        requester_username,
+                        requester_weekly_limit,
+                        used,
+                    )
             connection.execute(
                 """INSERT INTO requests
                    (id, mam_id, status, created_at, updated_at, payload_json)
@@ -176,6 +202,36 @@ class Repository:
                 ),
             )
         return row
+
+    @staticmethod
+    def _request_count_since(
+        connection,
+        username: str,
+        since: datetime,
+    ) -> int:
+        normalized = username.strip().casefold()
+        rows = connection.execute(
+            "SELECT payload_json FROM requests WHERE created_at >= ?",
+            (since.isoformat(),),
+        )
+        return sum(
+            1
+            for stored in rows
+            if str(json.loads(stored[0]).get("requester_username", ""))
+            .strip()
+            .casefold()
+            == normalized
+        )
+
+    def request_count_since(
+        self,
+        username: str,
+        *,
+        since: datetime | None = None,
+    ) -> int:
+        window_start = since or (datetime.now(UTC) - timedelta(days=7))
+        with connect(self.path) as connection:
+            return self._request_count_since(connection, username, window_start)
 
     def request_record(self, request_id: str) -> dict[str, Any] | None:
         with connect(self.path) as connection:

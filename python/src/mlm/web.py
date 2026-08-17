@@ -41,7 +41,7 @@ from .modules.heavymlm.search import (
     search_seed,
 )
 from .modules.mam_spender import default_public_state
-from .repository import Repository
+from .repository import Repository, RequestLimitReached
 from .request_auth import hash_request_password, verify_request_password
 from .request_portal import (
     GoodreadsLookupError,
@@ -1064,6 +1064,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "password_hash": user.password_hash,
                 "display_name": user.display_name,
                 "permissions": tuple(user.permissions),
+                "weekly_request_limit": user.weekly_request_limit,
             }
             for user in users
         )
@@ -1076,6 +1077,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         display_name: str = Form(""),
         password: str = Form(""),
         auto_approve: str | None = Form(None),
+        weekly_request_limit: int = Form(0),
     ) -> RedirectResponse:
         try:
             if not local_request(request):
@@ -1086,6 +1088,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             display_name = display_name.strip()
             if not username:
                 raise ConfigError("request account username cannot be empty")
+            if weekly_request_limit < 0:
+                raise ConfigError("weekly request limit cannot be negative")
             current = active_config()
             users = list(current.request_portal_users)
             lookup = (original_username or username).strip().casefold()
@@ -1127,6 +1131,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 password_hash=password_hash,
                 display_name=display_name,
                 permissions=("auto_approve",) if auto_approve is not None else (),
+                weekly_request_limit=weekly_request_limit,
             )
             if existing_index is None:
                 users.append(updated_user)
@@ -1144,6 +1149,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 context={
                     "username": username,
                     "permissions": list(updated_user.permissions),
+                    "weekly_request_limit": updated_user.weekly_request_limit,
                 },
             )
         except (ConfigError, ValueError) as error:
@@ -1336,6 +1342,19 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             (identity.display_name or identity.username) if identity else ""
         )
         portal_auto_approve = bool(identity and "auto_approve" in identity.permissions)
+        portal_weekly_limit = identity.weekly_request_limit if identity else 0
+        portal_weekly_used = (
+            await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            if identity and portal_weekly_limit > 0
+            else 0
+        )
+        portal_weekly_remaining = max(
+            0,
+            portal_weekly_limit - portal_weekly_used,
+        )
         params = request.query_params
         goodreads_url = params.get("goodreads_url", "").strip()
         goodreads = None
@@ -1372,6 +1391,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "portal_root": request_portal_root(request),
                     "portal_username": portal_username,
                     "portal_auto_approve": portal_auto_approve,
+                    "portal_weekly_limit": portal_weekly_limit,
+                    "portal_weekly_used": portal_weekly_used,
+                    "portal_weekly_remaining": portal_weekly_remaining,
                     "login_required": request_login_mode(current) != "public",
                     "filters": manual_search_filters(**values),
                     "searched": True,
@@ -1388,6 +1410,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "requester_contact": params.get("requester_contact", "")[:200],
                     "note": params.get("note", "")[:1000],
                     "submission_result": "",
+                    "submission_error": params.get("request_error", ""),
                 },
                 status_code=429,
             )
@@ -1430,6 +1453,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "portal_root": request_portal_root(request),
                 "portal_username": portal_username,
                 "portal_auto_approve": portal_auto_approve,
+                "portal_weekly_limit": portal_weekly_limit,
+                "portal_weekly_used": portal_weekly_used,
+                "portal_weekly_remaining": portal_weekly_remaining,
                 "login_required": request_login_mode(current) != "public",
                 "filters": filters,
                 "searched": searched,
@@ -1446,6 +1472,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "requester_contact": params.get("requester_contact", "")[:200],
                 "note": params.get("note", "")[:1000],
                 "submission_result": params.get("submitted", ""),
+                "submission_error": params.get("request_error", ""),
             },
         )
 
@@ -1602,6 +1629,32 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         root = request_portal_root(request)
         if website.strip():
             return RedirectResponse(f"{root}?submitted=pending", status_code=303)
+        identity = request_portal_identity(request)
+        if identity and identity.weekly_request_limit > 0:
+            used = await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            if used >= identity.weekly_request_limit:
+                message = (
+                    f"Weekly request limit reached. {identity.username} has used "
+                    f"all {identity.weekly_request_limit} requests in the rolling "
+                    "seven-day window."
+                )
+                repository.log_activity(
+                    "requests",
+                    f"Weekly request limit blocked {identity.username}",
+                    level="warning",
+                    context={
+                        "username": identity.username,
+                        "used": used,
+                        "weekly_request_limit": identity.weekly_request_limit,
+                    },
+                )
+                return RedirectResponse(
+                    f"{root}?{urlencode({'request_error': message})}",
+                    status_code=303,
+                )
         row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
         if not row:
             raise HTTPException(404, f"MaM torrent {mam_id} was not found")
@@ -1616,20 +1669,32 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 }
             except GoodreadsLookupError:
                 source = {"kind": "manual"}
-        identity = request_portal_identity(request)
         identity_name = identity.username if identity else ""
         identity_permissions = identity.permissions if identity else ()
-        record = await asyncio.to_thread(
-            repository.create_request,
-            mam_id=mam_id,
-            release=release,
-            requester_name=requester_name[:120],
-            requester_contact=requester_contact[:200],
-            requester_username=identity_name,
-            requester_permissions=identity_permissions,
-            note=note[:1000],
-            source=source,
-        )
+        try:
+            record = await asyncio.to_thread(
+                repository.create_request,
+                mam_id=mam_id,
+                release=release,
+                requester_name=requester_name[:120],
+                requester_contact=requester_contact[:200],
+                requester_username=identity_name,
+                requester_permissions=identity_permissions,
+                requester_weekly_limit=(
+                    identity.weekly_request_limit if identity else 0
+                ),
+                note=note[:1000],
+                source=source,
+            )
+        except RequestLimitReached as error:
+            message = (
+                f"Weekly request limit reached. {error.username} has used all "
+                f"{error.limit} requests in the rolling seven-day window."
+            )
+            return RedirectResponse(
+                f"{root}?{urlencode({'request_error': message})}",
+                status_code=303,
+            )
         submission_result = "pending"
         auto_approval_error = ""
         if repository.has_mam_id(mam_id):

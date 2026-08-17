@@ -169,12 +169,13 @@
     <div class="request-account-grid">
       {% for user in config.request_portal_users %}
       <article class="request-account-card">
-        <header><div><span class="status ok">Active account</span><h3>{{ user.display_name or user.username }}</h3><code>{{ user.username }}</code></div>{% if "auto_approve" in user.permissions %}<span class="status running">Auto-approve</span>{% else %}<span class="status waiting">Review required</span>{% endif %}</header>
+        <header><div><span class="status ok">Active account</span><h3>{{ user.display_name or user.username }}</h3><code>{{ user.username }}</code><small>{% if user.weekly_request_limit %}{{ user.weekly_request_limit }} requests per rolling week{% else %}Unlimited weekly requests{% endif %}</small></div>{% if "auto_approve" in user.permissions %}<span class="status running">Auto-approve</span>{% else %}<span class="status waiting">Review required</span>{% endif %}</header>
         <form action="/config/request-users/save" method="post" class="request-account-form">
           <input type="hidden" name="original_username" value="{{ user.username }}">
           <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required value="{{ user.username }}" autocomplete="off"></label>
           <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" value="{{ user.display_name }}" placeholder="Optional friendly name"></label>
           <label class="setting-field"><span>Reset password</span><input type="password" name="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep current password"></label>
+          <label class="setting-field"><span>Requests per week</span><input type="number" name="weekly_request_limit" min="0" step="1" value="{{ user.weekly_request_limit }}"><small>Rolling seven-day limit. Use 0 for unlimited.</small></label>
           <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"{% if "auto_approve" in user.permissions %} checked{% endif %}><span><strong>Auto-approve requests</strong><small>Immediately schedules valid requests from this account without inbox approval.</small></span></label>
           <button class="primary" type="submit">Save account</button>
         </form>
@@ -193,6 +194,7 @@
         <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required autocomplete="off" placeholder="reader-name"></label>
         <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" placeholder="Optional friendly name"></label>
         <label class="setting-field"><span>Password</span><input type="password" name="password" minlength="8" required autocomplete="new-password" placeholder="At least 8 characters"></label>
+        <label class="setting-field"><span>Requests per week</span><input type="number" name="weekly_request_limit" min="0" step="1" value="0"><small>Set 10, 20, or any limit. Use 0 for unlimited.</small></label>
         <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"><span><strong>Auto-approve requests</strong><small>Use only for trusted accounts. All other accounts require your approval.</small></span></label>
         <button class="primary" type="submit">Create account</button>
       </form>

@@ -198,6 +198,14 @@ permission does not grant access to the HeavyMLM dashboard, configuration, or
 other MyAnonaSuite modules. Removing an account or resetting its password
 invalidates that account's existing portal login session.
 
+Accounts can also have a **Requests per week** limit. This is a rolling
+seven-day allowance rather than a calendar-week reset, so values such as 10 or
+20 work consistently regardless of the day the account was created. `0` means
+unlimited. Pending, approved, fulfilled, and later-rejected submissions all
+count because the limit controls how many requests the account may submit, not
+how many are ultimately downloaded. The portal shows each signed-in requester
+their used and remaining allowance before they submit.
+
 Point an HTTPS reverse proxy at the MyAnonaSuite service and preserve the
 original `Host` header. For example, a minimal Caddy site is:
 

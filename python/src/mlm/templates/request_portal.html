@@ -19,6 +19,13 @@
     <p>Find the exact audiobook or ebook release you want, then submit it{% if portal_auto_approve %} directly to the automated download policy{% else %} for approval{% endif %}.</p>
   </header>
 
+  {% if portal_weekly_limit %}
+  <section class="request-quota" aria-label="Weekly request allowance">
+    <span><strong>{{ portal_weekly_remaining }}</strong> request{% if portal_weekly_remaining != 1 %}s{% endif %} left</span>
+    <span>{{ portal_weekly_used }} of {{ portal_weekly_limit }} used in the rolling seven-day window</span>
+  </section>
+  {% endif %}
+
   {% if submission_result %}
   <div class="request-success" role="status">
     {% if submission_result == "approved" %}<strong>Request automatically approved.</strong><span>HeavyMLM scheduled it under the normal download guardrails.</span>
@@ -26,6 +33,7 @@
     {% else %}<strong>Request received.</strong><span>It is waiting in the approval inbox.</span>{% endif %}
   </div>
   {% endif %}
+  {% if submission_error %}<div class="flash error-flash" role="alert"><span>{{ submission_error }}</span><span class="status error">Not submitted</span></div>{% endif %}
 
   <section class="request-goodreads-card">
     <div>

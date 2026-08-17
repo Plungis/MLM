@@ -91,7 +91,8 @@ def portal_config(
             f"username = {json.dumps(user['username'])}, "
             f"password_hash = {json.dumps(user_password_hash)}, "
             f"display_name = {json.dumps(user.get('display_name', ''))}, "
-            f"permissions = [{permission_values}]"
+            f"permissions = [{permission_values}], "
+            f"weekly_request_limit = {int(user.get('weekly_request_limit', 0))}"
             " }"
         )
     users_toml = "[" + ", ".join(user_rows) + "]"
@@ -394,12 +395,14 @@ def test_named_request_accounts_apply_auto_approval_permission(
                 "password": "admin password",
                 "display_name": "Library Admin",
                 "permissions": ("auto_approve",),
+                "weekly_request_limit": 10,
             },
             {
                 "username": "reader",
                 "password": "reader password",
                 "display_name": "Regular Reader",
                 "permissions": (),
+                "weekly_request_limit": 1,
             },
         ),
     )
@@ -431,6 +434,8 @@ def test_named_request_accounts_apply_auto_approval_permission(
             admin_portal = await client.get("/", params={"q": "Dungeon"})
             assert "Library Admin · auto-approval enabled" in admin_portal.text
             assert "Request and schedule automatically" in admin_portal.text
+            assert "10</strong> requests left" in admin_portal.text
+            assert "0 of 10 used" in admin_portal.text
 
             auto_submitted = await client.post(
                 "/request/submit",
@@ -452,6 +457,7 @@ def test_named_request_accounts_apply_auto_approval_permission(
             assert auto_record["status"] == "approved"
             assert auto_record["requester_username"] == "admin"
             assert auto_record["requester_permissions"] == ["auto_approve"]
+            assert auto_record["requester_weekly_limit"] == 10
             assert auto_record["decision_by"] == "admin"
             assert "Automatically approved" in auto_record["decision_note"]
             assert repository.pending_selected()[0]["mam_id"] == 321
@@ -472,6 +478,7 @@ def test_named_request_accounts_apply_auto_approval_permission(
             reader_portal = await client.get("/", params={"q": "Bedlam"})
             assert "Regular Reader · auto-approval enabled" not in reader_portal.text
             assert "Send request for approval" in reader_portal.text
+            assert "1</strong> request left" in reader_portal.text
 
             pending_submitted = await client.post(
                 "/request/submit",
@@ -490,7 +497,39 @@ def test_named_request_accounts_apply_auto_approval_permission(
             pending_record = repository.request_rows(status="pending")[0]
             assert pending_record["requester_username"] == "reader"
             assert pending_record["requester_permissions"] == []
+            assert pending_record["requester_weekly_limit"] == 1
             assert repository.has_pending_mam_id(322) is False
+
+            quota_page = await client.get("/")
+            assert "0</strong> requests left" in quota_page.text
+            assert "1 of 1 used" in quota_page.text
+
+            services.mam.row = {
+                **services.mam.row,
+                "id": 323,
+                "title": "The Butcher's Masquerade",
+            }
+            blocked = await client.post(
+                "/request/submit",
+                data={
+                    "mam_id": "323",
+                    "requester_name": "Regular Reader",
+                    "requester_contact": "",
+                    "note": "Over the limit",
+                    "goodreads_url": "",
+                    "website": "",
+                },
+                follow_redirects=False,
+            )
+            assert blocked.status_code == 303
+            assert (
+                "request_error=Weekly+request+limit+reached"
+                in blocked.headers["location"]
+            )
+            blocked_page = await client.get(blocked.headers["location"])
+            assert "has used all 1 requests" in blocked_page.text
+            assert len(repository.request_rows()) == 2
+            assert repository.has_pending_mam_id(323) is False
 
     asyncio.run(exercise())
 
@@ -524,7 +563,7 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b56"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b57"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
 
     asyncio.run(exercise())

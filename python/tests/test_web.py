@@ -150,6 +150,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'name="request_portal_password"' in config_page.text
     assert "Request login accounts" in config_page.text
     assert 'action="/config/request-users/save"' in config_page.text
+    assert 'name="weekly_request_limit"' in config_page.text
     assert 'name="config_toml"' in config_page.text
     diagnostics = client.get("/diagnostics?live=0")
     assert diagnostics.status_code == 200
@@ -173,8 +174,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b56"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b56"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b57"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b57"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -278,7 +279,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b56" in spender_config.text
+    assert "0.5.0b57" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -363,6 +364,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
             "display_name": "Trusted Reader",
             "password": "reader password",
             "auto_approve": "true",
+            "weekly_request_limit": "10",
         },
         follow_redirects=False,
     )
@@ -373,10 +375,12 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert account.username == "trusted-reader"
     assert account.display_name == "Trusted Reader"
     assert account.permissions == ("auto_approve",)
+    assert account.weekly_request_limit == 10
     assert verify_request_password("reader password", account.password_hash)
     account_page = client.get("/config#request-accounts")
     assert "Trusted Reader" in account_page.text
     assert "Auto-approve" in account_page.text
+    assert "10 requests per rolling week" in account_page.text
     assert "does not grant access to HeavyMLM administration" in account_page.text
 
     account_deleted = client.post(

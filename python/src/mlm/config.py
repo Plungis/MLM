@@ -30,6 +30,7 @@ class RequestPortalUser:
     password_hash: str
     display_name: str = ""
     permissions: tuple[str, ...] = ()
+    weekly_request_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
                     password_hash=str(row.get("password_hash", "")),
                     display_name=str(row.get("display_name", "")).strip(),
                     permissions=tuple(str(value) for value in permissions),
+                    weekly_request_limit=int(row.get("weekly_request_limit", 0)),
                 )
             )
         request_users = tuple(request_users_list)
@@ -206,6 +208,10 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
             if len(user.display_name) > 120:
                 raise ConfigError(
                     "request portal account display name cannot exceed 120 characters"
+                )
+            if user.weekly_request_limit < 0:
+                raise ConfigError(
+                    "request portal account weekly request limit cannot be negative"
                 )
             normalized_username = user.username.casefold()
             if normalized_username in request_usernames:

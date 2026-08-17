@@ -21,6 +21,7 @@ request_portal_title = "Library Requests"
 # Create named requester accounts from the Configuration screen. Each password
 # is saved here only as a salted PBKDF2 hash. Trusted accounts can receive the
 # auto_approve permission; ordinary accounts continue to require inbox review.
+# Each account can also set a rolling weekly_request_limit (0 means unlimited).
 request_portal_rate_limit = 20
 
 audio_types = ["m4b", "m4a", "mp4", "mp3", "ogg"]

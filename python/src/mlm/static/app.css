@@ -2323,6 +2323,12 @@ pre {
   color: var(--muted);
 }
 
+.request-account-card header small {
+  display: block;
+  margin-top: 5px;
+  color: var(--dim);
+}
+
 .request-account-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3140,6 +3146,24 @@ pre {
   margin: 0 0 28px;
 }
 
+.request-quota {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: -10px 0 24px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: rgba(var(--accent-rgb), 0.07);
+  padding: 13px 16px;
+  color: var(--muted);
+}
+
+.request-quota strong {
+  color: var(--accent-strong);
+  font-size: 18px;
+}
+
 .request-portal-brand-row {
   display: flex;
   align-items: center;
@@ -3473,6 +3497,7 @@ pre {
 
   .request-results-header,
   .request-success,
+  .request-quota,
   .request-portal-footer,
   .request-portal-brand-row {
     align-items: flex-start;
