@@ -23,15 +23,17 @@ import HeavyMLM download policy or MAM-Spender purchase behavior.
 Runtime state lives beside the selected SQLite database in the
 `absidekick/` directory:
 
-- `settings.json` stores module settings and stores the ABS token only when
-  **Remember URL/library/token** is enabled.
+- `settings.json` stores module settings and stores the ABS token by default.
+  Disable **Save URL, library, and API token** only when session-only behavior
+  is intentional. The UI never reads the saved token back into the browser.
 - `review_state.json` remembers approved and rejected review items.
 
 ## Native Google Books provider
 
 Google Books searches are made directly by `core.py`; they are not proxied
 through Audiobookshelf. The optional API key is stored only in this module's
-private `settings.json`. Public settings expose only whether a key exists,
+private `settings.json` and is restored after process restarts. Public settings
+expose only whether a key exists,
 whether its fingerprint matches the last successful test, the validation time,
 and a safe error message. Neither the key nor its fingerprint is returned to
 the browser. A tested key automatically enables Google as the second-stage

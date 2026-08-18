@@ -423,8 +423,26 @@ function setForm(settings) {
 
   $("baseUrl").value = connection.baseUrl || "";
   $("provider").value = connection.provider || "audible";
-  $("rememberConnection").checked = Boolean(connection.rememberConnection);
+  $("rememberConnection").checked = connection.rememberConnection !== false;
   $("libraryId").value = connection.libraryId || "";
+  const hasToken = Boolean(connection.hasToken);
+  const tokenSaved = hasToken && connection.rememberConnection !== false;
+  const tokenStatus = $("absTokenStatus");
+  tokenStatus.className = `provider-state ${tokenSaved ? "ready" : hasToken ? "untested" : "missing"}`;
+  tokenStatus.textContent = tokenSaved
+    ? "API token saved"
+    : hasToken
+      ? "Token available this run only"
+      : "Token not saved";
+  $("token").value = "";
+  $("token").placeholder = hasToken
+    ? "Stored token is hidden — paste only to replace it"
+    : "Paste token once; it will be saved privately";
+  $("connectionNote").textContent = tokenSaved
+    ? "The saved API token is loaded on the server. The blank token field is intentional; you do not need to enter it again."
+    : hasToken
+      ? "This token is available only until MyAnonaSuite restarts. Enable saving to keep it."
+      : "Paste the Audiobookshelf API token and connect. Saving is enabled by default and the stored token is never returned to the browser.";
   $("googleBooksApiKey").value = "";
   renderGoogleBooksStatus(providers);
   $("openLibraryEnabled").checked = providers.openLibraryEnabled !== false;
@@ -1115,7 +1133,7 @@ function renderGoogleBooksStatus(providers = {}) {
 
   status.className = `provider-state ${ready ? "ready" : hasKey ? "untested" : "missing"}`;
   status.textContent = ready
-    ? lastError ? "Enabled · last test interrupted" : "Tested & enabled"
+    ? lastError ? "Saved · last test interrupted" : "API key saved & enabled"
     : hasKey ? "Saved · test required" : "Not configured";
   input.placeholder = hasKey
     ? "Stored key is hidden — paste only to replace it"
@@ -1130,7 +1148,7 @@ function renderGoogleBooksStatus(providers = {}) {
     result.classList.add(lastError ? "warning" : "success");
     result.textContent = lastError
       ? `The key remains enabled because it passed validation ${when}. The latest test was interrupted by a temporary provider error: ${lastError}`
-      : `Live Google Books test passed ${when}. Automatic runs try ABS first, native Google second, and Open Library third. Temporary Google failures retry and only pause the provider after three consecutive failed items.`;
+      : `Saved privately on this server; you do not need to enter the key again. Live Google Books test passed ${when}. Automatic runs try ABS first, native Google second, and Open Library third.`;
   } else if (hasKey) {
     result.classList.add("warning");
     result.textContent = providers.googleBooksLastError || "The saved key must pass a live test before Google searches are enabled.";
@@ -1553,6 +1571,14 @@ function wireEvents() {
   ["openLibraryEnabled", "openLibraryContactEmail"].forEach((id) => {
     $(id).addEventListener("input", renderOpenLibraryStatus);
     $(id).addEventListener("change", renderOpenLibraryStatus);
+  });
+  $("token").addEventListener("input", () => {
+    if ($("token").value.trim()) {
+      $("rememberConnection").checked = true;
+      $("absTokenStatus").className = "provider-state untested";
+      $("absTokenStatus").textContent = "Will save on connect";
+      $("connectionNote").textContent = "This new API token will be stored privately when you select Connect or Save Settings.";
+    }
   });
   $("connectBtn").addEventListener("click", (event) => runVisibleAction(event.currentTarget, {
     title: "Connecting to Audiobookshelf",

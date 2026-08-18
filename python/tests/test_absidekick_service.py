@@ -40,6 +40,31 @@ def test_absidekick_settings_round_trip_without_exposing_token(
     assert restored.public_state()["settings"]["matching"]["threshold"] == 91
 
 
+def test_absidekick_token_is_remembered_by_default_after_restart(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "absidekick"
+    service = ABSidekickService(data_dir)
+
+    result = service.save(
+        {
+            "settings": {
+                "connection": {
+                    "baseUrl": "http://localhost:13378",
+                    "libraryId": "audiobooks",
+                }
+            },
+            "token": "saved-by-default-token",
+        }
+    )
+
+    assert result["settings"]["connection"]["rememberConnection"] is True
+    assert result["settings"]["connection"]["hasToken"] is True
+    restored = ABSidekickService(data_dir)
+    assert restored.token == "saved-by-default-token"
+    assert restored.public_state()["settings"]["connection"]["hasToken"] is True
+
+
 def test_absidekick_does_not_persist_token_when_remember_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -93,17 +118,21 @@ def test_google_books_key_must_pass_live_test_and_is_never_returned(
             "message": f"Live test accepted {len(api_key)} key characters.",
         },
     )
-    tested_result = service.test_google_books({})
+    restored = ABSidekickService(tmp_path / "absidekick")
+    assert restored.public_state()["settings"]["providers"]["hasGoogleBooksApiKey"]
+    tested_result = restored.test_google_books({})
 
     assert tested_result["valid"] is True
     assert tested_result["settings"]["providers"]["googleBooksReady"] is True
     assert "googleBooksApiKey" not in tested_result["settings"]["providers"]
     assert "googleBooksApiKeyFingerprint" not in tested_result["settings"]["providers"]
 
-    cleared_result = service.clear_google_books()
+    cleared_result = restored.clear_google_books()
     assert cleared_result["settings"]["providers"]["hasGoogleBooksApiKey"] is False
     assert cleared_result["settings"]["providers"]["googleBooksReady"] is False
-    assert "private-google-key" not in service.settings_path.read_text(encoding="utf-8")
+    assert "private-google-key" not in restored.settings_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_transient_retest_keeps_previously_validated_google_key_enabled(

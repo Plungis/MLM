@@ -69,7 +69,10 @@
                   <p class="eyebrow">Server</p>
                   <h2>Connection</h2>
                 </div>
-                <button type="button" id="connectBtn">Connect</button>
+                <div class="button-row">
+                  <span id="absTokenStatus" class="provider-state missing">Token not saved</span>
+                  <button type="button" id="connectBtn">Connect</button>
+                </div>
               </div>
               <div class="grid two">
                 <label class="field">
@@ -78,7 +81,7 @@
                 </label>
                 <label class="field">
                   <span>API Token</span>
-                  <input id="token" type="password" placeholder="Paste token for this session" autocomplete="off" />
+                  <input id="token" type="password" placeholder="Paste token once; it will be saved privately" autocomplete="new-password" spellcheck="false" />
                 </label>
                 <label class="field">
                   <span>Library</span>
@@ -106,9 +109,9 @@
               </div>
               <label class="check">
                 <input id="rememberConnection" type="checkbox" />
-                <span>Remember URL/library/token in the module's private data folder</span>
+                <span>Save URL, library, and API token in the module's private data folder</span>
               </label>
-              <div class="note" id="connectionNote">Token is never returned to the browser after save. ABSidekick controls are restricted to the machine running MyAnonaSuite.</div>
+              <div class="note" id="connectionNote">Saving is enabled by default. The token is stored beside the MyAnonaSuite database and is never returned to the browser.</div>
 
               <section class="provider-config google-provider-config" aria-labelledby="googleBooksHeading">
                 <div class="section-head compact-head">

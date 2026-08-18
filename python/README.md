@@ -85,14 +85,19 @@ and any plain Session_ID. The original file is not changed.
 Choose **A_ / ABS** in the suite switcher to open the integrated ABSidekick
 organizer. Its own sidebar exposes Run Center, Review Desk, Targeting, Matching,
 Tags & Actions, and Config. Config stores the Audiobookshelf URL, library,
-provider, and optional remembered API token; all policy changes apply to the
-next preview or run without restarting MyAnonaSuite.
+provider, and API token by default; uncheck the save option only for a
+deliberately session-only token. Stored credentials remain on the server and
+are represented in the UI by a saved-status indicator rather than being
+returned to the browser. All policy changes apply to the next preview or run
+without restarting MyAnonaSuite.
 
 Config also includes an optional native Google Books provider. Create a Google
 Cloud project, enable the Books API, create an API key, restrict that key to
 the Books API, paste it into **Google Books API Key**, and choose **Test &
 Enable**. The in-app guide links directly to each Google Cloud screen and
-explains optional stable-IP restrictions. A pasted key is saved privately but
+explains optional stable-IP restrictions. A pasted key is saved privately and
+survives MyAnonaSuite restarts; after the field clears, the saved-status message
+confirms that the key is still loaded and does not need to be pasted again.
 Google remains disabled until the live test succeeds; when no tested key is
 present, MyAnonaSuite sends no request to Google. The key itself is never
 returned to the browser or sent to Audiobookshelf. Once the key is tested,

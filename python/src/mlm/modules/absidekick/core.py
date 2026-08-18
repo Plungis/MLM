@@ -46,7 +46,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "baseUrl": "",
         "libraryId": "",
         "provider": "audible",
-        "rememberConnection": False,
+        "rememberConnection": True,
     },
     "providers": {
         "googleBooksApiKey": "",
@@ -215,7 +215,9 @@ def save_settings(
         data["connection"]["token"] = token
     else:
         data["connection"].pop("token", None)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def public_settings(settings: dict[str, Any], has_token: bool) -> dict[str, Any]:
