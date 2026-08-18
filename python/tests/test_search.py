@@ -73,6 +73,44 @@ def test_metadata_matching_requires_author_and_narrator_compatibility() -> None:
     assert not metadata_matches(base, {**base, "narrators": []})
 
 
+def test_metadata_matching_checks_series_and_volume_entries() -> None:
+    book1 = {
+        "media_type": "Audiobook",
+        "language": "English",
+        "edition": None,
+        "authors": ["Author"],
+        "narrators": ["Narrator"],
+        "series": [{"name": "My Eldritch Horror", "entries": ["1"]}],
+    }
+    book2 = {
+        "media_type": "Audiobook",
+        "language": "English",
+        "edition": None,
+        "authors": ["Author"],
+        "narrators": ["Narrator"],
+        "series": [{"name": "My Eldritch Horror", "entries": ["2"]}],
+    }
+    book1_same_volume = {
+        "media_type": "Audiobook",
+        "language": "English",
+        "edition": None,
+        "authors": ["Author"],
+        "narrators": ["Narrator"],
+        "series": [{"name": "My Eldritch Horror", "entries": ["1"]}],
+    }
+    standalone = {
+        "media_type": "Audiobook",
+        "language": "English",
+        "edition": None,
+        "authors": ["Author"],
+        "narrators": ["Narrator"],
+        "series": [],
+    }
+    assert metadata_matches(book1, book1_same_volume)
+    assert not metadata_matches(book1, book2)
+    assert not metadata_matches(book1, standalone)
+
+
 def test_torrent_meta_decodes_mam_nested_json_fields() -> None:
     meta = torrent_meta(
         {

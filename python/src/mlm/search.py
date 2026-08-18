@@ -249,6 +249,23 @@ def _date(value: Any) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
+def _series_map(meta: dict[str, Any]) -> dict[str, set[str]]:
+    mapping: dict[str, set[str]] = {}
+    for item in meta.get("series", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip().casefold()
+        if not name:
+            continue
+        entries = {
+            str(entry).strip().casefold()
+            for entry in item.get("entries", [])
+            if str(entry).strip()
+        }
+        mapping.setdefault(name, set()).update(entries)
+    return mapping
+
+
 def metadata_matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
     left_media = str(left.get("media_type", "")).lower()
     right_media = str(right.get("media_type", "")).lower()
@@ -284,9 +301,29 @@ def metadata_matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return False
     left_narrators = {str(value).casefold() for value in left.get("narrators", [])}
     right_narrators = {str(value).casefold() for value in right.get("narrators", [])}
-    return (not left_narrators and not right_narrators) or bool(
-        left_narrators.intersection(right_narrators)
-    )
+    if (left_narrators or right_narrators) and not left_narrators.intersection(
+        right_narrators
+    ):
+        return False
+
+    left_series = _series_map(left)
+    right_series = _series_map(right)
+    if left_series and right_series:
+        common_series = set(left_series.keys()).intersection(right_series.keys())
+        if not common_series:
+            return False
+        for name in common_series:
+            left_entries = left_series[name]
+            right_entries = right_series[name]
+            if left_entries and right_entries:
+                if not left_entries.intersection(right_entries):
+                    return False
+            elif bool(left_entries) != bool(right_entries):
+                return False
+    elif bool(left_series) != bool(right_series):
+        return False
+
+    return True
 
 
 def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:

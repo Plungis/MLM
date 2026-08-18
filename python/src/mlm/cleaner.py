@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import Config
 from .qbittorrent import QbitClient
 from .repository import Repository
+from .search import metadata_matches
 
 
 def _preference(config: Config, torrent: dict) -> int:
@@ -56,31 +57,48 @@ async def clean_superseded(
     for rows in grouped.values():
         if len(rows) < 2:
             continue
-        rows.sort(
-            key=lambda row: (
-                _preference(config, row),
-                -sum(
-                    (Path(row["library_path"]) / file).stat().st_size
-                    for file in row.get("library_files", [])
-                    if (Path(row["library_path"]) / file).exists()
-                ),
+
+        clusters: list[list[dict]] = []
+        for torrent in rows:
+            meta = torrent.get("meta", {})
+            placed = False
+            for cluster in clusters:
+                if metadata_matches(meta, cluster[0].get("meta", {})):
+                    cluster.append(torrent)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([torrent])
+
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            cluster.sort(
+                key=lambda row: (
+                    _preference(config, row),
+                    -sum(
+                        (Path(row["library_path"]) / file).stat().st_size
+                        for file in row.get("library_files", [])
+                        if row.get("library_path")
+                        and (Path(row["library_path"]) / file).exists()
+                    ),
+                )
             )
-        )
-        keep, *remove_rows = rows
-        for torrent in remove_rows:
-            for qbit_config, qbit in qbit_clients:
-                update = qbit_config.get("on_cleaned")
-                if not update or not torrent.get("id_is_hash"):
-                    continue
-                if update.get("category"):
-                    await qbit.set_category([torrent["id"]], update["category"])
-                await qbit.add_tags([torrent["id"]], update.get("tags", []))
-            remove_library_files(torrent)
-            torrent["replaced_with"] = [keep["id"], keep["created_at"]]
-            torrent["library_path"] = None
-            torrent["library_files"] = []
-            torrent["library_mismatch"] = None
-            torrent["abs_id"] = None
-            repository.update_torrent(torrent)
-            cleaned += 1
+            keep, *remove_rows = cluster
+            for torrent in remove_rows:
+                for qbit_config, qbit in qbit_clients:
+                    update = qbit_config.get("on_cleaned")
+                    if not update or not torrent.get("id_is_hash"):
+                        continue
+                    if update.get("category"):
+                        await qbit.set_category([torrent["id"]], update["category"])
+                    await qbit.add_tags([torrent["id"]], update.get("tags", []))
+                remove_library_files(torrent)
+                torrent["replaced_with"] = [keep["id"], keep["created_at"]]
+                torrent["library_path"] = None
+                torrent["library_files"] = []
+                torrent["library_mismatch"] = None
+                torrent["abs_id"] = None
+                repository.update_torrent(torrent)
+                cleaned += 1
     return cleaned
