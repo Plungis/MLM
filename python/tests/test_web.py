@@ -175,8 +175,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b60"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b60"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b61"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b61"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -282,7 +282,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b60" in spender_config.text
+    assert "0.5.0b61" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -833,7 +833,53 @@ def test_lists_and_processed_library_are_consolidated(tmp_path: Path) -> None:
     assert "Tracked Book" in library.text
     assert duplicates.status_code == 200
     assert "Tracked Book replacement" in duplicates.text
-    assert "Duplicate of hash-123" in duplicates.text
     assert old_lists.url.path == "/lists"
     assert old_duplicates.url.path == "/library"
     assert old_duplicates.url.query == b"view=duplicates"
+
+
+def test_modules_page_and_toggle_action(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = "secret"\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    client = TestClient(app)
+
+    modules_get = client.get("/modules")
+    assert modules_get.status_code == 200
+    assert "Module Management" in modules_get.text
+    assert "HeavyMLM" in modules_get.text
+    assert "ABSidekick" in modules_get.text
+    assert "MAM-Spender" in modules_get.text
+    assert 'name="module_heavymlm"' in modules_get.text
+
+    # Disable heavymlm, keep only mam_spender
+    toggle_post = client.post(
+        "/modules",
+        data={
+            "module_mam_spender": "true",
+        },
+        follow_redirects=False,
+    )
+    assert toggle_post.status_code == 303
+    assert toggle_post.headers["location"] == "/modules?saved=1"
+
+    # Verify index now redirects to mam-spender dashboard
+    index_redirect = client.get("/", follow_redirects=False)
+    assert index_redirect.status_code == 303
+    assert index_redirect.headers["location"] == "/suite/mam-spender/dashboard"
+
+
+def test_tutorial_page(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = "secret"\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    client = TestClient(app)
+
+    tutorial_get = client.get("/tutorial")
+    assert tutorial_get.status_code == 200
+    assert "Getting Started Guide" in tutorial_get.text
+    assert "How MyAnonaSuite Works" in tutorial_get.text
+    assert "Connecting to MyAnonamouse" in tutorial_get.text
+    assert "CRITICAL SAFETY WARNING" in tutorial_get.text

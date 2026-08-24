@@ -5,6 +5,7 @@ import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from .audiobookshelf import AudiobookshelfClient, match_torrents_to_audiobookshelf
 from .autograbber import run_autograbber
@@ -34,6 +35,7 @@ class ServiceState:
     config: Config
     repository: Repository
     mam: MamClient
+    absidekick: Any | None = None
     jobs: dict[str, JobStatus] = field(default_factory=dict)
     mam_stats: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task] = field(default_factory=list)
@@ -42,6 +44,43 @@ class ServiceState:
 
     def __post_init__(self) -> None:
         self.mam_spender = MamSpenderService(self.repository, self.mam)
+
+    def _module_active(self, name: str) -> bool:
+        normalized = name.strip().replace("-", "_").lower()
+        active = {
+            item.strip().replace("-", "_").lower()
+            for item in self.config.enabled_modules
+        }
+        return normalized in active
+
+    async def _trigger_absidekick_sync(self, linked_count: int) -> None:
+        if not self.absidekick:
+            return
+        try:
+            res = self.absidekick.auto_sync_library()
+            if res.get("ok"):
+                self.repository.log_activity(
+                    "absidekick",
+                    (
+                        f"Auto-sync triggered: {linked_count} new book(s) "
+                        "organized, initiated ABSidekick library scan and "
+                        "auto-matching."
+                    ),
+                    level="success",
+                )
+            else:
+                self.repository.log_activity(
+                    "absidekick",
+                    f"Auto-sync skipped: {res.get('message', 'No library selected')}",
+                    level="info",
+                )
+        except Exception as error:  # noqa: BLE001
+            self.repository.log_activity(
+                "absidekick",
+                f"Auto-sync failed: {error}",
+                level="warning",
+                context={"error": str(error)},
+            )
 
     def report_progress(
         self,
@@ -158,7 +197,7 @@ class ServiceState:
         job_name = f"organizer:{index}"
         qbit, qbit_config = await self._qbit(index)
         try:
-            return await organize_completed(
+            result = await organize_completed(
                 self.config,
                 self.repository,
                 qbit_config,
@@ -170,6 +209,13 @@ class ServiceState:
                     )
                 ),
             )
+            if (
+                getattr(result, "linked", 0) > 0
+                and self.config.absidekick_auto_sync
+                and self._module_active("absidekick")
+            ):
+                await self._trigger_absidekick_sync(result.linked)
+            return result
         finally:
             await qbit.close()
 
@@ -228,7 +274,10 @@ class ServiceState:
         return {"refreshed": refreshed, "selected": selected, "failed": failed}
 
     def start(self) -> None:
-        self.mam_spender.start()
+        if self._module_active("mam_spender"):
+            self.mam_spender.start()
+        if not self._module_active("heavymlm"):
+            return
         for index, rule in enumerate(self.config.autograbs):
             interval = int(rule.get("search_interval") or self.config.search_interval)
             name = f"autograb:{index}"

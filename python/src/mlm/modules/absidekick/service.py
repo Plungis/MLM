@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import threading
@@ -7,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -196,25 +198,54 @@ class ABSidekickService:
     def _apply_open_library_input(
         self, settings: dict[str, Any], payload: dict[str, Any]
     ) -> None:
-        if (
-            "openLibraryEnabled" not in payload
-            and "openLibraryContactEmail" not in payload
-        ):
+        providers_payload = (
+            payload.get("providers")
+            if isinstance(payload.get("providers"), dict)
+            else {}
+        )
+        incoming_settings = (
+            payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
+        )
+        incoming_providers = (
+            incoming_settings.get("providers")
+            if isinstance(incoming_settings.get("providers"), dict)
+            else {}
+        )
+        has_enabled = (
+            "openLibraryEnabled" in payload
+            or "openLibraryEnabled" in providers_payload
+            or "openLibraryEnabled" in incoming_providers
+        )
+        has_contact = (
+            "openLibraryContactEmail" in payload
+            or "openLibraryContactEmail" in providers_payload
+            or "openLibraryContactEmail" in incoming_providers
+        )
+        if not has_enabled and not has_contact:
             return
+
         providers = settings.setdefault("providers", {})
-        enabled = bool(
-            payload.get(
-                "openLibraryEnabled",
-                providers.get("openLibraryEnabled", True),
+        enabled_val = (
+            payload.get("openLibraryEnabled")
+            if "openLibraryEnabled" in payload
+            else providers_payload.get("openLibraryEnabled")
+            if "openLibraryEnabled" in providers_payload
+            else incoming_providers.get(
+                "openLibraryEnabled", providers.get("openLibraryEnabled", True)
             )
         )
-        contact_email = str(
-            payload.get(
+        contact_val = (
+            payload.get("openLibraryContactEmail")
+            if "openLibraryContactEmail" in payload
+            else providers_payload.get("openLibraryContactEmail")
+            if "openLibraryContactEmail" in providers_payload
+            else incoming_providers.get(
                 "openLibraryContactEmail",
                 providers.get("openLibraryContactEmail", ""),
             )
-            or ""
-        ).strip()
+        )
+        enabled = bool(enabled_val)
+        contact_email = str(contact_val or "").strip()
         if len(contact_email) > 254:
             raise ValueError("Open Library contact email is too long")
         if contact_email and not re.fullmatch(
@@ -237,6 +268,8 @@ class ABSidekickService:
 
     def connect(self, payload: dict[str, Any]) -> dict[str, Any]:
         settings, token = self._incoming(payload)
+        self._apply_google_key_input(settings, payload)
+        self._apply_open_library_input(settings, payload)
         libraries = self.client(settings, token).get("/api/libraries")
         self._store(settings, token)
         return {
@@ -484,3 +517,35 @@ class ABSidekickService:
                 )
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
             raise LookupError("Audiobookshelf cover is unavailable") from error
+
+    def auto_sync_library(self) -> dict[str, Any]:
+        """Trigger an Audiobookshelf library scan and start an auto-match job."""
+        with self._lock:
+            if self.job and self.job.status in {"queued", "running", "paused"}:
+                return {
+                    "ok": False,
+                    "message": "An ABSidekick matching job is already running",
+                }
+            library_id = str(
+                self.settings.get("connection", {}).get("libraryId", "")
+            ).strip()
+            if not library_id:
+                return {
+                    "ok": False,
+                    "message": "No library selected in ABSidekick configuration",
+                }
+            client = self.client()
+        with contextlib.suppress(Exception):
+            client.post(f"/api/libraries/{urllib.parse.quote(library_id)}/scan")
+
+        job_settings = deepcopy(self.settings)
+        job_settings.setdefault("targeting", {})["mode"] = "unprocessed"
+        job = MatchJob(
+            str(int(time.time() * 1000)),
+            client,
+            job_settings,
+        )
+        with self._lock:
+            self.job = job
+            job.start()
+        return {"ok": True, "job": self.job_snapshot()}

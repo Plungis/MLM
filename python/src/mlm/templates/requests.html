@@ -13,6 +13,13 @@
   {% for value,label in [("pending","Pending"),("approved","Approved"),("fulfilled","Already available"),("rejected","Rejected"),("all","All")] %}<a class="button{% if selected_status == value %} primary{% endif %}" href="/requests?status={{ value }}">{{ label }}</a>{% endfor %}
 </nav>
 
+<div class="callout tip" style="margin-bottom: 20px;">
+  <span class="callout-icon">💡</span>
+  <div>
+    <strong>Safe Remote Sharing:</strong> Learn how to safely expose the request portal to family and friends with custom domains, named accounts, and rate limiting in the <a href="/tutorial#step-5">Setup Guide</a>.
+  </div>
+</div>
+
 {% if rows %}<section class="request-admin-grid">
   {% for row in rows %}
   <article class="panel request-admin-card">

@@ -269,3 +269,28 @@ request_portal_users = [
     path.write_text(unknown_permission, encoding="utf-8")
     with pytest.raises(ConfigError, match="unknown request portal permissions"):
         load_config(path)
+
+
+def test_enabled_modules_and_absidekick_auto_sync_defaults_and_save(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('mam_id = "secret"\n', encoding="utf-8")
+
+    config = load_config(path)
+    assert config.enabled_modules == ("heavymlm", "absidekick", "mam_spender")
+    assert config.absidekick_auto_sync is True
+
+    updated = save_root_config_values(
+        path,
+        {
+            "enabled_modules": ("mam_spender",),
+            "absidekick_auto_sync": False,
+        },
+    )
+    assert updated.enabled_modules == ("mam_spender",)
+    assert updated.absidekick_auto_sync is False
+
+    reloaded = load_config(path)
+    assert reloaded.enabled_modules == ("mam_spender",)
+    assert reloaded.absidekick_auto_sync is False

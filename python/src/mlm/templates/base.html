@@ -58,6 +58,12 @@
 
       <div class="nav-group">
         <p class="nav-label">System</p>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules">
+          <span>Modules</span>
+        </a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial">
+          <span>Guide &amp; Tutorial</span>
+        </a>
         <a class="nav-link{% if path == '/config' %} active{% endif %}" href="/config">
           <span>Configuration</span>
         </a>
@@ -80,6 +86,8 @@
       <div class="nav-group">
         <p class="nav-label">System</p>
         <a class="nav-link{% if absidekick_view == 'connection' %} active{% endif %}" href="/suite/absidekick/config"><span>Config</span></a>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Modules</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
         <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
       </div>
     </nav>
@@ -97,6 +105,9 @@
         <a class="nav-link{% if spender_view == 'mam-data' %} active{% endif %}" href="/suite/mam-spender/mam-data"><span>All MaM Data</span></a>
       </div>
       <div class="nav-group">
+        <p class="nav-label">System</p>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Modules</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
         <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
       </div>
     </nav>
@@ -105,21 +116,26 @@
       <div class="nav-group">
         <p class="nav-label">{{ suite_info.name }}</p>
         <a class="nav-link active" href="/suite/{{ suite_module }}"><span>Module status</span></a>
+        <a class="nav-link" href="/modules"><span>Modules</span></a>
+        <a class="nav-link" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
         <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
       </div>
     </nav>
     {% endif %}
 
     <div class="suite-switcher" aria-label="MyAnonaSuite module switcher">
-      <p class="nav-label">Suite switcher</p>
+      <div class="suite-switcher-header">
+        <p class="nav-label">Suite switcher</p>
+        <a href="/modules" class="switcher-manage-link" title="Manage modules">⚙</a>
+      </div>
       <div class="suite-switcher-grid">
-        <a class="suite-module heavymlm{% if suite_module == 'heavymlm' %} active{% endif %}" href="/" title="HeavyMLM">
+        <a class="suite-module heavymlm{% if suite_module == 'heavymlm' %} active{% endif %}{% if 'heavymlm' not in enabled_modules %} module-disabled{% endif %}" href="/" title="HeavyMLM">
           <span>H_</span><small>MLM</small>
         </a>
-        <a class="suite-module absidekick{% if suite_module == 'absidekick' %} active{% endif %}" href="/suite/absidekick/run" title="ABSidekick">
+        <a class="suite-module absidekick{% if suite_module == 'absidekick' %} active{% endif %}{% if 'absidekick' not in enabled_modules %} module-disabled{% endif %}" href="/suite/absidekick/run" title="ABSidekick">
           <span>A_</span><small>ABS</small>
         </a>
-        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}" href="/suite/mam-spender/dashboard" title="MAM-Spender">
+        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}{% if 'mam_spender' not in enabled_modules %} module-disabled{% endif %}" href="/suite/mam-spender/dashboard" title="MAM-Spender">
           <span>M$</span><small>Spend</small>
         </a>
       </div>

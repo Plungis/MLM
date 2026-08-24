@@ -114,7 +114,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             stored_mam_id=repository.config_value("mam_id"),
             cookie_store=lambda value: repository.set_config_value("mam_id", value),
         )
-        state = ServiceState(config, repository, mam)
+        state = ServiceState(config, repository, mam, absidekick=absidekick)
         app.state.services = state
         try:
             state.start()
@@ -128,7 +128,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     def active_config() -> Config:
         if hasattr(app.state, "services"):
             return app.state.services.config
-        return config
+        return load_config(config_path)
 
     def spender_service():
         services = getattr(app.state, "services", None)
@@ -362,6 +362,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         snapshot = await ui_snapshot()
         counts = snapshot["counts"]
         suite_module = str(values.pop("suite_module", "heavymlm"))
+        current_cfg = active_config()
+        enabled_modules_set = {
+            m.strip().replace("-", "_").lower() for m in current_cfg.enabled_modules
+        }
         return {
             "request": request,
             "counts": counts,
@@ -375,22 +379,99 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             ),
             "version": __version__,
             "suite_module": suite_module,
-            "suite_info": SUITE_MODULES[suite_module],
+            "suite_info": SUITE_MODULES.get(suite_module, SUITE_MODULES["heavymlm"]),
             "suite_modules": SUITE_MODULES,
+            "enabled_modules": enabled_modules_set,
+            "config": _redacted_config(current_cfg),
+            "absidekick_auto_sync": current_cfg.absidekick_auto_sync,
             **values,
         }
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request) -> HTMLResponse:
+    async def index(request: Request) -> Response:
         if request_portal_host(request):
             return await request_portal_page(request)
+        current_cfg = active_config()
+        enabled_modules_set = {
+            m.strip().replace("-", "_").lower() for m in current_cfg.enabled_modules
+        }
+        if "heavymlm" in enabled_modules_set:
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                await context(
+                    request,
+                    title="Home",
+                    triggered=request.query_params.get("triggered"),
+                ),
+            )
+        if "mam_spender" in enabled_modules_set:
+            return RedirectResponse("/suite/mam-spender/dashboard", status_code=303)
+        if "absidekick" in enabled_modules_set:
+            return RedirectResponse("/suite/absidekick/run", status_code=303)
+        return RedirectResponse("/modules", status_code=303)
+
+    @app.get("/modules", response_class=HTMLResponse)
+    async def modules_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
-            "index.html",
+            "modules.html",
             await context(
                 request,
-                title="Home",
-                triggered=request.query_params.get("triggered"),
+                title="Module Management",
+                saved=request.query_params.get("saved") == "1",
+                error=request.query_params.get("error"),
+            ),
+        )
+
+    @app.post("/modules", response_class=HTMLResponse)
+    async def save_modules_action(
+        request: Request,
+        module_heavymlm: str | None = Form(None),
+        module_absidekick: str | None = Form(None),
+        module_mam_spender: str | None = Form(None),
+        request_portal_enabled: str | None = Form(None),
+    ) -> Response:
+        modules = []
+        if module_heavymlm is not None:
+            modules.append("heavymlm")
+        if module_absidekick is not None:
+            modules.append("absidekick")
+        if module_mam_spender is not None:
+            modules.append("mam_spender")
+        if request_portal_enabled is not None:
+            modules.append("request_portal")
+        try:
+            updated = save_root_config_values(
+                config_path,
+                {
+                    "enabled_modules": tuple(modules),
+                    "request_portal_enabled": request_portal_enabled is not None,
+                },
+            )
+            if hasattr(app.state, "services"):
+                await app.state.services.reconfigure(updated)
+            return RedirectResponse("/modules?saved=1", status_code=303)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "modules.html",
+                await context(
+                    request,
+                    title="Module Management",
+                    saved=False,
+                    error=str(error),
+                ),
+            )
+
+    @app.get("/tutorial", response_class=HTMLResponse)
+    async def tutorial_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "tutorial.html",
+            await context(
+                request,
+                title="Getting Started Guide",
             ),
         )
 
@@ -988,6 +1069,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         prefer_wedges: str | None = Form(None),
         download_on_wedge_failure: str | None = Form(None),
         grab_both_formats: str | None = Form(None),
+        absidekick_auto_sync: str | None = Form(None),
         add_torrents_stopped: str | None = Form(None),
         request_portal_enabled: str | None = Form(None),
         request_portal_require_account_login: str | None = Form(None),
@@ -1018,6 +1100,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "prefer_wedges": prefer_wedges is not None,
                 "download_on_wedge_failure": (download_on_wedge_failure is not None),
                 "grab_both_formats": grab_both_formats is not None,
+                "absidekick_auto_sync": absidekick_auto_sync is not None,
                 "add_torrents_stopped": add_torrents_stopped is not None,
                 "request_portal_enabled": request_portal_enabled is not None,
                 "request_portal_require_account_login": (

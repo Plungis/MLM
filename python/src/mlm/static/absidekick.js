@@ -513,6 +513,10 @@ function getSettingsFromForm() {
       provider: $("provider").value,
       rememberConnection: $("rememberConnection").checked,
     },
+    providers: {
+      ...openLibraryPayload(),
+      ...googleKeyPayload(),
+    },
     run: {
       dryRun: $("dryRun").checked,
       limit: Number($("limit").value || 0),
@@ -1400,7 +1404,12 @@ async function searchReview(rowIndex, form) {
 async function connect() {
   const payload = await api("/api/connect", {
     method: "POST",
-    body: JSON.stringify({ settings: getSettingsFromForm(), ...tokenPayload() }),
+    body: JSON.stringify({
+      settings: getSettingsFromForm(),
+      ...tokenPayload(),
+      ...googleKeyPayload(),
+      ...openLibraryPayload(),
+    }),
   });
   setForm(payload.settings);
   populateLibraries(normalizeLibraryList(payload));

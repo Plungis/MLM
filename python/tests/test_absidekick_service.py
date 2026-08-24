@@ -284,3 +284,100 @@ def test_review_scan_publishes_live_activity_and_completion(
     assert activity["current"] == 1
     assert activity["total"] == 1
     assert "loaded 1 item" in activity["detail"]
+
+
+def test_open_library_email_persists_across_connect_and_save(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+
+    class FakeClient:
+        def get(self, path):
+            if path == "/api/libraries":
+                return [{"id": "lib-1", "name": "Audiobooks"}]
+            return {}
+
+        def post(self, path):
+            return {"ok": True}
+
+    monkeypatch.setattr(service, "client", lambda *args, **kwargs: FakeClient())
+
+    connect_result = service.connect(
+        {
+            "settings": {
+                "connection": {
+                    "baseUrl": "http://localhost:13378",
+                    "libraryId": "lib-1",
+                },
+                "providers": {
+                    "openLibraryContactEmail": "user@example.com",
+                    "openLibraryEnabled": True,
+                },
+            },
+            "token": "test-token",
+        }
+    )
+    assert connect_result["ok"] is True
+    assert (
+        service.settings["providers"]["openLibraryContactEmail"] == "user@example.com"
+    )
+    assert (
+        service.public_state()["settings"]["providers"]["openLibraryContactEmail"]
+        == "user@example.com"
+    )
+
+    save_result = service.save(
+        {
+            "settings": {
+                "connection": {
+                    "baseUrl": "http://localhost:13378",
+                    "libraryId": "lib-1",
+                },
+            },
+            "openLibraryContactEmail": "updated@example.com",
+            "token": "test-token",
+        }
+    )
+    assert save_result["ok"] is True
+    assert (
+        service.settings["providers"]["openLibraryContactEmail"]
+        == "updated@example.com"
+    )
+
+
+def test_auto_sync_library_triggers_scan_and_starts_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = ABSidekickService(tmp_path / "absidekick")
+    scans_called = []
+
+    class FakeClient:
+        def post(self, path):
+            scans_called.append(path)
+            return {"ok": True}
+
+    monkeypatch.setattr(service, "client", lambda *args, **kwargs: FakeClient())
+
+    service.save(
+        {
+            "settings": {
+                "connection": {
+                    "baseUrl": "http://localhost:13378",
+                    "libraryId": "lib-1",
+                },
+            },
+            "token": "test-token",
+        }
+    )
+
+    monkeypatch.setattr(
+        absidekick_service.MatchJob,
+        "start",
+        lambda self: setattr(self, "status", "running"),
+    )
+
+    sync_res = service.auto_sync_library()
+    assert sync_res["ok"] is True
+    assert "/api/libraries/lib-1/scan" in scans_called
+    assert service.job is not None
+    assert service.job.status in {"queued", "running"}

@@ -72,15 +72,23 @@
         <input type="checkbox" name="grab_both_formats" value="true"{% if config.grab_both_formats %} checked{% endif %}>
         <span><strong>Grab audiobook and ebook</strong><small>For list imports, track both formats independently and search again only for the version that is still missing.</small></span>
       </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="absidekick_auto_sync" value="true"{% if config.absidekick_auto_sync %} checked{% endif %}>
+        <span><strong>Auto-sync with ABSidekick</strong><small>When HeavyMLM organizes new books into your library, automatically trigger Audiobookshelf to scan and ABSidekick to match metadata.</small></span>
+      </label>
     </div>
   </section>
 
   <section class="panel">
     <header class="panel-header">
-      <div><h2>Request portal</h2><p>Expose only the searchable request form on a dedicated custom domain. Named login accounts and permissions are managed below.</p></div>
+      <div><h2>Request portal &amp; Security</h2><p>Expose only the searchable request form on a dedicated custom domain. Named login accounts and permissions are managed below.</p></div>
       <span class="chip">Applies immediately</span>
     </header>
     <div class="panel-body setting-grid">
+      <div class="config-security-callout" role="alert">
+        <strong>⚠️ Web Security &amp; Reverse Proxy Guidance</strong>
+        <p><strong>Never expose port 3157 directly to the public internet.</strong> The primary MyAnonaSuite dashboard contains administrative controls and private cookies. When you configure a custom domain (e.g. <code>requests.example.com</code>) via a reverse proxy (Nginx, Caddy, or Cloudflare Tunnel), MyAnonaSuite strictly blocks all admin routes on that domain and serves only the safe request form. Requiring named account logins is strongly recommended. See the <a href="/tutorial">Complete Setup Guide</a> for full reverse proxy instructions.</p>
+      </div>
       <label class="setting-toggle">
         <input type="checkbox" name="request_portal_enabled" value="true"{% if config.request_portal_enabled %} checked{% endif %}>
         <span><strong>Enable request portal</strong><small>The configured custom domain serves only the request portal and blocks HeavyMLM administration routes.</small></span>

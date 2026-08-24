@@ -55,6 +55,8 @@ class Config:
     ebook_types: tuple[str, ...] = ("cbz", "epub", "pdf", "mobi", "azw3", "azw", "cbr")
     music_types: tuple[str, ...] = ("pdf", "mp3")
     radio_types: tuple[str, ...] = ("mp3",)
+    enabled_modules: tuple[str, ...] = ("heavymlm", "absidekick", "mam_spender")
+    absidekick_auto_sync: bool = True
     request_portal_enabled: bool = False
     request_portal_require_account_login: bool = True
     request_portal_domains: tuple[str, ...] = ()
@@ -153,6 +155,7 @@ def load_config(path: Path, *, environment: Mapping[str, str] | None = None) -> 
             "ebook_types",
             "music_types",
             "radio_types",
+            "enabled_modules",
             "request_portal_domains",
             "autograbs",
             "snatchlist",
