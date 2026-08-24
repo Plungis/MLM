@@ -24,7 +24,7 @@
     {% if suite_module == "heavymlm" %}
     <nav>
       <div class="nav-group">
-        <p class="nav-label">Control</p>
+        <p class="nav-label">Main</p>
         <a class="nav-link{% if path == '/' %} active{% endif %}" href="/">
           <span>Home</span>
         </a>
@@ -42,30 +42,30 @@
       <div class="nav-group">
         <p class="nav-label">Library</p>
         <a class="nav-link{% if path == '/library' %} active{% endif %}" href="/library">
-          <span>MLM Processed Library</span><span class="nav-count">{{ counts.get("torrents", 0) }}</span>
+          <span>Organized Library</span><span class="nav-count">{{ counts.get("torrents", 0) }}</span>
         </a>
         <a class="nav-link{% if path == '/lists' %} active{% endif %}" href="/lists">
-          <span>Lists</span><span class="nav-count">{{ counts.get("list_items", 0) }}</span>
+          <span>Reading Lists</span><span class="nav-count">{{ counts.get("list_items", 0) }}</span>
         </a>
       </div>
 
       <div class="nav-group">
         <p class="nav-label">Activity</p>
         <a class="nav-link{% if path == '/operations' %} active{% endif %}" href="/operations">
-          <span>Operations</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
+          <span>Operations &amp; Logs</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
         </a>
       </div>
 
       <div class="nav-group">
-        <p class="nav-label">System</p>
+        <p class="nav-label">Settings &amp; Tools</p>
         <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules">
-          <span>Modules</span>
+          <span>Module Manager</span>
         </a>
         <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial">
-          <span>Guide &amp; Tutorial</span>
+          <span>Getting Started &amp; Help</span>
         </a>
         <a class="nav-link{% if path == '/config' %} active{% endif %}" href="/config">
-          <span>Configuration</span>
+          <span>Settings</span>
         </a>
         <a class="nav-link" href="/health"><span>Health API</span></a>
       </div>
@@ -73,52 +73,52 @@
     {% elif suite_module == "absidekick" %}
     <nav class="module-nav">
       <div class="nav-group">
-        <p class="nav-label">Match control</p>
+        <p class="nav-label">Matching</p>
         <a class="nav-link{% if absidekick_view == 'run' %} active{% endif %}" href="/suite/absidekick/run"><span>Run Center</span></a>
         <a class="nav-link{% if absidekick_view == 'review' %} active{% endif %}" href="/suite/absidekick/review"><span>Review Desk</span></a>
       </div>
       <div class="nav-group">
-        <p class="nav-label">Match policy</p>
+        <p class="nav-label">Rules</p>
         <a class="nav-link{% if absidekick_view == 'targeting' %} active{% endif %}" href="/suite/absidekick/targeting"><span>Targeting</span></a>
         <a class="nav-link{% if absidekick_view == 'matching' %} active{% endif %}" href="/suite/absidekick/matching"><span>Matching</span></a>
         <a class="nav-link{% if absidekick_view == 'tags' %} active{% endif %}" href="/suite/absidekick/tags"><span>Tags &amp; Actions</span></a>
       </div>
       <div class="nav-group">
-        <p class="nav-label">System</p>
-        <a class="nav-link{% if absidekick_view == 'connection' %} active{% endif %}" href="/suite/absidekick/config"><span>Config</span></a>
-        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Modules</span></a>
-        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
-        <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
+        <p class="nav-label">Settings &amp; Tools</p>
+        <a class="nav-link{% if absidekick_view == 'connection' %} active{% endif %}" href="/suite/absidekick/config"><span>Settings</span></a>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
       </div>
     </nav>
     {% elif suite_module == "mam-spender" %}
     <nav class="module-nav">
       <div class="nav-group">
-        <p class="nav-label">Spend control</p>
+        <p class="nav-label">Bonus Spender</p>
         <a class="nav-link{% if spender_view == 'dashboard' %} active{% endif %}" href="/suite/mam-spender/dashboard"><span>Dashboard</span></a>
-        <a class="nav-link{% if spender_view == 'config' %} active{% endif %}" href="/suite/mam-spender/config"><span>Config</span></a>
+        <a class="nav-link{% if spender_view == 'config' %} active{% endif %}" href="/suite/mam-spender/config"><span>Settings</span></a>
       </div>
       <div class="nav-group">
-        <p class="nav-label">Intelligence</p>
-        <a class="nav-link{% if spender_view == 'analytics' %} active{% endif %}" href="/suite/mam-spender/analytics"><span>Graph</span></a>
-        <a class="nav-link{% if spender_view == 'history' %} active{% endif %}" href="/suite/mam-spender/history"><span>History</span></a>
+        <p class="nav-label">History &amp; Stats</p>
+        <a class="nav-link{% if spender_view == 'analytics' %} active{% endif %}" href="/suite/mam-spender/analytics"><span>Points Graph</span></a>
+        <a class="nav-link{% if spender_view == 'history' %} active{% endif %}" href="/suite/mam-spender/history"><span>Purchase History</span></a>
         <a class="nav-link{% if spender_view == 'mam-data' %} active{% endif %}" href="/suite/mam-spender/mam-data"><span>All MaM Data</span></a>
       </div>
       <div class="nav-group">
-        <p class="nav-label">System</p>
-        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Modules</span></a>
-        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
-        <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
+        <p class="nav-label">Settings &amp; Tools</p>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
       </div>
     </nav>
     {% else %}
     <nav class="module-nav">
       <div class="nav-group">
         <p class="nav-label">{{ suite_info.name }}</p>
-        <a class="nav-link active" href="/suite/{{ suite_module }}"><span>Module status</span></a>
-        <a class="nav-link" href="/modules"><span>Modules</span></a>
-        <a class="nav-link" href="/tutorial"><span>Guide &amp; Tutorial</span></a>
-        <a class="nav-link" href="/"><span>Return to HeavyMLM</span></a>
+        <a class="nav-link active" href="/suite/{{ suite_module }}"><span>Status</span></a>
+        <a class="nav-link" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
       </div>
     </nav>
     {% endif %}

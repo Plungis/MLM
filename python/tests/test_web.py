@@ -143,7 +143,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     config_page = client.get("/config")
     assert config_page.status_code == 200
     assert "Complete configuration" in config_page.text
-    assert "Download if wedge fails" in config_page.text
+    assert "Download anyway if wedge fails" in config_page.text
     assert "Enable request portal" in config_page.text
     assert 'name="request_portal_domains"' in config_page.text
     assert 'name="request_portal_require_account_login"' in config_page.text
@@ -175,8 +175,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b61"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b61"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b62"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b62"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -282,7 +282,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b61" in spender_config.text
+    assert "0.5.0b62" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -847,7 +847,7 @@ def test_modules_page_and_toggle_action(tmp_path: Path) -> None:
 
     modules_get = client.get("/modules")
     assert modules_get.status_code == 200
-    assert "Module Management" in modules_get.text
+    assert "Module Manager" in modules_get.text
     assert "HeavyMLM" in modules_get.text
     assert "ABSidekick" in modules_get.text
     assert "MAM-Spender" in modules_get.text
@@ -879,7 +879,7 @@ def test_tutorial_page(tmp_path: Path) -> None:
 
     tutorial_get = client.get("/tutorial")
     assert tutorial_get.status_code == 200
-    assert "Getting Started Guide" in tutorial_get.text
-    assert "How MyAnonaSuite Works" in tutorial_get.text
-    assert "Connecting to MyAnonamouse" in tutorial_get.text
-    assert "CRITICAL SAFETY WARNING" in tutorial_get.text
+    assert "Welcome to MyAnonaSuite" in tutorial_get.text
+    assert "How Everything Fits Together" in tutorial_get.text
+    assert "Connecting Your MyAnonamouse Account" in tutorial_get.text
+    assert "IMPORTANT SAFETY ADVICE" in tutorial_get.text

@@ -2,18 +2,18 @@
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Live runtime settings</p>
-    <h1>Configuration</h1>
-    <p class="subtitle">Change HeavyMLM download policy and scheduler settings without restarting MyAnonaSuite. Saves are validated before your TOML file is replaced.</p>
+    <p class="eyebrow">Suite preferences</p>
+    <h1>Settings</h1>
+    <p class="subtitle">Customize how HeavyMLM, ratio limits, and the request portal behave. Changes take effect right away.</p>
   </div>
   <div class="page-meta">
-    <span class="status ok">Validated saves</span>
-    <span class="chip">Full editor is local only</span>
+    <span class="status ok">Safe auto-save</span>
+    <span class="chip">Settings are private</span>
   </div>
 </header>
 
 {% if saved %}
-<div class="flash" role="status"><span>Configuration saved and applied to the running service.</span><span class="status ok">Applied</span></div>
+<div class="flash" role="status"><span>Settings saved successfully!</span><span class="status ok">Saved</span></div>
 {% endif %}
 {% if error %}
 <div class="flash error-flash" role="alert"><span>{{ error }}</span><span class="status error">Not saved</span></div>
@@ -30,112 +30,112 @@
   <section class="panel">
     <header class="panel-header">
       <div>
-        <h2>Download policy</h2>
-        <p>These safeguards are consulted before HeavyMLM hands anything to qBittorrent.</p>
+        <h2>Download &amp; Ratio Rules</h2>
+        <p>Set simple safety limits so downloading never hurts your tracker ratio or uses up all your slots.</p>
       </div>
       <span class="chip">Applies immediately</span>
     </header>
     <div class="panel-body setting-grid">
       <label class="setting-field">
-        <span>Minimum ratio</span>
+        <span>Minimum ratio to maintain</span>
         <input type="number" name="min_ratio" min="0.01" step="0.01" required value="{{ config.min_ratio }}">
-        <small>Ratio reserve used for downloads that are not freeleech.</small>
+        <small>HeavyMLM will skip non-freeleech books if downloading would drop your ratio below this.</small>
       </label>
       <label class="setting-field">
-        <span>Maximum filled slots</span>
+        <span>Maximum active slots</span>
         <input type="number" name="max_unsat_slots" min="0" step="1" placeholder="Use site limit" value="{% if config.max_unsat_slots is not none %}{{ config.max_unsat_slots }}{% endif %}">
-        <small>For a 150-slot account, enter 140 to permanently keep at least 10 slots open.</small>
+        <small>Optional ceiling. For example, on a 150-slot account, set 140 to always keep 10 slots open.</small>
       </label>
       <label class="setting-field">
-        <span>Minimum open slots</span>
+        <span>Minimum slots to keep free</span>
         <input type="number" name="unsat_buffer" min="0" step="1" required value="{{ config.unsat_buffer }}">
-        <small>Existing buffer safeguard. HeavyMLM always obeys whichever slot rule is stricter.</small>
+        <small>How many open download slots HeavyMLM should keep free at all times.</small>
       </label>
       <label class="setting-field">
         <span>Freeleech wedges to reserve</span>
         <input type="number" name="wedge_buffer" min="0" step="1" required value="{{ config.wedge_buffer }}">
-        <small>Wedge-first mode stops spending when this many wedges remain.</small>
+        <small>Keep at least this many wedges saved in your account for emergencies.</small>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="prefer_wedges" value="true"{% if config.prefer_wedges %} checked{% endif %}>
-        <span><strong>Prefer freeleech wedges</strong><small>Above the reserve, a non-free torrent must receive and confirm a wedge before it is sent to qBittorrent. At the reserve, its normal cost rule applies.</small></span>
+        <span><strong>Use freeleech wedges first</strong><small>When above your reserve, apply a freeleech wedge before downloading so books don't cost upload buffer.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="download_on_wedge_failure" value="true"{% if config.download_on_wedge_failure %} checked{% endif %}>
-        <span><strong>Download if wedge fails</strong><small>If MaM rejects or cannot confirm the wedge, continue with a normal download only when the ratio reserve permits it. Leave disabled for strict wedge-only behavior.</small></span>
+        <span><strong>Download anyway if wedge fails</strong><small>If a wedge can't be applied, continue with a regular download if your ratio allows it.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="add_torrents_stopped" value="true"{% if config.add_torrents_stopped %} checked{% endif %}>
-        <span><strong>Add torrents paused</strong><small>Send new torrents to qBittorrent without starting them automatically.</small></span>
+        <span><strong>Send torrents paused</strong><small>Send new downloads to qBittorrent in a paused state so you can inspect them first.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="grab_both_formats" value="true"{% if config.grab_both_formats %} checked{% endif %}>
-        <span><strong>Grab audiobook and ebook</strong><small>For list imports, track both formats independently and search again only for the version that is still missing.</small></span>
+        <span><strong>Grab both audiobook &amp; ebook</strong><small>For reading lists, look for both formats independently so you don't miss either version.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="absidekick_auto_sync" value="true"{% if config.absidekick_auto_sync %} checked{% endif %}>
-        <span><strong>Auto-sync with ABSidekick</strong><small>When HeavyMLM organizes new books into your library, automatically trigger Audiobookshelf to scan and ABSidekick to match metadata.</small></span>
+        <span><strong>Auto-sync with ABSidekick</strong><small>When a book finishes sorting, automatically trigger Audiobookshelf to scan and ABSidekick to match metadata.</small></span>
       </label>
     </div>
   </section>
 
   <section class="panel">
     <header class="panel-header">
-      <div><h2>Request portal &amp; Security</h2><p>Expose only the searchable request form on a dedicated custom domain. Named login accounts and permissions are managed below.</p></div>
+      <div><h2>Request Portal &amp; Web Sharing</h2><p>Share a safe, locked-down book request page on your own domain with family and friends.</p></div>
       <span class="chip">Applies immediately</span>
     </header>
     <div class="panel-body setting-grid">
       <div class="config-security-callout" role="alert">
-        <strong>⚠️ Web Security &amp; Reverse Proxy Guidance</strong>
-        <p><strong>Never expose port 3157 directly to the public internet.</strong> The primary MyAnonaSuite dashboard contains administrative controls and private cookies. When you configure a custom domain (e.g. <code>requests.example.com</code>) via a reverse proxy (Nginx, Caddy, or Cloudflare Tunnel), MyAnonaSuite strictly blocks all admin routes on that domain and serves only the safe request form. Requiring named account logins is strongly recommended. See the <a href="/tutorial">Complete Setup Guide</a> for full reverse proxy instructions.</p>
+        <strong>⚠️ Security Tip: Keep your admin dashboard private</strong>
+        <p><strong>Never expose port 3157 directly to the public internet.</strong> Your admin dashboard controls downloads, cookies, and system settings. When you set up a custom domain (like <code>requests.yourdomain.com</code>) through a reverse proxy, MyAnonaSuite automatically locks out all admin controls on that domain and shows only the friendly request box. Check the <a href="/tutorial">Setup Guide</a> for easy reverse proxy steps!</p>
       </div>
       <label class="setting-toggle">
         <input type="checkbox" name="request_portal_enabled" value="true"{% if config.request_portal_enabled %} checked{% endif %}>
-        <span><strong>Enable request portal</strong><small>The configured custom domain serves only the request portal and blocks HeavyMLM administration routes.</small></span>
+        <span><strong>Enable request portal</strong><small>Turns on the public-safe request page on your configured domain.</small></span>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="request_portal_require_account_login" value="true"{% if config.request_portal_require_account_login %} checked{% endif %}>
-        <span><strong>Require individual account login</strong><small>Recommended. Disables anonymous access, shared-code cookies, and the localhost preview bypass so every submission is tied to a configured username.</small></span>
+        <span><strong>Require individual logins</strong><small>Recommended. Makes users log in with their own password so you know who requested each book.</small></span>
       </label>
       <label class="setting-field">
-        <span>Custom request domains</span>
-        <input type="text" name="request_portal_domains" value="{{ config.request_portal_domains | join(', ') }}" placeholder="requests.example.com">
-        <small>Comma-separated hostnames only. Point DNS and your HTTPS reverse proxy at this MyAnonaSuite service.</small>
+        <span>Custom request domain</span>
+        <input type="text" name="request_portal_domains" value="{{ config.request_portal_domains | join(', ') }}" placeholder="requests.yourdomain.com">
+        <small>Enter your domain name (e.g. <code>requests.yourdomain.com</code>) pointing to this server.</small>
       </label>
       <label class="setting-field">
         <span>Portal title</span>
         <input type="text" name="request_portal_title" maxlength="100" value="{{ config.request_portal_title }}">
-        <small>Public heading shown above Goodreads and advanced search.</small>
+        <small>The friendly title shown at the top of the search and request page.</small>
       </label>
       <label class="setting-field">
         <span>Requests per minute</span>
         <input type="number" name="request_portal_rate_limit" min="1" max="300" value="{{ config.request_portal_rate_limit }}">
-        <small>Per-client limit for searches, unlock attempts, and submissions.</small>
+        <small>Limits rapid requests to protect your server from spam.</small>
       </label>
       <label class="setting-field">
         <span>Legacy shared username</span>
         <input type="text" name="request_portal_username" maxlength="100" value="{{ config.request_portal_username }}" autocomplete="username" placeholder="family">
-        <small>Compatibility login for existing installations. New named accounts below are recommended.</small>
+        <small>Single shared account for existing setups. Named user accounts below are recommended instead.</small>
       </label>
       <label class="setting-field">
-        <span>New legacy shared password</span>
-        <input type="password" name="request_portal_password" minlength="8" value="" autocomplete="new-password" placeholder="{% if config.request_portal_password_hash %}Configured — leave blank to keep{% else %}At least 8 characters{% endif %}">
-        <small>Saved as a salted PBKDF2 hash. Leave blank to preserve the current password.</small>
+        <span>Change shared password</span>
+        <input type="password" name="request_portal_password" minlength="8" value="" autocomplete="new-password" placeholder="{% if config.request_portal_password_hash %}Password set — leave blank to keep{% else %}At least 8 characters{% endif %}">
+        <small>Encrypted securely. Leave blank if you don't want to change it.</small>
       </label>
       <label class="setting-toggle">
         <input type="checkbox" name="clear_request_portal_credentials" value="true">
-        <span><strong>Remove legacy shared login</strong><small>Named request accounts remain active. The shared access code below may also protect the portal.</small></span>
+        <span><strong>Remove shared login</strong><small>Removes the shared username/password. Named individual accounts below will remain active.</small></span>
       </label>
       <details class="setting-field config-legacy-auth">
         <summary>Legacy shared access code</summary>
-        <p class="muted">Kept so existing installations continue working. Username/password login takes precedence when configured.</p>
+        <p class="muted">Kept for older setups. Individual username/password logins are recommended.</p>
         <label class="setting-field">
-          <span>New shared access code</span>
+          <span>New access code</span>
           <input type="password" name="request_portal_access_code" value="" autocomplete="new-password" placeholder="{% if config.request_portal_access_code %}Configured — leave blank to keep{% else %}Not configured{% endif %}">
         </label>
         <label class="setting-toggle">
           <input type="checkbox" name="clear_request_portal_access_code" value="true">
-          <span><strong>Remove shared access code</strong><small>Makes the portal public only when no requester username/password is configured.</small></span>
+          <span><strong>Remove access code</strong><small>Removes the access code completely.</small></span>
         </label>
       </details>
     </div>

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <header class="page-header">
-  <div><p class="eyebrow">HeavyMLM / request portal</p><h1>Request inbox</h1><p class="subtitle">Review ordinary account requests and audit requests automatically approved for trusted accounts.</p></div>
+  <div><p class="eyebrow">HeavyMLM / Requests</p><h1>Request Inbox</h1><p class="subtitle">Review incoming book requests from friends and family, and view automatically approved items.</p></div>
   <div class="page-meta"><a class="button primary" href="/request" target="_blank" rel="noreferrer">Open request portal ↗</a><span class="status waiting">{{ request_tracking.get("pending", 0) }} pending</span><span class="chip">{{ request_tracking.get("total", 0) }} total</span></div>
 </header>
 
-{% if approved %}<div class="flash success"><span>Request approved and handed to the configured download policy.</span><span class="status ok">Scheduled</span></div>{% endif %}
-{% if rejected %}<div class="flash"><span>Request rejected.</span><span class="status waiting">Closed</span></div>{% endif %}
+{% if approved %}<div class="flash success"><span>Request approved! Added to your download queue.</span><span class="status ok">Approved</span></div>{% endif %}
+{% if rejected %}<div class="flash"><span>Request has been rejected.</span><span class="status waiting">Closed</span></div>{% endif %}
 {% if error %}<div class="flash error-text"><span>{{ error }}</span><span class="status error">Not approved</span></div>{% endif %}
 
 <nav class="request-inbox-tabs" aria-label="Request status">

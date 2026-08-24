@@ -2,54 +2,54 @@
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Interactive onboarding guide</p>
-    <h1>MyAnonaSuite Getting Started Guide</h1>
-    <p class="subtitle">A complete walkthrough explaining what each tool does, how they connect, and how to set them up for a beginner-friendly experience.</p>
+    <p class="eyebrow">Getting started &amp; help</p>
+    <h1>Welcome to MyAnonaSuite</h1>
+    <p class="subtitle">A friendly, step-by-step guide to help you get everything set up and running smoothly.</p>
   </div>
   <div class="page-meta">
-    <a href="/modules" class="btn btn-secondary">Manage Modules</a>
-    <a href="/config" class="btn btn-primary">Open Configuration</a>
+    <a href="/modules" class="btn btn-secondary">Choose Your Modules</a>
+    <a href="/config" class="btn btn-primary">Open Settings</a>
   </div>
 </header>
 
 <div class="tutorial-container">
 
-  <!-- Architecture Overview -->
+  <!-- Overview -->
   <section class="panel tutorial-section">
     <header class="panel-header">
       <div>
         <span class="step-num">01</span>
-        <h2>How MyAnonaSuite Works</h2>
-        <p>Three powerful tools united into one cohesive ecosystem.</p>
+        <h2>How Everything Fits Together</h2>
+        <p>Three helpful tools working as one smooth team.</p>
       </div>
     </header>
     <div class="panel-body">
-      <p>MyAnonaSuite brings together three essential tools for managing your MyAnonamouse (MaM) library and Audiobookshelf server:</p>
+      <p>MyAnonaSuite combines three handy tools so you don't have to manage them separately:</p>
       
       <div class="overview-cards">
         <div class="overview-card heavymlm">
           <div class="card-icon">H_</div>
           <h3>HeavyMLM</h3>
-          <p><strong>The Acquisition Engine:</strong> Finds books via bookmarks, snatchlists, or Goodreads/Notion reading lists, downloads them via qBittorrent with ratio safeguards, and neatly organizes them into library folders with clean series titles.</p>
+          <p><strong>Finds &amp; Organizes Books:</strong> Watches your bookmarks, wishlist, and Goodreads/Notion reading lists. Downloads books via qBittorrent while protecting your ratio, and organizes them into neat, clean folders for your library.</p>
         </div>
 
         <div class="overview-card absidekick">
           <div class="card-icon">A_</div>
           <h3>ABSidekick</h3>
-          <p><strong>The Metadata &amp; Review Matcher:</strong> Scans your Audiobookshelf library, cross-references book metadata across Audible, Open Library, and Google Books, fixes series numbering, and routes ambiguous matches to a visual Review Desk.</p>
+          <p><strong>Matches &amp; Polishes Metadata:</strong> Scans your Audiobookshelf library, finds accurate book descriptions and cover art across Audible, Open Library, and Google Books, fixes series numbering, and gives you an easy review desk for any tricky matches.</p>
         </div>
 
         <div class="overview-card mam-spender">
           <div class="card-icon">M$</div>
           <h3>MAM-Spender</h3>
-          <p><strong>The Bonus Economist:</strong> Automatically manages your MaM bonus points, keeping your account VIP status continuously renewed, purchasing Freeleech Wedges when safe, and logging bonus earnings history.</p>
+          <p><strong>Manages Bonus Points &amp; VIP:</strong> Automatically uses your accumulated bonus points to keep your VIP status renewed and buy Freeleech Wedges, making sure you always have a safety reserve of points left over.</p>
         </div>
       </div>
 
       <div class="callout tip">
         <span class="callout-icon">💡</span>
         <div>
-          <strong>Unified Workflow:</strong> When HeavyMLM finishes downloading and organizing a book, it can automatically notify ABSidekick to scan Audiobookshelf and match metadata instantly!
+          <strong>They work together automatically:</strong> When HeavyMLM finishes downloading and sorting a new book, it can tell ABSidekick right away to scan Audiobookshelf and match the metadata—no manual clicking required!
         </div>
       </div>
     </div>
@@ -60,84 +60,85 @@
     <header class="panel-header">
       <div>
         <span class="step-num">02</span>
-        <h2>Connecting to MyAnonamouse (MaM Cookie)</h2>
-        <p>Authenticate with MyAnonamouse using your browser session cookie.</p>
+        <h2>Connecting Your MyAnonamouse Account</h2>
+        <p>Grab your session cookie so the suite can talk to MaM.</p>
       </div>
     </header>
     <div class="panel-body">
+      <p>Because MyAnonamouse doesn't use simple usernames/passwords for third-party apps, you just need your browser's session cookie:</p>
       <ol class="step-list">
-        <li>Log into <a href="https://www.myanonamouse.net" target="_blank" rel="noreferrer">MyAnonamouse</a> in your web browser (Chrome, Firefox, Edge, etc.).</li>
-        <li>Open Developer Tools by pressing <kbd>F12</kbd> (or right-click anywhere and choose <strong>Inspect</strong>).</li>
-        <li>Go to the <strong>Application</strong> tab (in Chrome/Edge) or <strong>Storage</strong> tab (in Firefox).</li>
-        <li>In the left sidebar, expand <strong>Cookies</strong> and select <code>https://www.myanonamouse.net</code>.</li>
-        <li>Find the cookie named <code>mam_id</code> and copy its entire alphanumeric value.</li>
-        <li>Paste the cookie into the <strong>MaM ID Cookie</strong> field in <a href="/config">Configuration</a> or set <code>mam_id = "..."</code> in your <code>config.toml</code>.</li>
+        <li>Log into <a href="https://www.myanonamouse.net" target="_blank" rel="noreferrer">MyAnonamouse</a> in your favorite web browser.</li>
+        <li>Press <kbd>F12</kbd> (or right-click anywhere and pick <strong>Inspect</strong>) to open Developer Tools.</li>
+        <li>Click on the <strong>Application</strong> tab (Chrome/Edge) or <strong>Storage</strong> tab (Firefox).</li>
+        <li>In the sidebar, open <strong>Cookies</strong> and click <code>https://www.myanonamouse.net</code>.</li>
+        <li>Look for the row named <code>mam_id</code> and copy the long code in the Value column.</li>
+        <li>Paste it into the <strong>MaM ID Cookie</strong> box in <a href="/config">Settings</a> (or in your <code>config.toml</code>).</li>
       </ol>
       <div class="callout note">
         <span class="callout-icon">🔒</span>
         <div>
-          <strong>Privacy &amp; Security:</strong> Your session cookie is stored locally on your server only. It is never transmitted anywhere other than direct, encrypted HTTPS calls to MyAnonamouse API endpoints.
+          <strong>Your account is safe:</strong> Your cookie stays right on your machine. It is only ever used to communicate directly and securely with MyAnonamouse.
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Step 2: qBittorrent & Library Organization -->
+  <!-- Step 2: qBittorrent & Media Folder -->
   <section class="panel tutorial-section">
     <header class="panel-header">
       <div>
         <span class="step-num">03</span>
-        <h2>Configuring qBittorrent &amp; Library Paths</h2>
-        <p>Set up automated torrent handling, ratio rules, and file organization.</p>
+        <h2>Setting Up qBittorrent &amp; Folders</h2>
+        <p>How books get downloaded, kept seeding, and organized.</p>
       </div>
     </header>
     <div class="panel-body">
-      <p>HeavyMLM monitors qBittorrent to detect when downloads finish and automatically places them into your organized media directory.</p>
+      <p>HeavyMLM talks to qBittorrent to download books and sort completed files into your library folder:</p>
       
       <div class="guide-grid">
         <div class="guide-item">
-          <h4>1. qBittorrent Web UI</h4>
-          <p>In qBittorrent settings (<kbd>Options &rarr; Web UI</kbd>), enable the Web User Interface. Note your port (default <code>8080</code>), username, and password.</p>
+          <h4>1. Enable qBittorrent Web UI</h4>
+          <p>In qBittorrent, go to <kbd>Options &rarr; Web UI</kbd> and check "Web User Interface". Keep note of your port (usually <code>8080</code>), username, and password.</p>
         </div>
         <div class="guide-item">
-          <h4>2. Categories &amp; Tags</h4>
-          <p>Create categories in qBittorrent such as <code>Audiobooks</code> and <code>Ebooks</code>. HeavyMLM will tag and categorize new downloads automatically.</p>
+          <h4>2. Categories</h4>
+          <p>Make sure you have categories like <code>Audiobooks</code> and <code>Ebooks</code> in qBittorrent so downloads stay tidy.</p>
         </div>
         <div class="guide-item">
-          <h4>3. File Organization (Hardlinking)</h4>
-          <p>HeavyMLM uses <strong>hardlinks</strong> by default. This creates a beautifully structured folder for Audiobookshelf (e.g. <code>Author/Series #1 - Title/book.m4b</code>) without using double disk space or stopping your seeding in qBittorrent!</p>
+          <h4>3. Smart Hardlinking (Zero Extra Space)</h4>
+          <p>HeavyMLM uses <strong>hardlinks</strong>. That means your book appears neatly formatted in your Audiobookshelf folder (e.g. <code>Author/Series/Book.m4b</code>) without using double disk space and without interrupting your seeding in qBittorrent!</p>
         </div>
         <div class="guide-item">
-          <h4>4. Ratio &amp; Slot Safeguards</h4>
-          <p>Under <a href="/config">Configuration &rarr; Download policy</a>, configure your <strong>Minimum ratio</strong>, <strong>Minimum open slots</strong>, and <strong>Wedge-first</strong> settings so you never risk your account status.</p>
+          <h4>4. Ratio &amp; Slot Protection</h4>
+          <p>In <a href="/config">Settings</a>, you can set your minimum ratio and slot buffers. HeavyMLM will automatically pause downloading if your ratio or open slots get too low, protecting your good standing on the tracker.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Step 3: ABSidekick & Auto-Sync -->
+  <!-- Step 3: Audiobookshelf & ABSidekick -->
   <section class="panel tutorial-section">
     <header class="panel-header">
       <div>
         <span class="step-num">04</span>
-        <h2>Audiobookshelf &amp; ABSidekick Matching</h2>
-        <p>Automatically match metadata, fix series, and fetch high-resolution covers.</p>
+        <h2>Connecting Audiobookshelf &amp; Metadata Matching</h2>
+        <p>Get rich book descriptions, chapter lists, and crisp cover art.</p>
       </div>
     </header>
     <div class="panel-body">
       <ol class="step-list">
-        <li>In Audiobookshelf, go to <strong>Settings &rarr; Users &rarr; your user &rarr; API Token</strong> and generate/copy a token.</li>
-        <li>Open <a href="/suite/absidekick/config">ABSidekick Config</a>, enter your <strong>Audiobookshelf Server URL</strong> and paste the <strong>API Token</strong>, then click <strong>Test &amp; Connect</strong>.</li>
-        <li>Select your target Audiobookshelf library from the dropdown.</li>
+        <li>In your Audiobookshelf web interface, head to <strong>Settings &rarr; Users &rarr; your user &rarr; API Token</strong> and copy your token.</li>
+        <li>Open <a href="/suite/absidekick/config">ABSidekick Settings</a>, type in your <strong>Audiobookshelf Server URL</strong>, paste the <strong>API Token</strong>, and click <strong>Test &amp; Connect</strong>.</li>
+        <li>Pick the library you want to organize from the dropdown list.</li>
         <li>
-          <strong>Choose your Metadata Providers:</strong>
+          <strong>Pick your metadata helpers:</strong>
           <ul>
-            <li><strong>Audible:</strong> Fast, native audiobook metadata, chapters, and narrators.</li>
-            <li><strong>Open Library:</strong> Enter your contact email to enable polite, high-rate public book lookups.</li>
-            <li><strong>Google Books:</strong> Optional native API key for comprehensive ebook and author metadata.</li>
+            <li><strong>Audible:</strong> Great for audiobook summaries, narrators, and chapter information.</li>
+            <li><strong>Open Library:</strong> Enter your email address to enable polite, fast lookups from the Open Library catalog. (Saved permanently!)</li>
+            <li><strong>Google Books:</strong> Optional API key for extra ebook and author detail.</li>
           </ul>
         </li>
-        <li><strong>Enable Auto-Sync:</strong> In <a href="/config">Configuration</a>, check <strong>Auto-sync with ABSidekick when new books are organized</strong>. When HeavyMLM places a book, ABSidekick will automatically scan and match it without manual clicks!</li>
+        <li><strong>Turn on Auto-Sync:</strong> In <a href="/config">Settings</a>, check <strong>Auto-sync with ABSidekick</strong>. Whenever HeavyMLM sorts a newly downloaded book, Audiobookshelf and ABSidekick will match it up automatically!</li>
       </ol>
     </div>
   </section>
@@ -147,40 +148,40 @@
     <header class="panel-header">
       <div>
         <span class="step-num">05</span>
-        <h2>MAM-Spender (Automated Bonus Management)</h2>
-        <p>Keep your VIP renewed and accumulate Freeleech Wedges automatically.</p>
+        <h2>Automating Your Bonus Points (MAM-Spender)</h2>
+        <p>Never worry about VIP expiring or running out of Freeleech Wedges.</p>
       </div>
     </header>
     <div class="panel-body">
-      <p>MAM-Spender inspects your MaM bonus point balance periodically and executes purchases according to your rules:</p>
+      <p>MAM-Spender checks your bonus point balance periodically and spends points smartly according to your preferences:</p>
       <div class="guide-grid">
         <div class="guide-item">
-          <h4>Auto VIP Renewal</h4>
-          <p>Automatically purchases 4-week VIP renewals when your remaining VIP duration drops below your chosen threshold (e.g. 7 days).</p>
+          <h4>Keep VIP Active</h4>
+          <p>Automatically buys a 4-week VIP extension whenever your VIP time gets low (e.g. less than 7 days left).</p>
         </div>
         <div class="guide-item">
-          <h4>Freeleech Wedges</h4>
-          <p>Buys freeleech wedges when you have points to spare, ensuring you always have wedges ready for ratio-free downloads.</p>
+          <h4>Stock Up on Freeleech Wedges</h4>
+          <p>Buys wedges when you have extra points, so you can grab large audiobooks without affecting your upload ratio.</p>
         </div>
         <div class="guide-item">
-          <h4>Point Safety Buffer</h4>
-          <p>Configurable reserve (e.g. 50,000 points) that the spender will never spend past, protecting your balance for emergencies.</p>
+          <h4>Safety Point Buffer</h4>
+          <p>Set a reserve amount (e.g. 50,000 points) that the spender will never drop below, keeping an emergency cushion.</p>
         </div>
         <div class="guide-item">
-          <h4>History &amp; Graphing</h4>
-          <p>Visit <a href="/suite/mam-spender/analytics">Analytics</a> and <a href="/suite/mam-spender/history">History</a> to see your points earned per hour and past purchases.</p>
+          <h4>Visual Stats &amp; History</h4>
+          <p>Check out the <a href="/suite/mam-spender/analytics">Points Graph</a> and <a href="/suite/mam-spender/history">Purchase History</a> to see how many points you earn per hour and where they went.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Step 5: Request Portal & Security Warning -->
+  <!-- Step 5: Request Portal & Security -->
   <section class="panel tutorial-section security-section">
     <header class="panel-header">
       <div>
         <span class="step-num">06</span>
-        <h2>Request Portal &amp; Critical Web Security Guide</h2>
-        <p>How to safely share a request portal with family and friends.</p>
+        <h2>Sharing a Request Portal with Friends &amp; Family</h2>
+        <p>How to safely let others request books without exposing your server.</p>
       </div>
     </header>
     <div class="panel-body">
@@ -188,31 +189,31 @@
       <div class="callout warning">
         <span class="callout-icon">⚠️</span>
         <div>
-          <strong>CRITICAL SAFETY WARNING: NEVER EXPOSE PORT 3157 DIRECTLY TO THE PUBLIC INTERNET</strong>
-          <p>The primary MyAnonaSuite interface on port 3157 contains powerful administrative controls (file deletion, torrent queue management, account cookies, and configuration files). Exposing port 3157 directly without an isolated reverse proxy or firewall can allow unauthorized access to your private data and download clients.</p>
+          <strong>IMPORTANT SAFETY ADVICE: KEEP PORT 3157 PRIVATE</strong>
+          <p>Your main MyAnonaSuite dashboard on port 3157 gives full control over your settings, cookies, and downloads. You should never expose port 3157 directly to the whole internet without a secure reverse proxy and domain setup.</p>
         </div>
       </div>
 
-      <h3>How the Request Portal Protects You</h3>
-      <p>MyAnonaSuite includes a built-in <strong>Domain-Isolated Request Portal</strong> designed specifically for safe public sharing:</p>
+      <h3>How the Built-in Request Portal Keeps You Safe</h3>
+      <p>If you want family or friends to search Goodreads and request books, MyAnonaSuite includes a special <strong>Safe Request Portal</strong>:</p>
       <ul class="bullet-list">
-        <li><strong>Domain Routing:</strong> When accessed via a custom domain (e.g. <code>requests.yourdomain.com</code>), the server strictly locks down all administration routes (blocking <code>/config</code>, <code>/operations</code>, <code>/suite/*</code>, and API controls) and serves <em>only</em> the search and request form.</li>
-        <li><strong>Named Requester Accounts:</strong> Require each friend or family member to log in with their own password, tracking who submitted every book and preventing spam.</li>
-        <li><strong>Rate Limiting:</strong> Enforces per-minute rate limits to protect your server and MaM account from automated flooding.</li>
+        <li><strong>Automatic Lock-Down:</strong> When visited via a dedicated domain name (like <code>requests.yourdomain.com</code>), the app strictly blocks all admin settings, configuration pages, and internal controls—showing only the friendly search and request box.</li>
+        <li><strong>Individual User Accounts:</strong> Give each person their own username and password so you can see who requested what and keep things organized.</li>
+        <li><strong>Rate Limits:</strong> Automatically prevents spam or runaway searches from overloading your connection.</li>
       </ul>
 
-      <h3>Reverse Proxy Setup Instructions</h3>
+      <h3>Quick Reverse Proxy Recipes</h3>
       <div class="guide-grid">
         <div class="guide-item">
           <h4>Nginx Proxy Manager</h4>
           <ol class="mini-list">
-            <li>Create a Proxy Host pointing <code>requests.yourdomain.com</code> to <code>http://your-server-ip:3157</code>.</li>
+            <li>Add a Proxy Host pointing <code>requests.yourdomain.com</code> to <code>http://your-server-ip:3157</code>.</li>
             <li>Enable <strong>Websockets Support</strong> and <strong>Block Common Exploits</strong>.</li>
-            <li>Under the SSL tab, issue a Let's Encrypt certificate and enable <strong>Force SSL</strong>.</li>
+            <li>In the SSL tab, enable <strong>Force SSL</strong> with a free Let's Encrypt certificate.</li>
           </ol>
         </div>
         <div class="guide-item">
-          <h4>Caddy Server</h4>
+          <h4>Caddy</h4>
           <pre class="code-block"><code>requests.yourdomain.com {
     reverse_proxy localhost:3157 {
         header_up X-Forwarded-Host {host}
@@ -222,28 +223,28 @@
         </div>
         <div class="guide-item">
           <h4>Cloudflare Tunnels</h4>
-          <p>Create a Public Hostname routing <code>requests.yourdomain.com</code> to <code>http://localhost:3157</code>. Under HTTP Settings, ensure the original Host header is forwarded.</p>
+          <p>Add a Public Hostname pointing <code>requests.yourdomain.com</code> to <code>http://localhost:3157</code> and make sure Host headers are forwarded.</p>
         </div>
         <div class="guide-item">
-          <h4>Portal Configuration</h4>
-          <p>In <a href="/config">Configuration &rarr; Request portal</a>, check <strong>Enable request portal</strong>, enter <code>requests.yourdomain.com</code> under <strong>Custom request domains</strong>, and create user accounts.</p>
+          <h4>Enable in Settings</h4>
+          <p>In <a href="/config">Settings &rarr; Request Portal</a>, check <strong>Enable request portal</strong>, add your domain name, and create your requester accounts.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Step 6: Module Management -->
+  <!-- Step 6: Modules -->
   <section class="panel tutorial-section">
     <header class="panel-header">
       <div>
         <span class="step-num">07</span>
-        <h2>Managing Your Active Modules</h2>
-        <p>Use only what you need — simplify your experience anytime.</p>
+        <h2>Using Only What You Need</h2>
+        <p>Simplify your view anytime.</p>
       </div>
     </header>
     <div class="panel-body">
-      <p>Don't need all features? You can easily customize which modules are loaded:</p>
-      <p>Visit the <a href="/modules" class="btn btn-secondary">Module Management Page</a> to turn off any module. For example, if you only want an automated bonus-point spender for MaM, you can disable HeavyMLM and ABSidekick with a single click!</p>
+      <p>Only want to use MAM-Spender to manage bonus points, or only want ABSidekick for Audiobookshelf? No problem!</p>
+      <p>Head over to the <a href="/modules" class="btn btn-secondary">Module Manager</a> to turn off any tools you aren't using. The suite will streamline the sidebar and turn off unused background tasks right away.</p>
     </div>
   </section>
 
