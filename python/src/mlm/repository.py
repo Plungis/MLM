@@ -353,8 +353,78 @@ class Repository:
             rows = connection.execute(
                 """SELECT payload_json FROM selected_torrents WHERE title_search = ?
                    UNION ALL
-                   SELECT payload_json FROM torrents WHERE title_search = ?""",
-                (title_search, title_search),
+                   SELECT payload_json FROM torrents WHERE title_search = ?
+                   UNION ALL
+                   SELECT payload_json FROM abs_books WHERE title_search = ?""",
+                (title_search, title_search, title_search),
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def upsert_abs_books(self, items: list[dict[str, Any]]) -> int:
+        now = datetime.now(UTC).isoformat()
+        with connect(self.path) as connection, connection:
+            for item in items:
+                abs_id = str(item.get("id") or item.get("abs_id") or "")
+                if not abs_id:
+                    continue
+                title = str(item.get("title") or "").strip()
+                title_search = normalize_title(title)
+                authors = item.get("authors") or []
+                series = item.get("series") or []
+                library_path = str(
+                    item.get("library_path")
+                    or item.get("path")
+                    or item.get("relPath")
+                    or ""
+                ).strip()
+                asin = str(item.get("asin") or "").strip()
+                isbn = str(item.get("isbn") or "").strip()
+                connection.execute(
+                    """INSERT INTO abs_books
+                       (abs_id, title, title_search, authors_json, series_json,
+                        library_path, asin, isbn, payload_json, synced_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(abs_id) DO UPDATE SET
+                         title=excluded.title,
+                         title_search=excluded.title_search,
+                         authors_json=excluded.authors_json,
+                         series_json=excluded.series_json,
+                         library_path=excluded.library_path,
+                         asin=excluded.asin,
+                         isbn=excluded.isbn,
+                         payload_json=excluded.payload_json,
+                         synced_at=excluded.synced_at""",
+                    (
+                        abs_id,
+                        title,
+                        title_search,
+                        canonical_json(authors),
+                        canonical_json(series),
+                        library_path,
+                        asin or None,
+                        isbn or None,
+                        canonical_json(item),
+                        now,
+                    ),
+                )
+        return len(items)
+
+    def abs_books_count(self) -> int:
+        with connect(self.path) as connection:
+            row = connection.execute("SELECT COUNT(1) FROM abs_books").fetchone()
+            return int(row[0] or 0)
+
+    def abs_book_rows(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        with connect(self.path) as connection:
+            rows = connection.execute(
+                """SELECT payload_json FROM abs_books
+                   ORDER BY title COLLATE NOCASE LIMIT ? OFFSET ?""",
+                (limit, offset),
             )
             return [json.loads(row[0]) for row in rows]
 

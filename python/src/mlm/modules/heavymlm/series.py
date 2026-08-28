@@ -297,28 +297,39 @@ def detect_series_gaps(volumes: list[str]) -> list[str]:
 
 def detect_library_series(repository: Repository) -> list[dict[str, Any]]:
     """Scan library and queued records to discover series and check missing books."""
-    processed_torrents = repository.table_rows("torrents", limit=5000, offset=0)
-    selected_torrents = repository.table_rows("selected_torrents", limit=5000, offset=0)
+    processed_torrents = repository.table_rows("torrents", limit=20000, offset=0)
+    selected_torrents = repository.table_rows(
+        "selected_torrents", limit=10000, offset=0
+    )
+    abs_books = repository.abs_book_rows(limit=50000, offset=0)
     pending_ids = {as_int(t.get("mam_id")) for t in repository.pending_selected()}
 
     grouped_series: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"name": "", "authors": set(), "books": [], "volumes": []}
     )
 
-    all_records = [*processed_torrents, *selected_torrents]
+    all_records = [*processed_torrents, *selected_torrents, *abs_books]
     seen_ids: set[int] = set()
+    seen_abs_ids: set[str] = set()
 
     for record in all_records:
         mam_id = as_int(record.get("mam_id"))
+        abs_id = str(record.get("abs_id") or record.get("id") or "")
         if mam_id and mam_id in seen_ids:
             continue
         if mam_id:
             seen_ids.add(mam_id)
+        if record.get("source") == "audiobookshelf" and abs_id:
+            if abs_id in seen_abs_ids:
+                continue
+            seen_abs_ids.add(abs_id)
 
-        meta = record.get("meta") or torrent_meta(record)
-        series_list = meta.get("series", [])
+        meta = record.get("meta") or (
+            record if "series" in record else torrent_meta(record)
+        )
+        series_list = meta.get("series") or record.get("series", [])
         title = meta.get("title") or record.get("title") or "Untitled"
-        authors = meta.get("authors", [])
+        authors = meta.get("authors") or record.get("authors", [])
 
         if not series_list:
             match = TITLE_SERIES_PATTERN.search(title)

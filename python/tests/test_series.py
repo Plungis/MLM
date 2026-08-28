@@ -17,6 +17,7 @@ from mlm.modules.heavymlm.series import (
     score_series_candidate,
 )
 from mlm.repository import Repository
+from mlm.search import normalize_title
 
 
 def test_parse_entry_number():
@@ -279,3 +280,46 @@ def test_detect_library_series(tmp_path: Path):
     assert dcc["authors"] == ["Matt Dinniman"]
     assert dcc["volumes"] == ["1", "3"]
     assert dcc["gaps"] == ["#2"]
+
+
+def test_detect_library_series_with_abs_books(tmp_path: Path):
+    db_file = tmp_path / "test.db"
+    ensure_database(db_file)
+    repo = Repository(db_file)
+
+    # Insert ABS books for Stormlight Archive books 1 and 3 (gap at #2)
+    repo.upsert_abs_books(
+        [
+            {
+                "id": "abs-item-1",
+                "title": "The Way of Kings",
+                "authors": ["Brandon Sanderson"],
+                "series": [{"name": "The Stormlight Archive", "entries": ["1"]}],
+                "library_path": "Brandon Sanderson/The Stormlight Archive/Book 1",
+                "asin": "B003ZWFO7E",
+                "source": "audiobookshelf",
+            },
+            {
+                "id": "abs-item-3",
+                "title": "Oathbringer",
+                "authors": ["Brandon Sanderson"],
+                "series": [{"name": "The Stormlight Archive", "entries": ["3"]}],
+                "library_path": "Brandon Sanderson/The Stormlight Archive/Book 3",
+                "asin": "B071CQ5G3G",
+                "source": "audiobookshelf",
+            },
+        ]
+    )
+
+    assert repo.abs_books_count() == 2
+    records = repo.records_with_title(normalize_title("The Way of Kings"))
+    assert len(records) == 1
+    assert records[0]["title"] == "The Way of Kings"
+
+    series_list = detect_library_series(repo)
+    assert len(series_list) == 1
+    sla = series_list[0]
+    assert sla["series_name"] == "The Stormlight Archive"
+    assert sla["authors"] == ["Brandon Sanderson"]
+    assert sla["volumes"] == ["1", "3"]
+    assert sla["gaps"] == ["#2"]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -98,6 +98,22 @@ CREATE TABLE requests (
 CREATE INDEX requests_status_created_idx ON requests(status, created_at DESC);
 CREATE INDEX requests_mam_id_idx ON requests(mam_id);
 
+CREATE TABLE abs_books (
+    abs_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    title_search TEXT NOT NULL,
+    authors_json TEXT NOT NULL,
+    series_json TEXT NOT NULL,
+    library_path TEXT,
+    asin TEXT,
+    isbn TEXT,
+    payload_json TEXT NOT NULL,
+    synced_at TEXT NOT NULL
+);
+
+CREATE INDEX abs_books_title_search_idx ON abs_books(title_search);
+CREATE INDEX abs_books_asin_idx ON abs_books(asin);
+
 CREATE TABLE mam_spender_state (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL
@@ -190,6 +206,22 @@ def ensure_database(path: Path) -> None:
                     ON requests(status, created_at DESC);
                 CREATE INDEX IF NOT EXISTS requests_mam_id_idx
                     ON requests(mam_id);
+                CREATE TABLE IF NOT EXISTS abs_books (
+                    abs_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    title_search TEXT NOT NULL,
+                    authors_json TEXT NOT NULL,
+                    series_json TEXT NOT NULL,
+                    library_path TEXT,
+                    asin TEXT,
+                    isbn TEXT,
+                    payload_json TEXT NOT NULL,
+                    synced_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS abs_books_title_search_idx
+                    ON abs_books(title_search);
+                CREATE INDEX IF NOT EXISTS abs_books_asin_idx
+                    ON abs_books(asin);
                 CREATE TABLE IF NOT EXISTS mam_spender_state (
                     key TEXT PRIMARY KEY,
                     value_json TEXT NOT NULL

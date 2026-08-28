@@ -177,8 +177,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b64"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b64"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b65"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b65"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -284,7 +284,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b64" in spender_config.text
+    assert "0.5.0b65" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -1150,3 +1150,77 @@ def test_library_missing_series_view_and_select(tmp_path: Path) -> None:
     assert post_res.status_code == 200
     assert 'Queued 1 missing book for series "Dungeon Crawler Carl"' in post_res.text
     assert repo.has_pending_mam_id(201) is True
+
+
+def test_library_abs_view_and_sync(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    services = FakeServices(load_config(config))
+    repo = Repository(database)
+
+    # Mock fetch_all_abs_library_books
+    fake_abs_books = [
+        {
+            "id": "item-abc",
+            "abs_id": "item-abc",
+            "title": "Unsouled",
+            "authors": ["Will Wight"],
+            "series": [{"name": "Cradle", "entries": ["1"]}],
+            "library_path": "Will Wight/Cradle/01 - Unsouled.m4b",
+            "asin": "B01LW8PT7M",
+            "isbn": "",
+            "media_type": "audiobook",
+            "meta": {
+                "title": "Unsouled",
+                "authors": ["Will Wight"],
+                "series": [{"name": "Cradle", "entries": ["1"]}],
+                "media_type": "audiobook",
+            },
+            "source": "audiobookshelf",
+        },
+        {
+            "id": "item-def",
+            "abs_id": "item-def",
+            "title": "Soulsmith",
+            "authors": ["Will Wight"],
+            "series": [{"name": "Cradle", "entries": ["2"]}],
+            "library_path": "Will Wight/Cradle/02 - Soulsmith.m4b",
+            "asin": "B01LYP0528",
+            "isbn": "",
+            "media_type": "audiobook",
+            "meta": {
+                "title": "Soulsmith",
+                "authors": ["Will Wight"],
+                "series": [{"name": "Cradle", "entries": ["2"]}],
+                "media_type": "audiobook",
+            },
+            "source": "audiobookshelf",
+        },
+    ]
+
+    monkeypatch.setattr(
+        "mlm.web.sync_audiobookshelf_library",
+        lambda r, s, token=None: {
+            "ok": True,
+            "total_synced": r.upsert_abs_books(fake_abs_books),
+        },
+    )
+
+    app.state.services = services
+    client = TestClient(app)
+
+    # 1. Trigger POST /library/sync-abs
+    sync_res = client.post("/library/sync-abs", follow_redirects=True)
+    assert sync_res.status_code == 200
+    assert "Successfully synced <strong>2</strong> audiobooks" in sync_res.text
+    assert repo.abs_books_count() == 2
+
+    # 2. Check GET /library?view=abs displays synced ABS books
+    abs_view_res = client.get("/library?view=abs")
+    assert abs_view_res.status_code == 200
+    assert "Audiobookshelf Library Catalog" in abs_view_res.text
+    assert "Unsouled" in abs_view_res.text
+    assert "Soulsmith" in abs_view_res.text
+    assert "ABS #item-abc" in abs_view_res.text

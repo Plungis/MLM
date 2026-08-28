@@ -3,15 +3,39 @@
 <header class="page-header">
   <div>
     <p class="eyebrow">HeavyMLM / library organizer</p>
-    <h1>{% if library_view == "missing" %}Missing Series Books{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Library{% endif %}</h1>
-    <p class="subtitle">{% if library_view == "missing" %}Audit your library for missing books, detect gaps in series volume sequences, and grab missing installments directly from MyAnonamouse.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.{% endif %}</p>
+    <h1>{% if library_view == "missing" %}Missing Series Books{% elif library_view == "abs" %}Audiobookshelf Library Catalog{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Library{% endif %}</h1>
+    <p class="subtitle">{% if library_view == "missing" %}Audit your entire library (HeavyMLM downloads + Audiobookshelf) for missing books and grab installments directly from MyAnonamouse.{% elif library_view == "abs" %}All audiobooks synchronized directly from your Audiobookshelf server.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.{% endif %}</p>
   </div>
   <div class="page-meta">
-    <span class="chip">{{ counts.get("torrents", 0) }} processed</span>
+    <span class="chip">{{ counts.get("torrents", 0) }} MLM downloads</span>
+    <span class="chip">{{ abs_books_count }} ABS audiobooks</span>
     <span class="chip">{{ counts.get("duplicate_torrents", 0) }} duplicates</span>
     {% if library_series %}<span class="chip">{{ library_series | length }} series detected</span>{% endif %}
+    {% if abs_configured %}
+    <form method="post" action="/library/sync-abs" class="inline-form">
+      <button type="submit" class="button secondary small">🔄 Sync with Audiobookshelf</button>
+    </form>
+    {% else %}
+    <a class="button ghost small" href="/suite/absidekick/config">⚙️ Connect ABS</a>
+    {% endif %}
   </div>
 </header>
+
+{% if abs_synced is not none %}
+<div class="flash success" role="status">
+  <span>
+    Successfully synced <strong>{{ abs_synced }}</strong> audiobook{% if abs_synced != 1 %}s{% endif %} and their series from your Audiobookshelf library!
+  </span>
+  <span class="status ok">ABS Catalog Synced</span>
+</div>
+{% endif %}
+
+{% if abs_sync_error %}
+<div class="flash alert" role="alert">
+  <span>Failed to sync with Audiobookshelf: {{ abs_sync_error }}</span>
+  <span class="status alert">Sync Failed</span>
+</div>
+{% endif %}
 
 {% if series_queued is not none %}
 <div class="flash success" role="status">
@@ -31,6 +55,7 @@
 
 <nav class="request-inbox-tabs" aria-label="Organized library views">
   <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed library · {{ counts.get("torrents", 0) }}</a>
+  <a class="button{% if library_view == 'abs' %} primary{% endif %}" href="/library?view=abs">Audiobookshelf library · {{ abs_books_count }}</a>
   <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates &amp; replacements · {{ counts.get("duplicate_torrents", 0) }}</a>
   <a class="button{% if library_view == 'missing' %} primary{% endif %}" href="/library?view=missing">Missing series books</a>
 </nav>
@@ -40,7 +65,7 @@
   <header class="panel-header">
     <div>
       <h2>Find Missing Books on MaM</h2>
-      <p>Scan any series against MyAnonamouse to detect un-downloaded installments, or review the series already detected in your organized library below.</p>
+      <p>Scan any series against MyAnonamouse to detect un-downloaded installments, or review the series already detected across your library and Audiobookshelf below.</p>
     </div>
   </header>
 
@@ -128,7 +153,7 @@
   <header class="panel-header">
     <div>
       <h2>Library Series Audit</h2>
-      <p>Series detected across your organized library folders and queue. Scan any series with 1 click to fetch missing books from MaM.</p>
+      <p>Series detected across your organized downloads and Audiobookshelf library. Scan any series with 1 click to fetch missing books from MaM.</p>
     </div>
     <span class="chip">{{ library_series | length }} series tracked</span>
   </header>
@@ -172,7 +197,7 @@
   <div class="empty-state">
     <div>
       <strong>No series detected yet</strong>
-      <p>As HeavyMLM organizes your downloads into series folders, detected series and volume gaps will automatically appear here.</p>
+      <p>Sync with Audiobookshelf or let HeavyMLM organize your downloads into series folders, and detected series and volume gaps will appear here.</p>
     </div>
   </div>
   {% endif %}
@@ -182,8 +207,8 @@
 <section class="panel">
   <header class="panel-header">
     <div>
-      <h2>{% if library_view == "duplicates" %}Duplicate and replacement candidates{% else %}Processed library records{% endif %}</h2>
-      <p>{% if library_view == "duplicates" %}Candidates retained for HeavyMLM cleanup and quality-replacement decisions.{% else %}Torrent records already inspected and tracked by HeavyMLM's library pipeline.{% endif %}</p>
+      <h2>{% if library_view == "abs" %}Audiobookshelf Synchronized Books{% elif library_view == "duplicates" %}Duplicate and replacement candidates{% else %}Processed library records{% endif %}</h2>
+      <p>{% if library_view == "abs" %}Audiobooks indexed directly from your Audiobookshelf server to prevent duplicate downloads and detect missing series installments.{% elif library_view == "duplicates" %}Candidates retained for HeavyMLM cleanup and quality-replacement decisions.{% else %}Torrent records already inspected and tracked by HeavyMLM's library pipeline.{% endif %}</p>
     </div>
     <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}</span>
   </header>
@@ -194,15 +219,19 @@
       <div class="record-summary">
         <div>
           <span class="record-title">{{ row.get("title") or meta.get("title") or row.get("title_search") or row.get("id") or "Untitled record" }}</span>
-          <span class="record-id">{% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }}{% endif %}{% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}{% if row.get("library_path") %} · {{ row.get("library_path") }}{% endif %}</span>
+          <span class="record-id">
+            {% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }} · {% elif row.get("abs_id") %}ABS #{{ row.get("abs_id") }} · {% endif %}
+            {% if meta.get("authors") or row.get("authors") %}{{ (meta.get("authors") or row.get("authors")) | join(", ") }} · {% endif %}
+            {% if row.get("library_path") %}{{ row.get("library_path") }}{% endif %}
+          </span>
           {% if library_view == "duplicates" and row.get("duplicate_of") %}<span class="record-note">Duplicate of {{ row.get("duplicate_of") }}</span>{% endif %}
         </div>
-        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "duplicates" %}Review candidate{% else %}Processed{% endif %}</span>
+        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "abs" %}Audiobookshelf{% elif library_view == "duplicates" %}Review candidate{% else %}Processed{% endif %}</span>
       </div>
       <details><summary>Record details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
     </article>
     {% endfor %}
-  </div>{% else %}<div class="empty-state"><div><strong>No records in this view</strong><p>HeavyMLM will populate it as the organizer and cleaner process your library.</p></div></div>{% endif %}
+  </div>{% else %}<div class="empty-state"><div><strong>No records in this view</strong><p>{% if library_view == "abs" %}Click "Sync with Audiobookshelf" above to import your books from ABS.{% else %}HeavyMLM will populate it as the organizer and cleaner process your library.{% endif %}</p></div></div>{% endif %}
 </section>
 
 {% if page_count > 1 %}<nav class="pagination" aria-label="Library pages">

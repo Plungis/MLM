@@ -11,6 +11,7 @@ import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from .error_guidance import error_guidance
 from .mam import authenticated_mam_client
 from .modules.absidekick import SOURCE_VERSION, ABSidekickService
 from .modules.absidekick.core import ABSAPIError
+from .modules.heavymlm.abs_sync import sync_audiobookshelf_library
 from .modules.heavymlm.search import (
     filter_search_results,
     present_search_result,
@@ -624,7 +626,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         page: int = 1,
     ) -> HTMLResponse:
         selected_view = (
-            view if view in {"processed", "duplicates", "missing"} else "processed"
+            view
+            if view in {"processed", "duplicates", "missing", "abs"}
+            else "processed"
         )
         table = "torrents" if selected_view == "processed" else "duplicate_torrents"
         page = max(1, page)
@@ -634,6 +638,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         library_series: list[dict] = []
         series_scan_resolution: dict[str, Any] | None = None
         cleaned_series = series.strip()
+        abs_books_count = await asyncio.to_thread(repository.abs_books_count)
 
         if selected_view == "missing":
             library_series = await asyncio.to_thread(detect_library_series, repository)
@@ -654,6 +659,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                         "already_present": [],
                         "total_books": 0,
                     }
+        elif selected_view == "abs":
+            rows = await asyncio.to_thread(
+                repository.abs_book_rows,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            total = abs_books_count
         else:
             rows = await asyncio.to_thread(
                 repository.table_rows,
@@ -670,6 +682,25 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 f"/library?{urlencode({'view': selected_view, 'page': page_count})}",
                 status_code=307,
             )
+
+        abs_configured = bool(
+            (
+                absidekick.token
+                or (config.audiobookshelf and config.audiobookshelf.token)
+            )
+            and (
+                absidekick.settings.get("connection", {}).get("baseUrl")
+                or (config.audiobookshelf and config.audiobookshelf.base_url)
+            )
+            and (
+                absidekick.settings.get("connection", {}).get("libraryId")
+                or (
+                    config.audiobookshelf
+                    and getattr(config.audiobookshelf, "library_id", None)
+                )
+            )
+        )
+
         return templates.TemplateResponse(
             request,
             "library.html",
@@ -687,6 +718,14 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 library_series=library_series,
                 active_series=cleaned_series,
                 series_resolution=series_scan_resolution,
+                abs_books_count=abs_books_count,
+                abs_configured=abs_configured,
+                abs_synced=(
+                    as_int(request.query_params["abs_synced"])
+                    if "abs_synced" in request.query_params
+                    else None
+                ),
+                abs_sync_error=request.query_params.get("abs_sync_error", ""),
                 series_queued=(
                     as_int(request.query_params["series_queued"])
                     if "series_queued" in request.query_params
@@ -697,6 +736,36 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 series_name=request.query_params.get("series_name", ""),
             ),
         )
+
+    @app.post("/library/sync-abs")
+    async def sync_abs_library() -> RedirectResponse:
+        settings = deepcopy(absidekick.settings)
+        token = absidekick.token
+        if (
+            not token or not settings.get("connection", {}).get("baseUrl")
+        ) and config.audiobookshelf:
+            settings.setdefault("connection", {})
+            if (
+                not settings["connection"].get("baseUrl")
+                and config.audiobookshelf.base_url
+            ):
+                settings["connection"]["baseUrl"] = config.audiobookshelf.base_url
+            if not token and config.audiobookshelf.token:
+                token = config.audiobookshelf.token
+
+        try:
+            result = await asyncio.to_thread(
+                sync_audiobookshelf_library,
+                repository,
+                settings,
+                token=token,
+            )
+            snapshot_cache["expires"] = 0.0
+            params = {"view": "missing", "abs_synced": result["total_synced"]}
+            return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
+        except Exception as error:
+            params = {"view": "missing", "abs_sync_error": str(error)}
+            return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
 
     @app.post("/library/series/select")
     async def select_library_series(
