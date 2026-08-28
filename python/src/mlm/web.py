@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -40,7 +41,10 @@ from .modules.heavymlm.search import (
     present_search_result,
     search_seed,
 )
-from .modules.heavymlm.series import resolve_series_selection
+from .modules.heavymlm.series import (
+    detect_library_series,
+    resolve_series_selection,
+)
 from .modules.mam_spender import default_public_state
 from .repository import Repository, RequestLimitReached
 from .request_auth import hash_request_password, verify_request_password
@@ -616,22 +620,52 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def combined_library(
         request: Request,
         view: str = "processed",
+        series: str = "",
         page: int = 1,
     ) -> HTMLResponse:
-        selected_view = view if view in {"processed", "duplicates"} else "processed"
+        selected_view = (
+            view if view in {"processed", "duplicates", "missing"} else "processed"
+        )
         table = "torrents" if selected_view == "processed" else "duplicate_torrents"
         page = max(1, page)
         page_size = 50
-        rows = await asyncio.to_thread(
-            repository.table_rows,
-            table,
-            limit=page_size,
-            offset=(page - 1) * page_size,
-        )
-        snapshot = await ui_snapshot()
-        total = int(snapshot["counts"].get(table, 0))
+        rows: list[dict] = []
+        total = 0
+        library_series: list[dict] = []
+        series_scan_resolution: dict[str, Any] | None = None
+        cleaned_series = series.strip()
+
+        if selected_view == "missing":
+            library_series = await asyncio.to_thread(detect_library_series, repository)
+            total = len(library_series)
+            if cleaned_series:
+                try:
+                    series_scan_resolution = await resolve_series_selection(
+                        app.state.services.config,
+                        repository,
+                        app.state.services.mam,
+                        cleaned_series,
+                    )
+                except Exception as ex:
+                    series_scan_resolution = {
+                        "series_name": cleaned_series,
+                        "error": str(ex),
+                        "missing_books": [],
+                        "already_present": [],
+                        "total_books": 0,
+                    }
+        else:
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            snapshot = await ui_snapshot()
+            total = int(snapshot["counts"].get(table, 0))
+
         page_count = max(1, math.ceil(total / page_size))
-        if page > page_count:
+        if selected_view != "missing" and page > page_count:
             return RedirectResponse(
                 f"/library?{urlencode({'view': selected_view, 'page': page_count})}",
                 status_code=307,
@@ -641,7 +675,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "library.html",
             await context(
                 request,
-                title="MLM Processed Library",
+                title="MLM Organized Library",
                 library_view=selected_view,
                 table=table,
                 rows=rows,
@@ -650,8 +684,81 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 total=total,
                 first_record=(page - 1) * page_size + 1 if rows else 0,
                 last_record=(page - 1) * page_size + len(rows),
+                library_series=library_series,
+                active_series=cleaned_series,
+                series_resolution=series_scan_resolution,
+                series_queued=(
+                    as_int(request.query_params["series_queued"])
+                    if "series_queued" in request.query_params
+                    else None
+                ),
+                series_existing=as_int(request.query_params.get("series_existing", 0)),
+                series_total=as_int(request.query_params.get("series_total", 0)),
+                series_name=request.query_params.get("series_name", ""),
             ),
         )
+
+    @app.post("/library/series/select")
+    async def select_library_series(
+        series_name: str = Form(...),
+    ) -> RedirectResponse:
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "series_name is required")
+
+        resolution = await resolve_series_selection(
+            app.state.services.config,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+        )
+
+        queued_count = 0
+        for book in resolution["missing_books"]:
+            raw_row = book["raw_row"]
+            if not raw_row.get("dl"):
+                fetched = await app.state.services.mam.get_torrent_info_by_id(
+                    book["mam_id"]
+                )
+                if fetched:
+                    raw_row = fetched
+            selected = await select_row(
+                app.state.services.config,
+                repository,
+                raw_row,
+                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+            )
+            if selected:
+                queued_count += 1
+
+        if queued_count > 0:
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+            repository.log_activity(
+                "organizer",
+                (
+                    f"Queued missing series books: {cleaned_series} ({queued_count} "
+                    f"book(s) queued, {len(resolution['already_present'])} "
+                    "already present)"
+                ),
+                level="success",
+                context={
+                    "series_name": cleaned_series,
+                    "queued_count": queued_count,
+                    "already_present": len(resolution["already_present"]),
+                    "total_books": resolution["total_books"],
+                },
+            )
+
+        params = {
+            "view": "missing",
+            "series": cleaned_series,
+            "series_name": cleaned_series,
+            "series_queued": queued_count,
+            "series_existing": len(resolution["already_present"]),
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
 
     @app.get("/records/{table}", response_class=HTMLResponse)
     async def records(request: Request, table: str, page: int = 1) -> HTMLResponse:

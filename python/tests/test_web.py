@@ -177,8 +177,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b63"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b63"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b64"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b64"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -284,7 +284,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b63" in spender_config.text
+    assert "0.5.0b64" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -1053,3 +1053,100 @@ def test_request_portal_series_submit(tmp_path: Path) -> None:
     assert len(requests) == 2
     assert any(r["mam_id"] == 501 for r in requests)
     assert any(r["mam_id"] == 502 for r in requests)
+
+
+def test_library_missing_series_view_and_select(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    services = FakeServices(load_config(config))
+    repo = Repository(database)
+
+    # Pre-populate Book 1 of Dungeon Crawler Carl in library
+    repo.add_selected(
+        {
+            "mam_id": 101,
+            "title_search": "dungeon crawler carl",
+            "meta": {
+                "title": "Dungeon Crawler Carl",
+                "media_type": "audiobook",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["1"]}],
+            },
+            "started_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+    )
+
+    raw_releases = [
+        {
+            "id": 101,
+            "title": "Dungeon Crawler Carl",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["Dungeon Crawler Carl", "1"]}),
+            "author_info": json.dumps({"1": "Matt Dinniman"}),
+            "seeders": 20,
+            "free": 1,
+            "dl": "https://example.com/dl/101",
+        },
+        {
+            "id": 201,
+            "title": "Carl's Doomsday Scenario",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["Dungeon Crawler Carl", "2"]}),
+            "author_info": json.dumps({"1": "Matt Dinniman"}),
+            "seeders": 15,
+            "free": 0,
+            "dl": "https://example.com/dl/201",
+        },
+    ]
+
+    class FakeMam(MamClient):
+        def __init__(self):
+            pass
+
+        async def search(self, query: dict):
+            return {"data": raw_releases, "found": len(raw_releases)}
+
+        async def get_torrent_info_by_id(self, tid: int):
+            for r in raw_releases:
+                if r["id"] == tid:
+                    return r
+            return None
+
+    fake_mam = FakeMam()
+    services.mam = fake_mam
+    app.state.services = services
+    client = TestClient(app)
+
+    # 1. Check GET /library?view=missing renders series audit list
+    res = client.get("/library?view=missing")
+    assert res.status_code == 200
+    assert "Missing series books" in res.text
+    assert "Find Missing Books on MaM" in res.text
+    assert "Dungeon Crawler Carl" in res.text
+    assert "Matt Dinniman" in res.text
+
+    # 2. Check GET /library?view=missing&series=Dungeon+Crawler+Carl performs live scan
+    scan_res = client.get("/library?view=missing&series=Dungeon+Crawler+Carl")
+    assert scan_res.status_code == 200
+    assert "Series: Dungeon Crawler Carl" in scan_res.text
+    assert "Download All Missing (1)" in scan_res.text
+    assert "Carl&#39;s Doomsday Scenario" in scan_res.text
+
+    # 3. Check POST /library/series/select queues missing book (ID 201)
+    post_res = client.post(
+        "/library/series/select",
+        data={"series_name": "Dungeon Crawler Carl"},
+        follow_redirects=True,
+    )
+    assert post_res.status_code == 200
+    assert 'Queued 1 missing book for series "Dungeon Crawler Carl"' in post_res.text
+    assert repo.has_pending_mam_id(201) is True

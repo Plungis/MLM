@@ -8,6 +8,8 @@ from mlm.config import Config
 from mlm.database import ensure_database
 from mlm.mam import MamClient
 from mlm.modules.heavymlm.series import (
+    detect_library_series,
+    detect_series_gaps,
     extract_series_volume,
     group_series_books,
     parse_entry_number,
@@ -204,3 +206,76 @@ def test_resolve_series_selection(tmp_path: Path):
     assert resolution["already_present"][0]["mam_id"] == 101
     assert len(resolution["missing_books"]) == 1
     assert resolution["missing_books"][0]["mam_id"] == 201
+
+
+def test_detect_series_gaps():
+    assert detect_series_gaps(["1", "2", "3"]) == []
+    assert detect_series_gaps(["1", "2", "4"]) == ["#3"]
+    assert detect_series_gaps(["1", "4", "5"]) == ["#2", "#3"]
+    assert detect_series_gaps(["2", "3", "4"]) == ["#1"]
+    assert detect_series_gaps(["Special Prequel"]) == []
+
+
+def test_detect_library_series(tmp_path: Path):
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repo = Repository(database)
+
+    # Add books for Dungeon Crawler Carl (Books 1 & 3 - missing Book 2)
+    repo.add_selected(
+        {
+            "mam_id": 101,
+            "title_search": "dungeon crawler carl",
+            "meta": {
+                "title": "Dungeon Crawler Carl",
+                "media_type": "audiobook",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["1"]}],
+            },
+            "started_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+    )
+    repo.add_selected(
+        {
+            "mam_id": 103,
+            "title_search": "the dungeon anarchists cookbook",
+            "meta": {
+                "title": "The Dungeon Anarchist's Cookbook",
+                "media_type": "audiobook",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["3"]}],
+            },
+            "started_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+    )
+
+    # Add book for Cradle (Book 1)
+    repo.add_selected(
+        {
+            "mam_id": 301,
+            "title_search": "unsouled",
+            "meta": {
+                "title": "Unsouled",
+                "media_type": "audiobook",
+                "authors": ["Will Wight"],
+                "series": [{"name": "Cradle", "entries": ["1"]}],
+            },
+            "started_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+    )
+
+    series_list = detect_library_series(repo)
+    assert len(series_list) == 2
+
+    cradle = next(s for s in series_list if s["series_name"] == "Cradle")
+    assert cradle["authors"] == ["Will Wight"]
+    assert cradle["volumes"] == ["1"]
+    assert cradle["gaps"] == []
+
+    dcc = next(s for s in series_list if s["series_name"] == "Dungeon Crawler Carl")
+    assert dcc["authors"] == ["Matt Dinniman"]
+    assert dcc["volumes"] == ["1", "3"]
+    assert dcc["gaps"] == ["#2"]

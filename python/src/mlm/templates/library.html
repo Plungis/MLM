@@ -2,21 +2,183 @@
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">HeavyMLM / processed records</p>
-    <h1>MLM Processed Library</h1>
-    <p class="subtitle">Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.</p>
+    <p class="eyebrow">HeavyMLM / library organizer</p>
+    <h1>{% if library_view == "missing" %}Missing Series Books{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Library{% endif %}</h1>
+    <p class="subtitle">{% if library_view == "missing" %}Audit your library for missing books, detect gaps in series volume sequences, and grab missing installments directly from MyAnonamouse.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.{% endif %}</p>
   </div>
   <div class="page-meta">
     <span class="chip">{{ counts.get("torrents", 0) }} processed</span>
     <span class="chip">{{ counts.get("duplicate_torrents", 0) }} duplicates</span>
+    {% if library_series %}<span class="chip">{{ library_series | length }} series detected</span>{% endif %}
   </div>
 </header>
 
-<nav class="request-inbox-tabs" aria-label="Processed library view">
+{% if series_queued is not none %}
+<div class="flash success" role="status">
+  <span>
+    {% if series_queued > 0 %}
+      Queued {{ series_queued }} missing book{% if series_queued != 1 %}s{% endif %} for series "{{ series_name }}".
+      {% if series_existing > 0 %}({{ series_existing }} book{% if series_existing != 1 %}s{% endif %} already in your library or queue).{% endif %}
+    {% elif series_existing > 0 %}
+      All {{ series_existing }} book{% if series_existing != 1 %}s{% endif %} in series "{{ series_name }}" are already in your library or queue!
+    {% else %}
+      No releases found on MaM for series "{{ series_name }}".
+    {% endif %}
+  </span>
+  <span class="status ok">Missing Books Queued</span>
+</div>
+{% endif %}
+
+<nav class="request-inbox-tabs" aria-label="Organized library views">
   <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed library · {{ counts.get("torrents", 0) }}</a>
-  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates & replacements · {{ counts.get("duplicate_torrents", 0) }}</a>
+  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates &amp; replacements · {{ counts.get("duplicate_torrents", 0) }}</a>
+  <a class="button{% if library_view == 'missing' %} primary{% endif %}" href="/library?view=missing">Missing series books</a>
 </nav>
 
+{% if library_view == "missing" %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Find Missing Books on MaM</h2>
+      <p>Scan any series against MyAnonamouse to detect un-downloaded installments, or review the series already detected in your organized library below.</p>
+    </div>
+  </header>
+
+  <form method="get" action="/library" class="series-search-form" role="search">
+    <input type="hidden" name="view" value="missing" />
+    <label for="seriesInput" class="visually-hidden">Series name</label>
+    <input
+      id="seriesInput"
+      type="search"
+      name="series"
+      value="{{ active_series }}"
+      placeholder="Type a series name (e.g. Dungeon Crawler Carl, Cradle, Stormlight Archive)..."
+      required
+    />
+    <button type="submit" class="button primary">Scan Series on MaM</button>
+    {% if active_series %}<a class="button ghost" href="/library?view=missing">Clear</a>{% endif %}
+  </form>
+</section>
+
+{% if series_resolution %}
+<section class="panel series-banner-panel" aria-label="Series Scan Results">
+  <header class="panel-header">
+    <div>
+      <p class="eyebrow">MaM Series Scanner</p>
+      <h2>Series: {{ series_resolution.series_name }}</h2>
+      <p>
+        Found <strong>{{ series_resolution.total_books }}</strong> book{% if series_resolution.total_books != 1 %}s{% endif %} on MaM.
+        <strong>{{ series_resolution.already_present | length }}</strong> already in your library or queue,
+        <strong>{{ series_resolution.missing_books | length }}</strong> missing.
+      </p>
+    </div>
+    {% if series_resolution.missing_books %}
+    <form method="post" action="/library/series/select" class="inline-form">
+      <input type="hidden" name="series_name" value="{{ series_resolution.series_name }}" />
+      <button type="submit" class="button primary">Download All Missing ({{ series_resolution.missing_books | length }})</button>
+    </form>
+    {% endif %}
+  </header>
+
+  {% if series_resolution.error %}
+  <div class="flash alert">
+    <span>Error scanning series: {{ series_resolution.error }}</span>
+  </div>
+  {% elif series_resolution.missing_books %}
+  <div class="record-list">
+    {% for book in series_resolution.missing_books %}
+    {% set rel = book.release %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">Book #{{ book.volume }}: {{ rel.title }}</span>
+          <span class="record-id">
+            {% if rel.authors %}{{ rel.authors | join(", ") }} · {% endif %}
+            {% if rel.filetypes %}{{ rel.filetypes | join(", ") | upper }} · {% endif %}
+            {{ rel.size }} ·
+            {% for badge in rel.availability %}
+              {% if badge.tone == "free" %}<span class="chip-success">{{ badge.label }}</span> · {% endif %}
+            {% endfor %}
+            {{ rel.seeders }} seeders
+          </span>
+        </div>
+        <div class="record-actions">
+          <form method="post" action="/select" class="inline-form">
+            <input type="hidden" name="id" value="{{ book.mam_id }}" />
+            <input type="hidden" name="query" value="{{ active_series }}" />
+            <button type="submit" class="button primary small">Add to queue</button>
+          </form>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>All books present!</strong>
+      <p>All {{ series_resolution.total_books }} known books for series "{{ series_resolution.series_name }}" are already in your library or download queue.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Library Series Audit</h2>
+      <p>Series detected across your organized library folders and queue. Scan any series with 1 click to fetch missing books from MaM.</p>
+    </div>
+    <span class="chip">{{ library_series | length }} series tracked</span>
+  </header>
+
+  {% if library_series %}
+  <div class="record-list">
+    {% for s in library_series %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ s.series_name }}</span>
+          <span class="record-id">
+            {% if s.authors %}{{ s.authors | join(", ") }} · {% endif %}
+            {{ s.volumes_count }} book{% if s.volumes_count != 1 %}s{% endif %} in library
+            (Volumes: {{ s.volumes | join(", ") }})
+          </span>
+          {% if s.gaps %}
+          <span class="record-note status-gap-note">Detected gaps: Missing {{ s.gaps | join(", ") }}</span>
+          {% endif %}
+        </div>
+        <div class="hm-card-actions">
+          {% if s.gaps %}
+          <span class="status alert">Missing {{ s.gaps | join(", ") }}</span>
+          {% else %}
+          <span class="status ok">Sequence intact</span>
+          {% endif %}
+          <div class="button-row">
+            <a class="button secondary small" href="/library?view=missing&series={{ s.series_name | urlencode }}">Check on MaM</a>
+            <form method="post" action="/library/series/select" class="inline-form">
+              <input type="hidden" name="series_name" value="{{ s.series_name }}" />
+              <button type="submit" class="button primary small">Grab Missing</button>
+            </form>
+            <a class="button ghost small" href="/search?series={{ s.series_name | urlencode }}">Search</a>
+          </div>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>No series detected yet</strong>
+      <p>As HeavyMLM organizes your downloads into series folders, detected series and volume gaps will automatically appear here.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% else %}
 <section class="panel">
   <header class="panel-header">
     <div>
@@ -48,4 +210,5 @@
   <span class="chip">Page {{ page }} / {{ page_count }}</span>
   {% if page < page_count %}<a class="button" href="/library?view={{ library_view }}&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
 </nav>{% endif %}
+{% endif %}
 {% endblock %}
