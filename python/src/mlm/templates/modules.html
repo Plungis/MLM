@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Suite controls</p>
+    <h1>Module Manager</h1>
+    <p class="subtitle">Turn features on or off depending on how you like to use the suite. For example, if you just want an automated bonus-point buyer, you can turn off HeavyMLM here. Changes apply immediately.</p>
+  </div>
+  <div class="page-meta">
+    <span class="status ok">Live changes</span>
+    <span class="chip">No restart needed</span>
+  </div>
+</header>
+
+{% if saved %}
+<div class="flash" role="status"><span>Your active module choices have been saved and applied!</span><span class="status ok">Saved</span></div>
+{% endif %}
+{% if error %}
+<div class="flash error-flash" role="alert"><span>{{ error }}</span><span class="status error">Error</span></div>
+{% endif %}
+
+<form action="/modules" method="post" class="config-editor">
+  <div class="modules-grid">
+
+    <!-- HeavyMLM -->
+    <article class="panel module-card">
+      <header class="panel-header">
+        <div class="module-header-title">
+          <span class="module-badge heavymlm">H_</span>
+          <div>
+            <h2>HeavyMLM</h2>
+            <p>Book downloader &amp; library organizer</p>
+          </div>
+        </div>
+        <span class="status {% if 'heavymlm' in enabled_modules %}ok{% else %}muted{% endif %}">
+          {% if 'heavymlm' in enabled_modules %}Active{% else %}Disabled{% endif %}
+        </span>
+      </header>
+      <div class="panel-body">
+        <p class="module-desc">
+          Keeps an eye on your MyAnonamouse bookmarks, custom snatchlists, and Goodreads/Notion reading lists. Downloads new books through qBittorrent with ratio safeguards and sorts completed files neatly into your media folders.
+        </p>
+        <div class="module-features">
+          <span class="chip">Autograbber</span>
+          <span class="chip">Ratio Guard</span>
+          <span class="chip">Wedges First</span>
+          <span class="chip">Zero-Space Hardlinks</span>
+          <span class="chip">Series Sorter</span>
+        </div>
+        <label class="setting-toggle module-toggle">
+          <input type="checkbox" name="module_heavymlm" value="true"{% if 'heavymlm' in enabled_modules %} checked{% endif %}>
+          <span><strong>Enable HeavyMLM</strong><small>Runs the automated book search, download queue, and library sorting jobs.</small></span>
+        </label>
+      </div>
+    </article>
+
+    <!-- ABSidekick -->
+    <article class="panel module-card">
+      <header class="panel-header">
+        <div class="module-header-title">
+          <span class="module-badge absidekick">A_</span>
+          <div>
+            <h2>ABSidekick</h2>
+            <p>Audiobookshelf metadata &amp; review helper</p>
+          </div>
+        </div>
+        <span class="status {% if 'absidekick' in enabled_modules %}ok{% else %}muted{% endif %}">
+          {% if 'absidekick' in enabled_modules %}Active{% else %}Disabled{% endif %}
+        </span>
+      </header>
+      <div class="panel-body">
+        <p class="module-desc">
+          Connects to your Audiobookshelf server to find missing book details, match summaries and covers across Audible, Open Library, and Google Books, tidy up series numbering, and let you review matches easily.
+        </p>
+        <div class="module-features">
+          <span class="chip">Audiobookshelf API</span>
+          <span class="chip">Audible</span>
+          <span class="chip">Open Library</span>
+          <span class="chip">Google Books</span>
+          <span class="chip">Review Desk</span>
+        </div>
+        <label class="setting-toggle module-toggle">
+          <input type="checkbox" name="module_absidekick" value="true"{% if 'absidekick' in enabled_modules %} checked{% endif %}>
+          <span><strong>Enable ABSidekick</strong><small>Shows ABSidekick matching tools, the Run Center, and the Review Desk in your navigation bar.</small></span>
+        </label>
+      </div>
+    </article>
+
+    <!-- MAM-Spender -->
+    <article class="panel module-card">
+      <header class="panel-header">
+        <div class="module-header-title">
+          <span class="module-badge mam-spender">M$</span>
+          <div>
+            <h2>MAM-Spender</h2>
+            <p>Bonus point optimizer &amp; VIP buyer</p>
+          </div>
+        </div>
+        <span class="status {% if 'mam_spender' in enabled_modules %}ok{% else %}muted{% endif %}">
+          {% if 'mam_spender' in enabled_modules %}Active{% else %}Disabled{% endif %}
+        </span>
+      </header>
+      <div class="panel-body">
+        <p class="module-desc">
+          Automates spending your accumulated MyAnonamouse bonus points. Keeps your account VIP status continuously renewed, buys freeleech wedges, tracks your point growth over time, and graphs your earnings.
+        </p>
+        <div class="module-features">
+          <span class="chip">Auto VIP</span>
+          <span class="chip">Auto Wedges</span>
+          <span class="chip">Point Buffer</span>
+          <span class="chip">Visual Graphs</span>
+          <span class="chip">Purchase Log</span>
+        </div>
+        <label class="setting-toggle module-toggle">
+          <input type="checkbox" name="module_mam_spender" value="true"{% if 'mam_spender' in enabled_modules %} checked{% endif %}>
+          <span><strong>Enable MAM-Spender</strong><small>Checks your bonus point balance periodically and buys VIP/wedges according to your rules.</small></span>
+        </label>
+      </div>
+    </article>
+
+    <!-- Request Portal -->
+    <article class="panel module-card">
+      <header class="panel-header">
+        <div class="module-header-title">
+          <span class="module-badge request-portal">R_</span>
+          <div>
+            <h2>Request Portal</h2>
+            <p>Safe request page for family and friends</p>
+          </div>
+        </div>
+        <span class="status {% if config.request_portal_enabled %}ok{% else %}muted{% endif %}">
+          {% if config.request_portal_enabled %}Active{% else %}Disabled{% endif %}
+        </span>
+      </header>
+      <div class="panel-body">
+        <p class="module-desc">
+          A locked-down, public-friendly web page where friends and family can search Goodreads and submit book requests straight into your approval inbox or download queue.
+        </p>
+        <div class="module-features">
+          <span class="chip">Goodreads Search</span>
+          <span class="chip">User Passwords</span>
+          <span class="chip">Auto-Approve Option</span>
+          <span class="chip">Safe Domain Mode</span>
+          <span class="chip">Anti-Spam Limits</span>
+        </div>
+        <label class="setting-toggle module-toggle">
+          <input type="checkbox" name="request_portal_enabled" value="true"{% if config.request_portal_enabled %} checked{% endif %}>
+          <span><strong>Enable Request Portal</strong><small>Turns on the custom domain request handler and request submission endpoints.</small></span>
+        </label>
+      </div>
+    </article>
+
+  </div>
+
+  <div class="panel actions-panel">
+    <div class="panel-body split-actions">
+      <div>
+        <strong>Save Your Active Modules</strong>
+        <p class="muted">Turning off a module pauses its background tasks and hides its tabs so you only see what you actually use.</p>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Active Modules</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

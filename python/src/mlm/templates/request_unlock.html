@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#020604">
+  <title>{{ portal_title }} · MyAnonaSuite</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+</head>
+<body class="request-portal-body">
+  <main class="request-unlock-shell">
+    <section class="request-unlock-card">
+      <span class="request-brand-mark">R_</span>
+      <p class="eyebrow">MyAnonaSuite / private request portal</p>
+      <h1>{{ portal_title }}</h1>
+      <p>{% if login_mode == "credentials" %}Sign in to search the library request catalog and submit requests.{% elif login_mode == "setup_required" %}This request portal is locked until an administrator creates at least one request account.{% else %}Enter the shared access code to search the library request catalog.{% endif %}</p>
+      {% if error %}<div class="flash error-text" role="alert">{{ error }}</div>{% endif %}
+      {% if login_mode == "setup_required" %}
+      <div class="security-note"><strong>Account setup required.</strong> Open MyAnonaSuite locally, go to Configuration → Request login accounts, and create the first user.</div>
+      {% else %}
+      <form action="/request/unlock" method="post">
+        {% if login_mode == "credentials" %}
+        <label><span>Username</span><input type="text" name="username" required autofocus autocomplete="username" value="{{ portal_username }}"></label>
+        <label><span>Password</span><input type="password" name="password" required autocomplete="current-password"></label>
+        {% else %}
+        <label><span>Access code</span><input type="password" name="access_code" required autofocus autocomplete="current-password"></label>
+        {% endif %}
+        <button class="primary" type="submit">Open request portal</button>
+      </form>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

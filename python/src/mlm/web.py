@@ -1,0 +1,2446 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import hmac
+import ipaddress
+import json
+import math
+import time
+from collections import defaultdict, deque
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from copy import deepcopy
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode, urlsplit
+
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from . import __version__
+from .autograbber import select_row
+from .config import (
+    Config,
+    ConfigError,
+    RequestPortalUser,
+    load_config,
+    save_config_text,
+    save_root_config_values,
+)
+from .database import ensure_database
+from .error_guidance import error_guidance
+from .mam import authenticated_mam_client
+from .modules.absidekick import SOURCE_VERSION, ABSidekickService
+from .modules.absidekick.core import ABSAPIError
+from .modules.heavymlm.abs_sync import sync_audiobookshelf_library
+from .modules.heavymlm.search import (
+    filter_search_results,
+    present_search_result,
+    search_seed,
+)
+from .modules.heavymlm.series import (
+    detect_library_series,
+    resolve_series_selection,
+)
+from .modules.mam_spender import default_public_state
+from .repository import Repository, RequestLimitReached
+from .request_auth import hash_request_password, verify_request_password
+from .request_portal import (
+    GoodreadsLookupError,
+    goodreads_book_id,
+    lookup_goodreads_book,
+)
+from .scheduler import ServiceState
+from .search import as_int
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+
+SUITE_MODULES = {
+    "heavymlm": {
+        "name": "HeavyMLM",
+        "icon": "H_",
+        "status": "Active",
+        "summary": "Automated MyAnonamouse library acquisition and organization.",
+    },
+    "absidekick": {
+        "name": "ABSidekick",
+        "icon": "A_",
+        "status": "Active",
+        "summary": "Audiobookshelf metadata matching, review, and library repair.",
+    },
+    "mam-spender": {
+        "name": "MAM-Spender",
+        "icon": "M$",
+        "status": "Active",
+        "summary": "Automated bonus-point spending, history, and account intelligence.",
+    },
+}
+
+
+def _redacted_config(config: Config) -> dict:
+    value = asdict(config)
+    value["mam_id"] = "***" if config.mam_id else ""
+    if value.get("audiobookshelf"):
+        value["audiobookshelf"]["token"] = "***"
+    for row in value.get("qbittorrent", []):
+        if row.get("password"):
+            row["password"] = "***"
+    for row in value.get("notion_lists", []):
+        if row.get("token"):
+            row["token"] = "***"
+    if value.get("request_portal_access_code"):
+        value["request_portal_access_code"] = "***"
+    if value.get("request_portal_password_hash"):
+        value["request_portal_password_hash"] = "***"
+    for row in value.get("request_portal_users", []):
+        if row.get("password_hash"):
+            row["password_hash"] = "***"
+    return value
+
+
+def create_app(config_path: Path, database_path: Path) -> FastAPI:
+    ensure_database(database_path)
+    config = load_config(config_path)
+    repository = Repository(database_path)
+    absidekick = ABSidekickService(database_path.parent / "absidekick")
+    snapshot_cache: dict[str, object] = {"expires": 0.0, "value": None}
+    snapshot_lock = asyncio.Lock()
+    request_rate_events: dict[str, deque[float]] = defaultdict(deque)
+    request_rate_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        mam = await authenticated_mam_client(
+            config.mam_id,
+            stored_mam_id=repository.config_value("mam_id"),
+            cookie_store=lambda value: repository.set_config_value("mam_id", value),
+        )
+        state = ServiceState(config, repository, mam, absidekick=absidekick)
+        app.state.services = state
+        try:
+            state.start()
+            yield
+        finally:
+            await state.close()
+
+    app = FastAPI(title="MyAnonaSuite", lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+
+    def active_config() -> Config:
+        if hasattr(app.state, "services"):
+            return app.state.services.config
+        return load_config(config_path)
+
+    def spender_service():
+        services = getattr(app.state, "services", None)
+        spender = getattr(services, "mam_spender", None)
+        if spender is None:
+            raise HTTPException(503, "MAM-Spender is still starting")
+        return spender
+
+    def local_request(request: Request) -> bool:
+        client_host = request.client.host if request.client else ""
+        if client_host == "testclient":
+            return True
+        try:
+            return ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            return False
+
+    def request_portal_host(request: Request) -> bool:
+        configured_domains = {
+            domain.strip().casefold()
+            for domain in active_config().request_portal_domains
+        }
+        hostnames = {(request.url.hostname or "").casefold()}
+        # Nginx Proxy Manager normally preserves Host, but custom Advanced
+        # configurations sometimes retain the public name only here. Accepting
+        # a configured forwarded host can only reduce access to the request-only
+        # surface; it can never expose an administration route.
+        forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0]
+        if forwarded_host.strip():
+            try:
+                forwarded_hostname = urlsplit(f"//{forwarded_host.strip()}").hostname
+            except ValueError:
+                forwarded_hostname = None
+            if forwarded_hostname:
+                hostnames.add(forwarded_hostname.casefold())
+        return bool(hostnames & configured_domains)
+
+    def request_portal_root(request: Request) -> str:
+        return "/" if request_portal_host(request) else "/request"
+
+    def configured_request_users(config: Config) -> tuple[RequestPortalUser, ...]:
+        users = list(config.request_portal_users)
+        known = {user.username.casefold() for user in users}
+        if (
+            config.request_portal_username
+            and config.request_portal_password_hash
+            and config.request_portal_username.casefold() not in known
+        ):
+            users.append(
+                RequestPortalUser(
+                    username=config.request_portal_username,
+                    password_hash=config.request_portal_password_hash,
+                    display_name=config.request_portal_username,
+                )
+            )
+        return tuple(users)
+
+    def request_user(config: Config, username: str) -> RequestPortalUser | None:
+        normalized = username.strip().casefold()
+        return next(
+            (
+                user
+                for user in configured_request_users(config)
+                if user.username.casefold() == normalized
+            ),
+            None,
+        )
+
+    def legacy_request_access_token(config: Config) -> str:
+        if config.request_portal_password_hash:
+            credential = "\0".join(
+                (
+                    "credentials",
+                    config.request_portal_username,
+                    config.request_portal_password_hash,
+                )
+            )
+        else:
+            # Preserve tokens issued by the legacy shared-code login.
+            credential = config.request_portal_access_code
+        return hmac.new(
+            config.mam_id.encode("utf-8"),
+            credential.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def request_user_signature(
+        config: Config,
+        user: RequestPortalUser,
+        payload: str,
+    ) -> str:
+        return hmac.new(
+            config.mam_id.encode("utf-8"),
+            f"request-user\0{payload}\0{user.password_hash}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def request_user_access_token(config: Config, user: RequestPortalUser) -> str:
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps(
+                    {"username": user.username, "issued_at": int(time.time())},
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
+        signature = request_user_signature(config, user, payload)
+        return f"user-v1.{payload}.{signature}"
+
+    def request_portal_identity(request: Request) -> RequestPortalUser | None:
+        supplied = request.cookies.get("mysuite_request_access", "")
+        if not supplied.startswith("user-v1."):
+            return None
+        try:
+            _, payload, signature = supplied.split(".", 2)
+            padding = "=" * (-len(payload) % 4)
+            claims = json.loads(
+                base64.urlsafe_b64decode(payload + padding).decode("utf-8")
+            )
+            username = str(claims["username"])
+            issued_at = int(claims["issued_at"])
+        except (KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
+            return None
+        if issued_at > int(time.time()) + 60 or int(time.time()) - issued_at > 2678400:
+            return None
+        current = active_config()
+        user = request_user(current, username)
+        if user is None:
+            return None
+        expected = request_user_signature(current, user, payload)
+        return user if hmac.compare_digest(signature, expected) else None
+
+    def request_login_mode(config: Config) -> str:
+        if configured_request_users(config):
+            return "credentials"
+        if config.request_portal_require_account_login:
+            return "setup_required"
+        if config.request_portal_access_code:
+            return "access_code"
+        return "public"
+
+    def request_login_username_hint(config: Config) -> str:
+        return config.request_portal_username if not config.request_portal_users else ""
+
+    def request_portal_authorized(request: Request) -> bool:
+        current = active_config()
+        login_mode = request_login_mode(current)
+        # Account-only mode deliberately has no localhost exception. Every
+        # submission must carry a named identity so its owner and quota can be
+        # audited. Anonymous local preview remains available only when the admin
+        # explicitly opts out of account-only mode.
+        if (
+            local_request(request)
+            and not request_portal_host(request)
+            and not current.request_portal_require_account_login
+        ):
+            return True
+        if login_mode == "public":
+            return True
+        identity = request_portal_identity(request)
+        if login_mode == "credentials":
+            # Do not accept a legacy shared-access cookie once named credentials
+            # are active. That bypass lost the requester identity on submission.
+            return identity is not None
+        if login_mode != "access_code":
+            return False
+        supplied = request.cookies.get("mysuite_request_access", "")
+        return hmac.compare_digest(
+            supplied,
+            legacy_request_access_token(current),
+        )
+
+    def request_client_key(request: Request) -> str:
+        client_host = request.client.host if request.client else "unknown"
+        try:
+            proxy_is_local = ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            proxy_is_local = False
+        forwarded = request.headers.get("x-forwarded-for", "") if proxy_is_local else ""
+        candidate = forwarded.split(",", 1)[0].strip() if forwarded else client_host
+        return candidate or "unknown"
+
+    async def request_rate_allowed(request: Request, action: str) -> bool:
+        now = time.monotonic()
+        key = f"{action}:{request_client_key(request)}"
+        limit = active_config().request_portal_rate_limit
+        async with request_rate_lock:
+            events = request_rate_events[key]
+            while events and now - events[0] >= 60:
+                events.popleft()
+            if len(events) >= limit:
+                return False
+            events.append(now)
+            return True
+
+    @app.middleware("http")
+    async def isolate_request_domain(request: Request, call_next):
+        if not request_portal_host(request):
+            return await call_next(request)
+        if not active_config().request_portal_enabled:
+            return HTMLResponse("Request portal is disabled", status_code=404)
+        path = request.url.path
+        allowed = path in {
+            "/",
+            "/request",
+            "/request/unlock",
+            "/request/logout",
+            "/request/submit",
+            "/request/series/submit",
+        } or path.startswith("/static/")
+        if not allowed:
+            return HTMLResponse("Not found", status_code=404)
+        return await call_next(request)
+
+    async def ui_snapshot() -> dict:
+        now = time.monotonic()
+        cached = snapshot_cache["value"]
+        if cached is not None and now < float(snapshot_cache["expires"]):
+            return cached  # type: ignore[return-value]
+        async with snapshot_lock:
+            now = time.monotonic()
+            cached = snapshot_cache["value"]
+            if cached is not None and now < float(snapshot_cache["expires"]):
+                return cached  # type: ignore[return-value]
+            snapshot = await asyncio.to_thread(repository.ui_snapshot)
+            snapshot_cache.update(value=snapshot, expires=now + 0.75)
+            return snapshot
+
+    async def context(request: Request, **values: object) -> dict:
+        snapshot = await ui_snapshot()
+        counts = snapshot["counts"]
+        suite_module = str(values.pop("suite_module", "heavymlm"))
+        current_cfg = active_config()
+        enabled_modules_set = {
+            m.strip().replace("-", "_").lower() for m in current_cfg.enabled_modules
+        }
+        return {
+            "request": request,
+            "counts": counts,
+            "pipeline": snapshot["pipeline"],
+            "list_tracking": snapshot["list_tracking"],
+            "request_tracking": snapshot["request_tracking"],
+            "record_total": sum(counts.values()),
+            "jobs": app.state.services.jobs if hasattr(app.state, "services") else {},
+            "mam_stats": (
+                app.state.services.mam_stats if hasattr(app.state, "services") else {}
+            ),
+            "version": __version__,
+            "suite_module": suite_module,
+            "suite_info": SUITE_MODULES.get(suite_module, SUITE_MODULES["heavymlm"]),
+            "suite_modules": SUITE_MODULES,
+            "enabled_modules": enabled_modules_set,
+            "config": _redacted_config(current_cfg),
+            "absidekick_auto_sync": current_cfg.absidekick_auto_sync,
+            **values,
+        }
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request) -> Response:
+        if request_portal_host(request):
+            return await request_portal_page(request)
+        current_cfg = active_config()
+        enabled_modules_set = {
+            m.strip().replace("-", "_").lower() for m in current_cfg.enabled_modules
+        }
+        if "heavymlm" in enabled_modules_set:
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                await context(
+                    request,
+                    title="Home",
+                    triggered=request.query_params.get("triggered"),
+                ),
+            )
+        if "mam_spender" in enabled_modules_set:
+            return RedirectResponse("/suite/mam-spender/dashboard", status_code=303)
+        if "absidekick" in enabled_modules_set:
+            return RedirectResponse("/suite/absidekick/run", status_code=303)
+        return RedirectResponse("/modules", status_code=303)
+
+    @app.get("/modules", response_class=HTMLResponse)
+    async def modules_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "modules.html",
+            await context(
+                request,
+                title="Module Management",
+                saved=request.query_params.get("saved") == "1",
+                error=request.query_params.get("error"),
+            ),
+        )
+
+    @app.post("/modules", response_class=HTMLResponse)
+    async def save_modules_action(
+        request: Request,
+        module_heavymlm: str | None = Form(None),
+        module_absidekick: str | None = Form(None),
+        module_mam_spender: str | None = Form(None),
+        request_portal_enabled: str | None = Form(None),
+    ) -> Response:
+        modules = []
+        if module_heavymlm is not None:
+            modules.append("heavymlm")
+        if module_absidekick is not None:
+            modules.append("absidekick")
+        if module_mam_spender is not None:
+            modules.append("mam_spender")
+        if request_portal_enabled is not None:
+            modules.append("request_portal")
+        try:
+            updated = save_root_config_values(
+                config_path,
+                {
+                    "enabled_modules": tuple(modules),
+                    "request_portal_enabled": request_portal_enabled is not None,
+                },
+            )
+            if hasattr(app.state, "services"):
+                await app.state.services.reconfigure(updated)
+            return RedirectResponse("/modules?saved=1", status_code=303)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "modules.html",
+                await context(
+                    request,
+                    title="Module Management",
+                    saved=False,
+                    error=str(error),
+                ),
+            )
+
+    @app.get("/tutorial", response_class=HTMLResponse)
+    async def tutorial_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "tutorial.html",
+            await context(
+                request,
+                title="Getting Started Guide",
+            ),
+        )
+
+    async def prepare_error_rows(rows: list[dict]) -> None:
+        pending_mam_ids = {
+            int(row["mam_id"])
+            for row in await asyncio.to_thread(repository.pending_selected)
+        }
+        for row in rows:
+            identifier = row.get("id")
+            row["_error_id"] = json.dumps(
+                identifier,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            row["_mam_id"] = (
+                identifier.get("Grabber") if isinstance(identifier, dict) else None
+            )
+            row["_retryable"] = (
+                row["_mam_id"] is not None and int(row["_mam_id"]) in pending_mam_ids
+            )
+            row["_guidance"] = error_guidance(str(row.get("error", "")))
+
+    @app.get("/operations", response_class=HTMLResponse)
+    async def operations(
+        request: Request,
+        view: str = "diagnostics",
+        component: str = "",
+        page: int = 1,
+        live: str = "1",
+    ) -> HTMLResponse:
+        selected_view = (
+            view if view in {"diagnostics", "events", "errors"} else "diagnostics"
+        )
+        page = max(1, page)
+        page_size = 50
+        activity: list[dict] = []
+        rows: list[dict] = []
+        total = 0
+        if selected_view == "diagnostics":
+            activity = await asyncio.to_thread(
+                repository.recent_activity,
+                limit=300,
+                component=component or None,
+            )
+        else:
+            table = "events" if selected_view == "events" else "errored_torrents"
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            snapshot = await ui_snapshot()
+            total = int(snapshot["counts"].get(table, 0))
+            if selected_view == "errors":
+                await prepare_error_rows(rows)
+        page_count = max(1, math.ceil(total / page_size))
+        if selected_view != "diagnostics" and page > page_count:
+            return RedirectResponse(
+                f"/operations?{urlencode({'view': selected_view, 'page': page_count})}",
+                status_code=307,
+            )
+        return templates.TemplateResponse(
+            request,
+            "operations.html",
+            await context(
+                request,
+                title="Operations",
+                operations_view=selected_view,
+                activity=activity,
+                component=component,
+                live=live != "0",
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+                retried=request.query_params.get("retried") == "1",
+                dismissed=request.query_params.get("dismissed") == "1",
+                dismissed_all=(
+                    int(request.query_params["dismissed_all"])
+                    if request.query_params.get("dismissed_all", "").isdigit()
+                    else None
+                ),
+            ),
+        )
+
+    @app.get("/lists", response_class=HTMLResponse)
+    async def combined_lists(
+        request: Request,
+        list_id: str = "",
+        page: int = 1,
+    ) -> HTMLResponse:
+        page = max(1, page)
+        page_size = 50
+        sources = await asyncio.to_thread(
+            repository.table_rows, "lists", limit=500, offset=0
+        )
+        item_counts = await asyncio.to_thread(repository.list_item_counts_by_list)
+        rows = await asyncio.to_thread(
+            repository.list_item_rows,
+            list_id=list_id or None,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        total = await asyncio.to_thread(repository.list_item_count, list_id or None)
+        page_count = max(1, math.ceil(total / page_size))
+        if page > page_count:
+            query = {"page": page_count}
+            if list_id:
+                query["list_id"] = list_id
+            return RedirectResponse(f"/lists?{urlencode(query)}", status_code=307)
+        selected_source = next(
+            (source for source in sources if str(source.get("id")) == list_id),
+            None,
+        )
+        return templates.TemplateResponse(
+            request,
+            "lists.html",
+            await context(
+                request,
+                title="Lists",
+                sources=sources,
+                item_counts=item_counts,
+                selected_list_id=list_id,
+                selected_source=selected_source,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+            ),
+        )
+
+    @app.get("/library", response_class=HTMLResponse)
+    async def combined_library(
+        request: Request,
+        view: str = "processed",
+        series: str = "",
+        page: int = 1,
+    ) -> HTMLResponse:
+        selected_view = (
+            view
+            if view in {"processed", "duplicates", "missing", "abs"}
+            else "processed"
+        )
+        table = "torrents" if selected_view == "processed" else "duplicate_torrents"
+        page = max(1, page)
+        page_size = 50
+        rows: list[dict] = []
+        total = 0
+        library_series: list[dict] = []
+        series_scan_resolution: dict[str, Any] | None = None
+        cleaned_series = series.strip()
+        abs_books_count = await asyncio.to_thread(repository.abs_books_count)
+
+        if selected_view == "missing":
+            library_series = await asyncio.to_thread(detect_library_series, repository)
+            total = len(library_series)
+            if cleaned_series:
+                try:
+                    series_scan_resolution = await resolve_series_selection(
+                        app.state.services.config,
+                        repository,
+                        app.state.services.mam,
+                        cleaned_series,
+                    )
+                except Exception as ex:
+                    series_scan_resolution = {
+                        "series_name": cleaned_series,
+                        "error": str(ex),
+                        "missing_books": [],
+                        "already_present": [],
+                        "total_books": 0,
+                    }
+        elif selected_view == "abs":
+            rows = await asyncio.to_thread(
+                repository.abs_book_rows,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            total = abs_books_count
+        else:
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            snapshot = await ui_snapshot()
+            total = int(snapshot["counts"].get(table, 0))
+
+        page_count = max(1, math.ceil(total / page_size))
+        if selected_view != "missing" and page > page_count:
+            return RedirectResponse(
+                f"/library?{urlencode({'view': selected_view, 'page': page_count})}",
+                status_code=307,
+            )
+
+        abs_configured = bool(
+            (
+                absidekick.token
+                or (config.audiobookshelf and config.audiobookshelf.token)
+            )
+            and (
+                absidekick.settings.get("connection", {}).get("baseUrl")
+                or (config.audiobookshelf and config.audiobookshelf.base_url)
+            )
+            and (
+                absidekick.settings.get("connection", {}).get("libraryId")
+                or (
+                    config.audiobookshelf
+                    and getattr(config.audiobookshelf, "library_id", None)
+                )
+            )
+        )
+
+        return templates.TemplateResponse(
+            request,
+            "library.html",
+            await context(
+                request,
+                title="MLM Organized Library",
+                library_view=selected_view,
+                table=table,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+                library_series=library_series,
+                active_series=cleaned_series,
+                series_resolution=series_scan_resolution,
+                abs_books_count=abs_books_count,
+                abs_configured=abs_configured,
+                abs_synced=(
+                    as_int(request.query_params["abs_synced"])
+                    if "abs_synced" in request.query_params
+                    else None
+                ),
+                abs_sync_error=request.query_params.get("abs_sync_error", ""),
+                series_queued=(
+                    as_int(request.query_params["series_queued"])
+                    if "series_queued" in request.query_params
+                    else None
+                ),
+                series_existing=as_int(request.query_params.get("series_existing", 0)),
+                series_total=as_int(request.query_params.get("series_total", 0)),
+                series_name=request.query_params.get("series_name", ""),
+            ),
+        )
+
+    @app.post("/library/sync-abs")
+    async def sync_abs_library() -> RedirectResponse:
+        settings = deepcopy(absidekick.settings)
+        token = absidekick.token
+        if (
+            not token or not settings.get("connection", {}).get("baseUrl")
+        ) and config.audiobookshelf:
+            settings.setdefault("connection", {})
+            if (
+                not settings["connection"].get("baseUrl")
+                and config.audiobookshelf.base_url
+            ):
+                settings["connection"]["baseUrl"] = config.audiobookshelf.base_url
+            if not token and config.audiobookshelf.token:
+                token = config.audiobookshelf.token
+
+        try:
+            result = await asyncio.to_thread(
+                sync_audiobookshelf_library,
+                repository,
+                settings,
+                token=token,
+            )
+            snapshot_cache["expires"] = 0.0
+            params = {"view": "missing", "abs_synced": result["total_synced"]}
+            return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
+        except Exception as error:
+            params = {"view": "missing", "abs_sync_error": str(error)}
+            return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
+
+    @app.post("/library/series/select")
+    async def select_library_series(
+        series_name: str = Form(...),
+    ) -> RedirectResponse:
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "series_name is required")
+
+        resolution = await resolve_series_selection(
+            app.state.services.config,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+        )
+
+        queued_count = 0
+        for book in resolution["missing_books"]:
+            raw_row = book["raw_row"]
+            if not raw_row.get("dl"):
+                fetched = await app.state.services.mam.get_torrent_info_by_id(
+                    book["mam_id"]
+                )
+                if fetched:
+                    raw_row = fetched
+            selected = await select_row(
+                app.state.services.config,
+                repository,
+                raw_row,
+                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+            )
+            if selected:
+                queued_count += 1
+
+        if queued_count > 0:
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+            repository.log_activity(
+                "organizer",
+                (
+                    f"Queued missing series books: {cleaned_series} ({queued_count} "
+                    f"book(s) queued, {len(resolution['already_present'])} "
+                    "already present)"
+                ),
+                level="success",
+                context={
+                    "series_name": cleaned_series,
+                    "queued_count": queued_count,
+                    "already_present": len(resolution["already_present"]),
+                    "total_books": resolution["total_books"],
+                },
+            )
+
+        params = {
+            "view": "missing",
+            "series": cleaned_series,
+            "series_name": cleaned_series,
+            "series_queued": queued_count,
+            "series_existing": len(resolution["already_present"]),
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)
+
+    @app.get("/records/{table}", response_class=HTMLResponse)
+    async def records(request: Request, table: str, page: int = 1) -> HTMLResponse:
+        consolidated = {
+            "events": ("/operations", "events"),
+            "errored_torrents": ("/operations", "errors"),
+            "lists": ("/lists", ""),
+            "list_items": ("/lists", ""),
+            "torrents": ("/library", "processed"),
+            "duplicate_torrents": ("/library", "duplicates"),
+        }
+        if table in consolidated:
+            target, view = consolidated[table]
+            query = dict(request.query_params)
+            if view:
+                query["view"] = view
+            suffix = f"?{urlencode(query)}" if query else ""
+            return RedirectResponse(target + suffix, status_code=307)
+        page = max(1, page)
+        page_size = 50
+        try:
+            rows = await asyncio.to_thread(
+                repository.table_rows,
+                table,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+        except ValueError as error:
+            raise HTTPException(404, str(error)) from error
+        snapshot = await ui_snapshot()
+        total = int(snapshot["counts"].get(table, 0))
+        page_count = max(1, math.ceil(total / page_size))
+        if page > page_count:
+            return RedirectResponse(
+                f"/records/{table}?page={page_count}", status_code=307
+            )
+        return templates.TemplateResponse(
+            request,
+            "records.html",
+            await context(
+                request,
+                title=table.replace("_", " ").title(),
+                table=table,
+                rows=rows,
+                page=page,
+                page_count=page_count,
+                total=total,
+                first_record=(page - 1) * page_size + 1 if rows else 0,
+                last_record=(page - 1) * page_size + len(rows),
+                retried=request.query_params.get("retried") == "1",
+                dismissed=request.query_params.get("dismissed") == "1",
+            ),
+        )
+
+    @app.post("/errors/retry")
+    async def retry_error(
+        error_id: str = Form(...), mam_id: int | None = Form(None)
+    ) -> RedirectResponse:
+        try:
+            identifier = json.loads(error_id)
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "invalid error identifier") from error
+        if mam_id is None or not repository.has_pending_mam_id(mam_id):
+            raise HTTPException(409, "release is no longer pending for download")
+        repository.delete_error(identifier)
+        snapshot_cache["expires"] = 0.0
+        asyncio.create_task(app.state.services.trigger("downloader"))
+        return RedirectResponse("/operations?view=errors&retried=1", status_code=303)
+
+    @app.post("/errors/dismiss")
+    async def dismiss_error(error_id: str = Form(...)) -> RedirectResponse:
+        try:
+            identifier = json.loads(error_id)
+        except json.JSONDecodeError as error:
+            raise HTTPException(400, "invalid error identifier") from error
+        repository.delete_error(identifier)
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse("/operations?view=errors&dismissed=1", status_code=303)
+
+    @app.post("/errors/dismiss-all")
+    async def dismiss_all_errors() -> RedirectResponse:
+        dismissed = repository.dismiss_all_errors()
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse(
+            f"/operations?view=errors&dismissed_all={dismissed}", status_code=303
+        )
+
+    mam_spender_views = {"dashboard", "config", "history", "analytics", "mam-data"}
+    mam_spender_aliases = {
+        "settings": "config",
+        "graph": "analytics",
+        "mamdata": "mam-data",
+    }
+
+    async def render_mam_spender(request: Request, view: str) -> HTMLResponse:
+        normalized = mam_spender_aliases.get(view.casefold(), view.casefold())
+        if normalized not in mam_spender_views:
+            raise HTTPException(404, f"unknown MAM-Spender page: {view}")
+        services = getattr(app.state, "services", None)
+        spender = getattr(services, "mam_spender", None)
+        spender_state = (
+            spender.public_state()
+            if spender is not None
+            else default_public_state(repository)
+        )
+        current = active_config()
+        labels = {
+            "dashboard": "Dashboard",
+            "config": "Config",
+            "history": "History",
+            "analytics": "Graph",
+            "mam-data": "All MaM Data",
+        }
+        return templates.TemplateResponse(
+            request,
+            "mam_spender.html",
+            await context(
+                request,
+                title=f"MAM-Spender {labels[normalized]}",
+                suite_module="mam-spender",
+                spender=spender_state,
+                spender_view=normalized,
+                spender_runtime={
+                    "suite_version": __version__,
+                    "source_version": "MAM-Spender Web Edition v1.4.0",
+                    "host": current.web_host,
+                    "port": current.web_port,
+                    "config_path": str(config_path) if local_request(request) else None,
+                },
+            ),
+        )
+
+    @app.get("/suite/mam-spender/{view}", response_class=HTMLResponse)
+    async def mam_spender_page(request: Request, view: str) -> HTMLResponse:
+        return await render_mam_spender(request, view)
+
+    absidekick_views = {
+        "connection",
+        "targeting",
+        "matching",
+        "tags",
+        "run",
+        "review",
+    }
+    absidekick_aliases = {"config": "connection", "dashboard": "run"}
+
+    async def render_absidekick(request: Request, view: str) -> HTMLResponse:
+        normalized = absidekick_aliases.get(view.casefold(), view.casefold())
+        if normalized not in absidekick_views:
+            raise HTTPException(404, f"unknown ABSidekick page: {view}")
+        labels = {
+            "connection": "Config",
+            "targeting": "Targeting",
+            "matching": "Matching",
+            "tags": "Tags & Actions",
+            "run": "Run Center",
+            "review": "Review Desk",
+        }
+        return templates.TemplateResponse(
+            request,
+            "absidekick.html",
+            await context(
+                request,
+                title=f"ABSidekick {labels[normalized]}",
+                suite_module="absidekick",
+                absidekick_view=normalized,
+                absidekick_source_version=SOURCE_VERSION,
+            ),
+        )
+
+    @app.get("/suite/absidekick/{view}", response_class=HTMLResponse)
+    async def absidekick_page(request: Request, view: str) -> HTMLResponse:
+        return await render_absidekick(request, view)
+
+    @app.get("/suite/{module}", response_class=HTMLResponse)
+    async def suite_module_page(
+        request: Request, module: str, view: str = "dashboard"
+    ) -> HTMLResponse:
+        if module not in {"absidekick", "mam-spender"}:
+            raise HTTPException(404, f"unknown suite module: {module}")
+        if module == "mam-spender":
+            return await render_mam_spender(request, view)
+        return await render_absidekick(request, view)
+
+    async def absidekick_payload(request: Request) -> dict[str, object]:
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as error:
+            raise ValueError("request body must be valid JSON") from error
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return payload
+
+    async def absidekick_call(request: Request, function, *args):
+        if not local_request(request):
+            return JSONResponse(
+                {"ok": False, "error": "ABSidekick controls are local-only"},
+                status_code=403,
+            )
+        try:
+            return await asyncio.to_thread(function, *args)
+        except ABSAPIError as error:
+            return JSONResponse(
+                {"ok": False, "error": str(error), "body": error.body},
+                status_code=error.status or 502,
+            )
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        except RuntimeError as error:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": str(error),
+                    "job": absidekick.job_snapshot(),
+                },
+                status_code=409,
+            )
+        except LookupError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=404)
+        except Exception as error:  # noqa: BLE001 - return JSON to module UI
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=500)
+
+    @app.get("/api/absidekick/state")
+    async def absidekick_state(request: Request):
+        return await absidekick_call(request, absidekick.public_state)
+
+    @app.get("/api/absidekick/libraries")
+    async def absidekick_libraries(request: Request):
+        return await absidekick_call(request, absidekick.libraries)
+
+    @app.get("/api/absidekick/filter-data")
+    async def absidekick_filter_data(request: Request, libraryId: str = ""):
+        return await absidekick_call(request, absidekick.filter_data, libraryId)
+
+    @app.get("/api/absidekick/job")
+    async def absidekick_job(request: Request):
+        return await absidekick_call(
+            request, lambda: {"ok": True, "job": absidekick.job_snapshot()}
+        )
+
+    @app.get("/api/absidekick/activity")
+    async def absidekick_activity(request: Request):
+        return await absidekick_call(request, absidekick.activity_snapshot)
+
+    @app.get("/api/absidekick/item-cover/{item_id}")
+    async def absidekick_item_cover(request: Request, item_id: str):
+        result = await absidekick_call(request, absidekick.cover, item_id)
+        if isinstance(result, JSONResponse):
+            return result
+        content, content_type = result
+        return Response(
+            content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+
+    @app.post("/api/absidekick/connect")
+    async def absidekick_connect(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.connect, payload)
+
+    @app.post("/api/absidekick/settings")
+    async def absidekick_settings(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.save, payload)
+
+    @app.post("/api/absidekick/provider/google/test")
+    async def absidekick_google_test(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.test_google_books, payload)
+
+    @app.post("/api/absidekick/provider/google/clear")
+    async def absidekick_google_clear(request: Request):
+        return await absidekick_call(request, absidekick.clear_google_books)
+
+    @app.post("/api/absidekick/preview")
+    async def absidekick_preview(request: Request):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        return await absidekick_call(request, absidekick.preview, payload)
+
+    @app.post("/api/absidekick/review/{action}")
+    async def absidekick_review(request: Request, action: str):
+        try:
+            payload = await absidekick_payload(request)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+        if action == "scan":
+            function = absidekick.scan_review
+        elif action == "search":
+            function = absidekick.search_review
+        elif action == "approve":
+            function = absidekick.approve_review
+        elif action == "reject":
+            function = absidekick.reject_review
+        else:
+            return JSONResponse(
+                {"ok": False, "error": "unknown review action"},
+                status_code=404,
+            )
+        return await absidekick_call(request, function, payload)
+
+    @app.post("/api/absidekick/job/{action}")
+    async def absidekick_job_action(request: Request, action: str):
+        if action == "start":
+            try:
+                payload = await absidekick_payload(request)
+            except ValueError as error:
+                return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+            return await absidekick_call(request, absidekick.start, payload)
+        if action in {"pause", "resume", "cancel"}:
+            return await absidekick_call(request, absidekick.job_action, action)
+        return JSONResponse(
+            {"ok": False, "error": "unknown job action"}, status_code=404
+        )
+
+    @app.get("/api/mam-spender/state")
+    async def mam_spender_state(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        return spender_service().public_state()
+
+    @app.post("/api/mam-spender/settings")
+    async def save_mam_spender_settings(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            payload = await request.json()
+            return spender_service().update_settings(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/session")
+    async def save_mam_spender_session(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            payload = await request.json()
+            return spender_service().save_session_id(str(payload.get("value", "")))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/import")
+    async def import_mam_spender_config(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        try:
+            incoming = await request.json()
+            payload = incoming.get("config", incoming)
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            if not isinstance(payload, dict):
+                raise ValueError("legacy config must be a JSON object")
+            return spender_service().import_legacy(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/mam-spender/{action}")
+    async def mam_spender_action(request: Request, action: str) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "MAM-Spender controls are local-only")
+        spender = spender_service()
+        if action == "start":
+            return spender.start_scheduler()
+        if action == "pause":
+            return spender.pause_scheduler()
+        if action == "run":
+            payload = await request.json()
+            return spender.run_now(
+                fl_only_override=bool(payload.get("fl_only_override", False))
+            )
+        if action == "reset-totals":
+            return spender.reset_totals()
+        if action == "refresh-account":
+            return await spender.refresh_mam_user_data()
+        if action == "refresh-bonus-history":
+            return await spender.refresh_bonus_history()
+        raise HTTPException(404, "unknown MAM-Spender action")
+
+    @app.get("/config", response_class=HTMLResponse)
+    async def show_config(request: Request) -> HTMLResponse:
+        editable = local_request(request)
+        return templates.TemplateResponse(
+            request,
+            "config.html",
+            await context(
+                request,
+                title="Configuration",
+                config=_redacted_config(active_config()),
+                saved=request.query_params.get("saved") == "1",
+                error=request.query_params.get("user_error") or None,
+                config_path=str(config_path),
+                config_toml=(
+                    config_path.read_text(encoding="utf-8") if editable else None
+                ),
+            ),
+        )
+
+    @app.post("/config", response_class=HTMLResponse)
+    async def save_config(
+        request: Request,
+        min_ratio: str = Form(...),
+        unsat_buffer: str = Form(...),
+        max_unsat_slots: str = Form(""),
+        wedge_buffer: str = Form(...),
+        prefer_wedges: str | None = Form(None),
+        download_on_wedge_failure: str | None = Form(None),
+        grab_both_formats: str | None = Form(None),
+        absidekick_auto_sync: str | None = Form(None),
+        add_torrents_stopped: str | None = Form(None),
+        request_portal_enabled: str | None = Form(None),
+        request_portal_require_account_login: str | None = Form(None),
+        request_portal_domains: str = Form(""),
+        request_portal_title: str = Form("Library Requests"),
+        request_portal_rate_limit: str = Form("20"),
+        request_portal_username: str = Form(""),
+        request_portal_password: str = Form(""),
+        clear_request_portal_credentials: str | None = Form(None),
+        request_portal_access_code: str = Form(""),
+        clear_request_portal_access_code: str | None = Form(None),
+        search_interval: str = Form(...),
+        import_interval: str = Form(...),
+        link_interval: str = Form(...),
+    ) -> HTMLResponse:
+        try:
+            if not local_request(request):
+                raise ConfigError(
+                    "configuration changes are only allowed from this computer"
+                )
+            values: dict[str, object | None] = {
+                "min_ratio": float(min_ratio),
+                "unsat_buffer": int(unsat_buffer),
+                "max_unsat_slots": (
+                    int(max_unsat_slots) if max_unsat_slots.strip() else None
+                ),
+                "wedge_buffer": int(wedge_buffer),
+                "prefer_wedges": prefer_wedges is not None,
+                "download_on_wedge_failure": (download_on_wedge_failure is not None),
+                "grab_both_formats": grab_both_formats is not None,
+                "absidekick_auto_sync": absidekick_auto_sync is not None,
+                "add_torrents_stopped": add_torrents_stopped is not None,
+                "request_portal_enabled": request_portal_enabled is not None,
+                "request_portal_require_account_login": (
+                    request_portal_require_account_login is not None
+                ),
+                "request_portal_domains": tuple(
+                    domain.strip()
+                    for domain in request_portal_domains.replace("\n", ",").split(",")
+                    if domain.strip()
+                ),
+                "request_portal_title": request_portal_title.strip()
+                or "Library Requests",
+                "request_portal_rate_limit": int(request_portal_rate_limit),
+                "search_interval": int(search_interval),
+                "import_interval": int(import_interval),
+                "link_interval": int(link_interval),
+            }
+            current = active_config()
+            if clear_request_portal_credentials is not None:
+                values["request_portal_username"] = None
+                values["request_portal_password_hash"] = None
+            else:
+                username = (
+                    request_portal_username.strip() or current.request_portal_username
+                )
+                password_hash = current.request_portal_password_hash
+                if request_portal_password:
+                    password_hash = await asyncio.to_thread(
+                        hash_request_password, request_portal_password
+                    )
+                if username or password_hash:
+                    if not username or not password_hash:
+                        raise ConfigError(
+                            "enter both a requester username and password"
+                        )
+                    values["request_portal_username"] = username
+                    values["request_portal_password_hash"] = password_hash
+            if request_portal_access_code:
+                values["request_portal_access_code"] = request_portal_access_code
+            elif clear_request_portal_access_code is not None:
+                values["request_portal_access_code"] = None
+            updated = save_root_config_values(config_path, values)
+            await app.state.services.reconfigure(updated)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "config.html",
+                await context(
+                    request,
+                    title="Configuration",
+                    config=_redacted_config(active_config()),
+                    saved=False,
+                    error=str(error),
+                    config_path=str(config_path),
+                    config_toml=(
+                        config_path.read_text(encoding="utf-8")
+                        if local_request(request)
+                        else None
+                    ),
+                ),
+                status_code=400,
+            )
+        return RedirectResponse("/config?saved=1", status_code=303)
+
+    def request_user_rows_for_save(
+        users: list[RequestPortalUser],
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "username": user.username,
+                "password_hash": user.password_hash,
+                "display_name": user.display_name,
+                "permissions": tuple(user.permissions),
+                "weekly_request_limit": user.weekly_request_limit,
+            }
+            for user in users
+        )
+
+    @app.post("/config/request-users/save")
+    async def save_request_portal_user(
+        request: Request,
+        original_username: str = Form(""),
+        username: str = Form(...),
+        display_name: str = Form(""),
+        password: str = Form(""),
+        auto_approve: str | None = Form(None),
+        weekly_request_limit: int = Form(0),
+    ) -> RedirectResponse:
+        try:
+            if not local_request(request):
+                raise ConfigError(
+                    "request account changes are only allowed from this computer"
+                )
+            username = username.strip()
+            display_name = display_name.strip()
+            if not username:
+                raise ConfigError("request account username cannot be empty")
+            if weekly_request_limit < 0:
+                raise ConfigError("weekly request limit cannot be negative")
+            current = active_config()
+            users = list(current.request_portal_users)
+            lookup = (original_username or username).strip().casefold()
+            existing_index = next(
+                (
+                    index
+                    for index, user in enumerate(users)
+                    if user.username.casefold() == lookup
+                ),
+                None,
+            )
+            duplicate = next(
+                (
+                    user
+                    for index, user in enumerate(users)
+                    if user.username.casefold() == username.casefold()
+                    and index != existing_index
+                ),
+                None,
+            )
+            if duplicate:
+                raise ConfigError(
+                    f"request account username {username!r} already exists"
+                )
+            password_hash = (
+                users[existing_index].password_hash
+                if existing_index is not None
+                else ""
+            )
+            if password:
+                password_hash = await asyncio.to_thread(
+                    hash_request_password,
+                    password,
+                )
+            if not password_hash:
+                raise ConfigError("new request accounts require a password")
+            updated_user = RequestPortalUser(
+                username=username,
+                password_hash=password_hash,
+                display_name=display_name,
+                permissions=("auto_approve",) if auto_approve is not None else (),
+                weekly_request_limit=weekly_request_limit,
+            )
+            if existing_index is None:
+                users.append(updated_user)
+            else:
+                users[existing_index] = updated_user
+            updated = save_root_config_values(
+                config_path,
+                {"request_portal_users": request_user_rows_for_save(users)},
+            )
+            await app.state.services.reconfigure(updated)
+            repository.log_activity(
+                "configuration",
+                f"Saved request account: {username}",
+                level="success",
+                context={
+                    "username": username,
+                    "permissions": list(updated_user.permissions),
+                    "weekly_request_limit": updated_user.weekly_request_limit,
+                },
+            )
+        except (ConfigError, ValueError) as error:
+            return RedirectResponse(
+                f"/config?{urlencode({'user_error': str(error)})}#request-accounts",
+                status_code=303,
+            )
+        return RedirectResponse(
+            "/config?saved=1#request-accounts",
+            status_code=303,
+        )
+
+    @app.post("/config/request-users/delete")
+    async def delete_request_portal_user(
+        request: Request,
+        username: str = Form(...),
+    ) -> RedirectResponse:
+        if not local_request(request):
+            raise HTTPException(
+                403,
+                "request account changes are only allowed from this computer",
+            )
+        current = active_config()
+        normalized = username.strip().casefold()
+        users = [
+            user
+            for user in current.request_portal_users
+            if user.username.casefold() != normalized
+        ]
+        if len(users) == len(current.request_portal_users):
+            raise HTTPException(404, "request account was not found")
+        updated = save_root_config_values(
+            config_path,
+            {"request_portal_users": request_user_rows_for_save(users)},
+        )
+        await app.state.services.reconfigure(updated)
+        repository.log_activity(
+            "configuration",
+            f"Deleted request account: {username.strip()}",
+            level="warning",
+            context={"username": username.strip()},
+        )
+        return RedirectResponse(
+            "/config?saved=1#request-accounts",
+            status_code=303,
+        )
+
+    @app.post("/config/full", response_class=HTMLResponse)
+    async def save_full_config(
+        request: Request,
+        config_toml: str = Form(...),
+    ) -> HTMLResponse:
+        try:
+            if not local_request(request):
+                raise ConfigError(
+                    "configuration changes are only allowed from this computer"
+                )
+            updated = save_config_text(config_path, config_toml)
+            await app.state.services.reconfigure(updated)
+        except (ConfigError, ValueError) as error:
+            return templates.TemplateResponse(
+                request,
+                "config.html",
+                await context(
+                    request,
+                    title="Configuration",
+                    config=_redacted_config(active_config()),
+                    saved=False,
+                    error=str(error),
+                    config_path=str(config_path),
+                    config_toml=config_toml,
+                ),
+                status_code=400,
+            )
+        return RedirectResponse("/config?saved=1", status_code=303)
+
+    @app.get("/diagnostics")
+    async def diagnostics_redirect(request: Request) -> RedirectResponse:
+        query = dict(request.query_params)
+        query["view"] = "diagnostics"
+        return RedirectResponse(f"/operations?{urlencode(query)}", status_code=307)
+
+    def manual_search_filters(
+        *,
+        q: str = "",
+        title: str = "",
+        author: str = "",
+        series: str = "",
+        narrator: str = "",
+        filetype: str = "",
+        category: str = "",
+        language: str = "",
+        availability: str = "",
+        min_seeders: int = 0,
+        sort: str = "relevance",
+    ) -> dict[str, object]:
+        return {
+            "q": q.strip(),
+            "title": title.strip(),
+            "author": author.strip(),
+            "series": series.strip(),
+            "narrator": narrator.strip(),
+            "filetype": filetype.strip().casefold(),
+            "category": category.strip().casefold(),
+            "language": language.strip(),
+            "availability": availability.strip().casefold(),
+            "min_seeders": max(0, min_seeders),
+            "sort": sort.strip() or "relevance",
+        }
+
+    def search_was_requested(filters: dict[str, object]) -> bool:
+        return any(
+            value
+            for name, value in filters.items()
+            if name != "sort" and value not in {"", 0}
+        )
+
+    async def run_manual_search(filters: dict[str, object]) -> dict[str, object]:
+        rows: list[dict] = []
+        found = 0
+        scanned = 0
+        error = None
+        if search_was_requested(filters):
+            try:
+                seed, search_in = search_seed(filters)
+                raw_by_id: dict[int, dict] = {}
+                start = 0
+                for _ in range(5):
+                    tor: dict[str, object] = {"startNumber": start}
+                    if seed:
+                        tor["text"] = seed
+                    if search_in:
+                        tor["srchIn"] = search_in
+                    result = await app.state.services.mam.search(
+                        {
+                            "dlLink": True,
+                            "mediaInfo": True,
+                            "isbn": True,
+                            "perpage": 100,
+                            "tor": tor,
+                        }
+                    )
+                    raw_rows = [
+                        row for row in result.get("data", []) if isinstance(row, dict)
+                    ]
+                    found = max(found, as_int(result.get("found"), len(raw_rows)))
+                    before = len(raw_by_id)
+                    for row in raw_rows:
+                        raw_by_id[as_int(row.get("id"))] = row
+                    start += len(raw_rows)
+                    if not raw_rows or len(raw_by_id) == before or start >= found:
+                        break
+                scanned = len(raw_by_id)
+                presented = [
+                    present_search_result(row)
+                    for torrent_id, row in raw_by_id.items()
+                    if torrent_id
+                ]
+                rows = filter_search_results(presented, filters)
+                found = max(found, scanned)
+            except Exception as caught:  # noqa: BLE001 - display API failure in UI
+                error = str(caught)
+        return {
+            "rows": rows,
+            "found": found,
+            "scanned": scanned,
+            "error": error,
+        }
+
+    async def render_request_portal(request: Request) -> HTMLResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            login_mode = request_login_mode(current)
+            return templates.TemplateResponse(
+                request,
+                "request_unlock.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "login_mode": login_mode,
+                    "portal_username": request_login_username_hint(current),
+                    "error": None,
+                },
+                status_code=503 if login_mode == "setup_required" else 200,
+            )
+
+        identity = request_portal_identity(request)
+        portal_username = (
+            (identity.display_name or identity.username) if identity else ""
+        )
+        portal_auto_approve = bool(identity and "auto_approve" in identity.permissions)
+        portal_weekly_limit = identity.weekly_request_limit if identity else 0
+        portal_weekly_used = (
+            await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            if identity and portal_weekly_limit > 0
+            else 0
+        )
+        portal_weekly_remaining = max(
+            0,
+            portal_weekly_limit - portal_weekly_used,
+        )
+        params = request.query_params
+        goodreads_url = params.get("goodreads_url", "").strip()
+        goodreads = None
+        goodreads_error = None
+        values = {
+            "q": params.get("q", ""),
+            "title": params.get("title", ""),
+            "author": params.get("author", ""),
+            "series": params.get("series", ""),
+            "narrator": params.get("narrator", ""),
+            "filetype": params.get("filetype", ""),
+            "category": params.get("category", ""),
+            "language": params.get("language", ""),
+            "availability": params.get("availability", ""),
+            "min_seeders": as_int(params.get("min_seeders")),
+            "sort": params.get("sort", "relevance"),
+        }
+        requested_lookup = bool(
+            goodreads_url
+            or any(
+                value
+                for name, value in values.items()
+                if name != "sort" and value not in {"", 0}
+            )
+        )
+        if requested_lookup and not await request_rate_allowed(request, "search"):
+            return templates.TemplateResponse(
+                request,
+                "request_portal.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "portal_root": request_portal_root(request),
+                    "portal_username": portal_username,
+                    "portal_auto_approve": portal_auto_approve,
+                    "portal_weekly_limit": portal_weekly_limit,
+                    "portal_weekly_used": portal_weekly_used,
+                    "portal_weekly_remaining": portal_weekly_remaining,
+                    "login_required": request_login_mode(current) != "public",
+                    "filters": manual_search_filters(**values),
+                    "searched": True,
+                    "rows": [],
+                    "found": 0,
+                    "scanned": 0,
+                    "error": "Too many searches. Wait one minute and try again.",
+                    "goodreads_url": goodreads_url,
+                    "goodreads": None,
+                    "goodreads_error": None,
+                    "requester_name": (
+                        params.get("requester_name", "").strip() or portal_username
+                    )[:120],
+                    "requester_contact": params.get("requester_contact", "")[:200],
+                    "note": params.get("note", "")[:1000],
+                    "submission_result": "",
+                    "submission_error": params.get("request_error", ""),
+                },
+                status_code=429,
+            )
+        if goodreads_url:
+            try:
+                goodreads = await lookup_goodreads_book(goodreads_url)
+                values["title"] = values["title"] or goodreads["title"]
+                values["author"] = values["author"] or (
+                    goodreads["authors"][0] if goodreads["authors"] else ""
+                )
+                values["series"] = values["series"] or goodreads["series"]
+                values["language"] = values["language"] or goodreads["language"]
+                repository.log_activity(
+                    "requests",
+                    f"Read Goodreads request link: {goodreads['title']}",
+                    level="success",
+                    context={
+                        "goodreads_id": goodreads["goodreads_id"],
+                        "url": goodreads["url"],
+                    },
+                )
+            except GoodreadsLookupError as caught:
+                goodreads_error = str(caught)
+                repository.log_activity(
+                    "requests",
+                    "Goodreads request lookup failed",
+                    level="warning",
+                    context={"url": goodreads_url, "error": goodreads_error},
+                )
+        filters = manual_search_filters(**values)
+        searched = search_was_requested(filters)
+        result = await run_manual_search(filters)
+        return templates.TemplateResponse(
+            request,
+            "request_portal.html",
+            {
+                "request": request,
+                "version": __version__,
+                "portal_title": current.request_portal_title,
+                "portal_root": request_portal_root(request),
+                "portal_username": portal_username,
+                "portal_auto_approve": portal_auto_approve,
+                "portal_weekly_limit": portal_weekly_limit,
+                "portal_weekly_used": portal_weekly_used,
+                "portal_weekly_remaining": portal_weekly_remaining,
+                "login_required": request_login_mode(current) != "public",
+                "filters": filters,
+                "searched": searched,
+                "rows": result["rows"],
+                "found": result["found"],
+                "scanned": result["scanned"],
+                "error": result["error"],
+                "goodreads_url": goodreads_url,
+                "goodreads": goodreads,
+                "goodreads_error": goodreads_error,
+                "requester_name": (
+                    params.get("requester_name", "").strip() or portal_username
+                )[:120],
+                "requester_contact": params.get("requester_contact", "")[:200],
+                "note": params.get("note", "")[:1000],
+                "submission_result": params.get("submitted", ""),
+                "submission_error": params.get("request_error", ""),
+                "series_name": params.get("series_name", ""),
+                "series_count": as_int(params.get("series_count")),
+                "series_existing": as_int(params.get("series_existing")),
+                "series_total": as_int(params.get("series_total")),
+            },
+        )
+
+    @app.get("/request", response_class=HTMLResponse)
+    async def request_portal_page(request: Request) -> HTMLResponse:
+        return await render_request_portal(request)
+
+    @app.post("/request/unlock", response_class=HTMLResponse)
+    async def unlock_request_portal(
+        request: Request,
+        username: str = Form(""),
+        password: str = Form(""),
+        access_code: str = Form(""),
+    ) -> HTMLResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        allowed = await request_rate_allowed(request, "unlock")
+        login_mode = request_login_mode(current)
+        authenticated_user = None
+        if login_mode == "credentials":
+            authenticated_user = request_user(current, username)
+            credentials_valid = bool(
+                authenticated_user
+                and verify_request_password(
+                    password,
+                    authenticated_user.password_hash,
+                )
+            )
+        elif login_mode == "access_code":
+            credentials_valid = hmac.compare_digest(
+                access_code, current.request_portal_access_code
+            )
+        elif login_mode == "setup_required":
+            credentials_valid = False
+        else:
+            credentials_valid = True
+        valid = allowed and credentials_valid
+        if not valid:
+            return templates.TemplateResponse(
+                request,
+                "request_unlock.html",
+                {
+                    "request": request,
+                    "version": __version__,
+                    "portal_title": current.request_portal_title,
+                    "login_mode": login_mode,
+                    "portal_username": username,
+                    "error": (
+                        "Too many attempts. Wait one minute."
+                        if not allowed
+                        else (
+                            "Create at least one request login account from the "
+                            "local Configuration screen before using this portal."
+                            if login_mode == "setup_required"
+                            else (
+                                "That username or password is not valid."
+                                if login_mode == "credentials"
+                                else "That access code is not valid."
+                            )
+                        )
+                    ),
+                },
+                status_code=(
+                    429
+                    if not allowed
+                    else 503
+                    if login_mode == "setup_required"
+                    else 403
+                ),
+            )
+        response = RedirectResponse(request_portal_root(request), status_code=303)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0]
+        response.set_cookie(
+            "mysuite_request_access",
+            (
+                request_user_access_token(current, authenticated_user)
+                if authenticated_user is not None
+                else legacy_request_access_token(current)
+            ),
+            max_age=60 * 60 * 24 * 30,
+            httponly=True,
+            secure=request.url.scheme == "https" or forwarded_proto == "https",
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @app.post("/request/logout")
+    async def logout_request_portal(request: Request) -> RedirectResponse:
+        response = RedirectResponse(request_portal_root(request), status_code=303)
+        response.delete_cookie(
+            "mysuite_request_access",
+            path="/",
+            httponly=True,
+            samesite="strict",
+        )
+        return response
+
+    async def approve_stored_request(
+        record: dict,
+        *,
+        decision_by: str,
+        automatic: bool,
+    ) -> tuple[str, str]:
+        request_id = str(record["id"])
+        mam_id = int(record["mam_id"])
+        if repository.has_mam_id(mam_id):
+            await asyncio.to_thread(
+                repository.update_request,
+                request_id,
+                "fulfilled",
+                decision_note="Already present in the library or pending for download",
+                decision_by="system",
+            )
+            return "fulfilled", ""
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            return "pending", "The selected MaM release no longer exists"
+        selected = await select_row(
+            app.state.services.config,
+            repository,
+            row,
+            {
+                "cost": "ratio",
+                "name": (
+                    f"request:auto:{decision_by}"
+                    if automatic
+                    else f"request:{request_id}"
+                ),
+            },
+        )
+        if not selected:
+            return "pending", "Release does not match configured formats"
+        decision_note = (
+            f"Automatically approved for request account {decision_by}"
+            if automatic
+            else "Approved by administrator and scheduled for download"
+        )
+        await asyncio.to_thread(
+            repository.update_request,
+            request_id,
+            "approved",
+            decision_note=decision_note,
+            decision_by=decision_by,
+        )
+        asyncio.create_task(app.state.services.trigger("downloader"))
+        return "approved", ""
+
+    @app.post("/request/submit")
+    async def submit_request(
+        request: Request,
+        mam_id: int = Form(...),
+        requester_name: str = Form(""),
+        requester_contact: str = Form(""),
+        note: str = Form(""),
+        goodreads_url: str = Form(""),
+        website: str = Form(""),
+    ) -> RedirectResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            raise HTTPException(403, "request portal login required")
+        if not await request_rate_allowed(request, "submit"):
+            raise HTTPException(429, "too many requests; wait one minute")
+        root = request_portal_root(request)
+        if website.strip():
+            return RedirectResponse(f"{root}?submitted=pending", status_code=303)
+        identity = request_portal_identity(request)
+        if current.request_portal_require_account_login and identity is None:
+            raise HTTPException(403, "named request account login required")
+        if identity and identity.weekly_request_limit > 0:
+            used = await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            if used >= identity.weekly_request_limit:
+                message = (
+                    f"Weekly request limit reached. {identity.username} has used "
+                    f"all {identity.weekly_request_limit} requests in the rolling "
+                    "seven-day window."
+                )
+                repository.log_activity(
+                    "requests",
+                    f"Weekly request limit blocked {identity.username}",
+                    level="warning",
+                    context={
+                        "username": identity.username,
+                        "used": used,
+                        "weekly_request_limit": identity.weekly_request_limit,
+                    },
+                )
+                return RedirectResponse(
+                    f"{root}?{urlencode({'request_error': message})}",
+                    status_code=303,
+                )
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            raise HTTPException(404, f"MaM torrent {mam_id} was not found")
+        release = present_search_result(row)
+        source: dict[str, object] = {"kind": "manual"}
+        if goodreads_url:
+            try:
+                source = {
+                    "kind": "goodreads",
+                    "url": goodreads_url,
+                    "goodreads_id": goodreads_book_id(goodreads_url),
+                }
+            except GoodreadsLookupError:
+                source = {"kind": "manual"}
+        identity_name = identity.username if identity else ""
+        identity_permissions = identity.permissions if identity else ()
+        try:
+            record = await asyncio.to_thread(
+                repository.create_request,
+                mam_id=mam_id,
+                release=release,
+                requester_name=requester_name[:120],
+                requester_contact=requester_contact[:200],
+                requester_username=identity_name,
+                requester_permissions=identity_permissions,
+                requester_weekly_limit=(
+                    identity.weekly_request_limit if identity else 0
+                ),
+                note=note[:1000],
+                source=source,
+            )
+        except RequestLimitReached as error:
+            message = (
+                f"Weekly request limit reached. {error.username} has used all "
+                f"{error.limit} requests in the rolling seven-day window."
+            )
+            return RedirectResponse(
+                f"{root}?{urlencode({'request_error': message})}",
+                status_code=303,
+            )
+        submission_result = "pending"
+        auto_approval_error = ""
+        if repository.has_mam_id(mam_id):
+            submission_result, _ = await approve_stored_request(
+                record,
+                decision_by="system",
+                automatic=False,
+            )
+        elif identity and "auto_approve" in identity.permissions:
+            submission_result, auto_approval_error = await approve_stored_request(
+                record,
+                decision_by=identity.username,
+                automatic=True,
+            )
+            if auto_approval_error:
+                await asyncio.to_thread(
+                    repository.update_request,
+                    record["id"],
+                    "pending",
+                    decision_note=("Automatic approval paused: " + auto_approval_error),
+                    decision_by="system",
+                )
+        repository.log_activity(
+            "requests",
+            (
+                f"Auto-approved request: {release['title']}"
+                if submission_result == "approved"
+                else f"New request: {release['title']}"
+            ),
+            level=("success" if not auto_approval_error else "warning"),
+            context={
+                "request_id": record["id"],
+                "mam_id": mam_id,
+                "requester_name": requester_name[:120],
+                "requester_username": identity_name,
+                "auto_approved": submission_result == "approved",
+                "auto_approval_error": auto_approval_error,
+            },
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse(
+            f"{root}?submitted={submission_result}",
+            status_code=303,
+        )
+
+    @app.post("/request/series/submit")
+    async def submit_series_request(
+        request: Request,
+        series_name: str = Form(...),
+        requester_name: str = Form(""),
+        requester_contact: str = Form(""),
+        note: str = Form(""),
+        goodreads_url: str = Form(""),
+        website: str = Form(""),
+    ) -> RedirectResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            raise HTTPException(403, "request portal login required")
+        if not await request_rate_allowed(request, "submit"):
+            raise HTTPException(429, "too many requests; wait one minute")
+        root = request_portal_root(request)
+        if website.strip():
+            return RedirectResponse(f"{root}?submitted=pending", status_code=303)
+        identity = request_portal_identity(request)
+        if current.request_portal_require_account_login and identity is None:
+            raise HTTPException(403, "named request account login required")
+
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "series name cannot be empty")
+
+        resolution = await resolve_series_selection(
+            current,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+        )
+
+        missing = resolution["missing_books"]
+        already_present_count = len(resolution["already_present"])
+
+        if not missing and already_present_count > 0:
+            params = {
+                "submitted": "series_fulfilled",
+                "series_name": cleaned_series,
+                "series_total": resolution["total_books"],
+            }
+            return RedirectResponse(f"{root}?{urlencode(params)}", status_code=303)
+
+        if not missing and already_present_count == 0:
+            err_params = {
+                "request_error": (
+                    f"No releases found on MaM for series: {cleaned_series}"
+                )
+            }
+            return RedirectResponse(f"{root}?{urlencode(err_params)}", status_code=303)
+
+        identity_name = identity.username if identity else ""
+        identity_permissions = identity.permissions if identity else ()
+        is_auto_approve = bool(identity and "auto_approve" in identity.permissions)
+
+        if identity and identity.weekly_request_limit > 0:
+            used = await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            remaining_quota = max(0, identity.weekly_request_limit - used)
+            if remaining_quota < len(missing):
+                message = (
+                    f"Weekly request limit reached. {identity.username} only has "
+                    f"{remaining_quota} request(s) remaining, but series "
+                    f"'{cleaned_series}' has {len(missing)} missing book(s)."
+                )
+                return RedirectResponse(
+                    f"{root}?{urlencode({'request_error': message})}",
+                    status_code=303,
+                )
+
+        source: dict[str, object] = {"kind": "manual", "series": cleaned_series}
+        if goodreads_url:
+            with suppress(GoodreadsLookupError):
+                source = {
+                    "kind": "goodreads",
+                    "url": goodreads_url,
+                    "goodreads_id": goodreads_book_id(goodreads_url),
+                    "series": cleaned_series,
+                }
+
+        submitted_count = 0
+        approved_count = 0
+        for book in missing:
+            mam_id = book["mam_id"]
+            release = book["release"]
+            book_note = f"Series: {cleaned_series} ({book['volume']}). {note}".strip()
+            record = await asyncio.to_thread(
+                repository.create_request,
+                mam_id=mam_id,
+                release=release,
+                requester_name=requester_name[:120],
+                requester_contact=requester_contact[:200],
+                requester_username=identity_name,
+                requester_permissions=identity_permissions,
+                requester_weekly_limit=(
+                    identity.weekly_request_limit if identity else 0
+                ),
+                note=book_note[:1000],
+                source=source,
+            )
+            submitted_count += 1
+            if is_auto_approve:
+                sub_res, _ = await approve_stored_request(
+                    record,
+                    decision_by=identity.username,
+                    automatic=True,
+                )
+                if sub_res == "approved":
+                    approved_count += 1
+
+        repository.log_activity(
+            "requests",
+            (
+                f"Series request for '{cleaned_series}': {submitted_count} book(s) "
+                f"submitted ({approved_count} auto-approved, {already_present_count} "
+                "already in library)"
+            ),
+            level="success",
+            context={
+                "series_name": cleaned_series,
+                "submitted_count": submitted_count,
+                "approved_count": approved_count,
+                "already_present_count": already_present_count,
+                "requester_username": identity_name,
+            },
+        )
+        snapshot_cache["expires"] = 0.0
+
+        status_flag = (
+            "series_approved"
+            if is_auto_approve and approved_count == submitted_count
+            else "series_pending"
+        )
+        query_params = {
+            "submitted": status_flag,
+            "series_name": cleaned_series,
+            "series_count": submitted_count,
+            "series_existing": already_present_count,
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(
+            f"{root}?{urlencode(query_params)}",
+            status_code=303,
+        )
+
+    @app.get("/requests", response_class=HTMLResponse)
+    async def request_inbox(
+        request: Request,
+        status: str = "pending",
+    ) -> HTMLResponse:
+        selected_status = (
+            status
+            if status
+            in {
+                "pending",
+                "approved",
+                "rejected",
+                "fulfilled",
+                "all",
+            }
+            else "pending"
+        )
+        rows = await asyncio.to_thread(
+            repository.request_rows,
+            status=None if selected_status == "all" else selected_status,
+        )
+        return templates.TemplateResponse(
+            request,
+            "requests.html",
+            await context(
+                request,
+                title="Request Inbox",
+                rows=rows,
+                selected_status=selected_status,
+                approved=request.query_params.get("approved") == "1",
+                rejected=request.query_params.get("rejected") == "1",
+                error=request.query_params.get("error", ""),
+            ),
+        )
+
+    @app.post("/requests/approve")
+    async def approve_request(request_id: str = Form(...)) -> RedirectResponse:
+        record = await asyncio.to_thread(repository.request_record, request_id)
+        if not record:
+            raise HTTPException(404, "request was not found")
+        if record["status"] != "pending":
+            raise HTTPException(409, "request has already been decided")
+        mam_id = int(record["mam_id"])
+        _, approval_error = await approve_stored_request(
+            record,
+            decision_by="administrator",
+            automatic=False,
+        )
+        if approval_error:
+            return RedirectResponse(
+                f"/requests?{urlencode({'error': approval_error})}",
+                status_code=303,
+            )
+        repository.log_activity(
+            "requests",
+            f"Approved request: {record['release']['title']}",
+            level="success",
+            context={"request_id": request_id, "mam_id": mam_id},
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse("/requests?approved=1", status_code=303)
+
+    @app.post("/requests/reject")
+    async def reject_request(
+        request_id: str = Form(...),
+        decision_note: str = Form(""),
+    ) -> RedirectResponse:
+        record = await asyncio.to_thread(repository.request_record, request_id)
+        if not record:
+            raise HTTPException(404, "request was not found")
+        if record["status"] != "pending":
+            raise HTTPException(409, "request has already been decided")
+        await asyncio.to_thread(
+            repository.update_request,
+            request_id,
+            "rejected",
+            decision_note=decision_note[:500] or "Rejected by administrator",
+        )
+        repository.log_activity(
+            "requests",
+            f"Rejected request: {record['release']['title']}",
+            level="warning",
+            context={"request_id": request_id, "mam_id": record["mam_id"]},
+        )
+        snapshot_cache["expires"] = 0.0
+        return RedirectResponse("/requests?rejected=1", status_code=303)
+
+    @app.get("/search", response_class=HTMLResponse)
+    async def search(
+        request: Request,
+        q: str = "",
+        title: str = "",
+        author: str = "",
+        series: str = "",
+        narrator: str = "",
+        filetype: str = "",
+        category: str = "",
+        language: str = "",
+        availability: str = "",
+        min_seeders: int = 0,
+        sort: str = "relevance",
+    ) -> HTMLResponse:
+        filters = manual_search_filters(
+            q=q,
+            title=title,
+            author=author,
+            series=series,
+            narrator=narrator,
+            filetype=filetype,
+            category=category,
+            language=language,
+            availability=availability,
+            min_seeders=min_seeders,
+            sort=sort,
+        )
+        searched = search_was_requested(filters)
+        result = await run_manual_search(filters)
+        return templates.TemplateResponse(
+            request,
+            "heavymlm/search.html",
+            await context(
+                request,
+                title="Search MaM",
+                query=q,
+                filters=filters,
+                searched=searched,
+                rows=result["rows"],
+                found=result["found"],
+                scanned=result["scanned"],
+                error=result["error"],
+                series_queued=(
+                    as_int(request.query_params["series_queued"])
+                    if "series_queued" in request.query_params
+                    else None
+                ),
+                series_existing=as_int(request.query_params.get("series_existing", 0)),
+                series_total=as_int(request.query_params.get("series_total", 0)),
+                series_name=request.query_params.get("series_name", ""),
+            ),
+        )
+
+    @app.post("/search/select")
+    async def select_search_result(mam_id: int = Form(...)) -> RedirectResponse:
+        row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
+        if not row:
+            raise HTTPException(404, f"MaM torrent {mam_id} was not found")
+        selected = await select_row(
+            app.state.services.config,
+            repository,
+            row,
+            {"cost": "ratio", "name": "manual"},
+        )
+        if not selected and not repository.has_mam_id(mam_id):
+            raise HTTPException(
+                409, "torrent did not match a configured preferred format"
+            )
+        return RedirectResponse("/records/selected_torrents", status_code=303)
+
+    @app.post("/search/series/select")
+    async def select_series(
+        series_name: str = Form(...),
+        media_type: str = Form(""),
+        filetype: str = Form(""),
+    ) -> RedirectResponse:
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "Series name cannot be empty")
+
+        resolution = await resolve_series_selection(
+            app.state.services.config,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+            preferred_media=media_type.strip() or None,
+            preferred_filetype=filetype.strip() or None,
+        )
+
+        queued_count = 0
+        for book in resolution["missing_books"]:
+            selected = await select_row(
+                app.state.services.config,
+                repository,
+                book["raw_row"],
+                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+            )
+            if selected:
+                queued_count += 1
+
+        if queued_count > 0:
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+            repository.log_activity(
+                "series",
+                (
+                    f"Queued entire series: {cleaned_series} ({queued_count} "
+                    f"book(s) queued, {len(resolution['already_present'])} "
+                    "already present)"
+                ),
+                level="success",
+                context={
+                    "series_name": cleaned_series,
+                    "queued_count": queued_count,
+                    "already_present": len(resolution["already_present"]),
+                    "total_books": resolution["total_books"],
+                },
+            )
+
+        params = {
+            "series": cleaned_series,
+            "series_name": cleaned_series,
+            "series_queued": queued_count,
+            "series_existing": len(resolution["already_present"]),
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(f"/search?{urlencode(params)}", status_code=303)
+
+    @app.post("/actions/{name}")
+    async def action(name: str) -> RedirectResponse:
+        if name not in {"autograb", "lists", "downloader", "organizer", "cleaner"}:
+            raise HTTPException(404, f"unknown job: {name}")
+        asyncio.create_task(app.state.services.trigger(name))
+        return RedirectResponse(f"/?triggered={name}", status_code=303)
+
+    @app.post("/selected/remove")
+    async def remove_selected(mam_id: int = Form(...)) -> RedirectResponse:
+        repository.delete_selected(mam_id)
+        return RedirectResponse("/records/selected_torrents", status_code=303)
+
+    @app.get("/health")
+    async def health() -> dict:
+        snapshot = await ui_snapshot()
+        return {"status": "ok", "counts": snapshot["counts"]}
+
+    @app.get("/api/jobs")
+    async def jobs() -> dict:
+        services = getattr(app.state, "services", None)
+        return {
+            "jobs": (
+                {name: asdict(status) for name, status in services.jobs.items()}
+                if services
+                else {}
+            )
+        }
+
+    return app

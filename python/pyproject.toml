@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mlm-python"
+version = "0.5.0b65"
+description = "MyAnonaSuite with HeavyMLM, ABSidekick, and MAM-Spender modules"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "MLM contributors" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.16,<1"]
+
+[project.scripts]
+mlm-python = "mlm.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlm"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "DTZ", "FURB", "PYI"]

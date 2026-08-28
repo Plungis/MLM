@@ -1,6 +1,24 @@
 /target
+/target-*/
 node_modules
 docs/book
 config.toml
 data.db
 data.db.*
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+
+
+# Local legacy-export sources retained while the Python-only branch is prepared.
+/Cargo.toml
+/Cargo.lock
+/mlm_db/
+/mlm_mam/
+/mlm_parse/
+/server/
+/package.json
+/pnpm-lock.yaml

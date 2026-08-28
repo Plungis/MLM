@@ -1,0 +1,58 @@
+mam_id = "replace-with-your-mam-id-cookie"
+
+web_host = "0.0.0.0"
+web_port = 3157
+min_ratio = 2.0
+unsat_buffer = 10
+max_unsat_slots = 140 # optional direct ceiling; remove this line to use the site limit
+wedge_buffer = 0
+prefer_wedges = false # use wedges on non-free torrents before falling back to ratio
+download_on_wedge_failure = false # if a wedge request fails, allow a ratio-safe normal download
+grab_both_formats = false # for list imports, independently grab audiobook and ebook
+search_interval = 30
+link_interval = 10
+import_interval = 135
+
+# Optional custom-domain request portal. Point your HTTPS reverse proxy at port 3157
+# and preserve the original Host header.
+request_portal_enabled = false
+request_portal_require_account_login = true # fail closed; every request records a named account
+request_portal_domains = ["requests.example.com"]
+request_portal_title = "Library Requests"
+# Create named requester accounts from the Configuration screen. Each password
+# is saved here only as a salted PBKDF2 hash. Trusted accounts can receive the
+# auto_approve permission; ordinary accounts continue to require inbox review.
+# Each account can also set a rolling weekly_request_limit (0 means unlimited).
+request_portal_rate_limit = 20
+
+audio_types = ["m4b", "m4a", "mp4", "mp3", "ogg"]
+ebook_types = ["cbz", "epub", "pdf", "mobi", "azw3", "azw", "cbr"]
+
+[[qbittorrent]]
+url = "http://host.docker.internal:8080"
+username = "qbittorrent-username"
+password = "qbittorrent-password"
+
+[[autograb]]
+name = "Bookmarks"
+type = "bookmarks"
+cost = "free"
+languages = ["English"]
+
+[[tag]]
+categories = { audio = true, ebook = false }
+category = "Audiobooks"
+
+[[tag]]
+categories = { audio = false, ebook = true }
+category = "Ebooks"
+
+[[library]]
+category = "Audiobooks"
+library_dir = "/library/Audiobooks"
+method = "hardlink"
+
+[[library]]
+category = "Ebooks"
+library_dir = "/library/Ebooks"
+method = "hardlink"

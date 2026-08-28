@@ -1,0 +1,122 @@
+<section class="operations-view-header">
+  <div><h2>Recovery center</h2><p>Every failure includes its exact reason, a recovery path, and a direct way to retry or dismiss it.</p></div>
+  <div class="error-center-actions">
+    <span class="chip">{{ total }} unresolved</span>
+    <form action="/errors/dismiss-all" method="post" data-confirm="Dismiss all {{ total }} stored errors? This only clears the error reports; it will not delete torrents, downloads, files, or job history.">
+      <button class="danger" type="submit"{% if not total %} disabled{% endif %}>Dismiss all</button>
+    </form>
+  </div>
+</section>
+
+{% if retried %}
+<div class="flash">The stored error was cleared and the downloader was asked to retry it.</div>
+{% elif dismissed_all is not none %}
+<div class="flash">Dismissed {{ dismissed_all }} stored error{% if dismissed_all != 1 %}s{% endif %}. Torrents, downloads, files, and job history were not changed.</div>
+{% elif dismissed %}
+<div class="flash">The stored error was dismissed.</div>
+{% endif %}
+
+<section class="panel error-center">
+  {% if rows %}
+  <div class="error-list">
+    {% for row in rows %}
+    {% set guidance = row.get("_guidance") %}
+    {% set meta = row.get("meta") or {} %}
+    {% set error_context = row.get("context") or {} %}
+    <article class="error-card">
+      <header class="error-card-header">
+        <div>
+          <span class="status error">Action needed</span>
+          <h2>{{ guidance.title }}</h2>
+          <p class="error-release">{{ row.get("title") or meta.get("title") or "Unknown release" }}</p>
+          <span class="record-id">
+            {% if row.get("_mam_id") %}MaM #{{ row.get("_mam_id") }}{% endif %}
+            {% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}
+            {% if row.get("created_at") %} · <time data-local-time="{{ row.get('created_at') }}">{{ row.get("created_at") }}</time>{% endif %}
+          </span>
+        </div>
+        <div class="record-actions">
+          {% if row.get("_retryable") %}
+          <form action="/errors/retry" method="post">
+            <input type="hidden" name="error_id" value="{{ row.get('_error_id') }}">
+            <input type="hidden" name="mam_id" value="{{ row.get('_mam_id') }}">
+            <button class="primary" type="submit">Retry now</button>
+          </form>
+          {% elif row.get("_mam_id") %}
+          <span class="status waiting">No longer pending</span>
+          {% endif %}
+          <form action="/errors/dismiss" method="post">
+            <input type="hidden" name="error_id" value="{{ row.get('_error_id') }}">
+            <button class="danger" type="submit">Dismiss</button>
+          </form>
+        </div>
+      </header>
+      <div class="error-card-body">
+        <div class="error-reason">
+          <span>Exact error</span>
+          <code>{{ row.get("error") or "No technical message was recorded." }}</code>
+        </div>
+        {% if error_context.get("source") or error_context.get("destination") %}
+        <div class="recovery-grid placement-paths">
+          <div><h3>Source</h3><code>{{ error_context.get("source") or "Not recorded" }}</code></div>
+          <div><h3>Destination</h3><code>{{ error_context.get("destination") or "Not recorded" }}</code></div>
+          {% if error_context.get("method") %}<div><h3>Method</h3><code>{{ error_context.get("method") }}</code></div>{% endif %}
+          {% if error_context.get("remediation") %}<div><h3>Recommended fix</h3><p>{{ error_context.get("remediation") }}</p></div>{% endif %}
+        </div>
+        {% endif %}
+        {% if error_context.get("wedge_attempted") %}
+        <section class="wedge-debug">
+          <header><h3>Wedge attempt debug</h3><span class="status error">Not applied</span></header>
+          <div class="recovery-grid placement-paths">
+            <div><h3>Policy</h3><code>{% if error_context.get("prefer_wedges") %}Prefer wedges{% else %}{{ error_context.get("cost") }}{% endif %}</code></div>
+            <div><h3>Failure fallback</h3><code>{% if error_context.get("download_on_wedge_failure") %}Enabled (ratio safeguards apply){% else %}Disabled (strict){% endif %}</code></div>
+            <div><h3>Balance</h3><code>{{ error_context.get("wedges_before", "?") }} before · {{ error_context.get("wedges_after", "not confirmed") }} after · {{ error_context.get("wedge_buffer", "?") }} reserved</code></div>
+            <div><h3>Failure stage</h3><code>{{ error_context.get("stage", "unknown") }}{% if error_context.get("wedge_reason") %} / {{ error_context.get("wedge_reason") }}{% endif %}</code></div>
+            <div><h3>HTTP response</h3><code>{{ error_context.get("http_status", "not received") }}{% if error_context.get("content_type") %} · {{ error_context.get("content_type") }}{% endif %}</code></div>
+            {% if error_context.get("endpoint") %}<div><h3>MaM endpoint</h3><code>{{ error_context.get("endpoint") }}</code></div>{% endif %}
+          </div>
+          {% if error_context.get("tracker_response") %}<details open><summary>MaM wedge response</summary><pre>{{ error_context.get("tracker_response") | tojson(indent=2) }}</pre></details>{% endif %}
+          {% if error_context.get("response_preview") %}<details open><summary>Raw response preview</summary><pre>{{ error_context.get("response_preview") }}</pre></details>{% endif %}
+        </section>
+        {% endif %}
+        <div class="recovery-grid">
+          <div>
+            <h3>What happened</h3>
+            <p>{{ guidance.reason }}</p>
+          </div>
+          <div>
+            <h3>Path forward</h3>
+            <ol>
+              {% for step in guidance.steps %}<li>{{ step }}</li>{% endfor %}
+            </ol>
+          </div>
+        </div>
+        <div class="error-links">
+          <a href="/operations?view=diagnostics&component={{ guidance.component }}">View {{ guidance.component }} diagnostics</a>
+          <a href="/config">Open configuration</a>
+        </div>
+      </div>
+      <details>
+        <summary>Raw error record</summary>
+        <pre>{{ row | tojson(indent=2) }}</pre>
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state success-state">
+    <div>
+      <strong>No unresolved errors</strong>
+      <p>Downloader and organizer failures will appear here with their reason and recovery steps.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% if page_count > 1 %}
+<nav class="pagination" aria-label="Error pages">
+  {% if page > 1 %}<a class="button" href="/operations?view=errors&page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="/operations?view=errors&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+</nav>
+{% endif %}
