@@ -10,7 +10,7 @@ import math
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -40,6 +40,7 @@ from .modules.heavymlm.search import (
     present_search_result,
     search_seed,
 )
+from .modules.heavymlm.series import resolve_series_selection
 from .modules.mam_spender import default_public_state
 from .repository import Repository, RequestLimitReached
 from .request_auth import hash_request_password, verify_request_password
@@ -339,6 +340,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             "/request/unlock",
             "/request/logout",
             "/request/submit",
+            "/request/series/submit",
         } or path.startswith("/static/")
         if not allowed:
             return HTMLResponse("Not found", status_code=404)
@@ -1585,6 +1587,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "note": params.get("note", "")[:1000],
                 "submission_result": params.get("submitted", ""),
                 "submission_error": params.get("request_error", ""),
+                "series_name": params.get("series_name", ""),
+                "series_count": as_int(params.get("series_count")),
+                "series_existing": as_int(params.get("series_existing")),
+                "series_total": as_int(params.get("series_total")),
             },
         )
 
@@ -1867,6 +1873,156 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             status_code=303,
         )
 
+    @app.post("/request/series/submit")
+    async def submit_series_request(
+        request: Request,
+        series_name: str = Form(...),
+        requester_name: str = Form(""),
+        requester_contact: str = Form(""),
+        note: str = Form(""),
+        goodreads_url: str = Form(""),
+        website: str = Form(""),
+    ) -> RedirectResponse:
+        current = active_config()
+        if not current.request_portal_enabled:
+            raise HTTPException(404, "request portal is disabled")
+        if not request_portal_authorized(request):
+            raise HTTPException(403, "request portal login required")
+        if not await request_rate_allowed(request, "submit"):
+            raise HTTPException(429, "too many requests; wait one minute")
+        root = request_portal_root(request)
+        if website.strip():
+            return RedirectResponse(f"{root}?submitted=pending", status_code=303)
+        identity = request_portal_identity(request)
+        if current.request_portal_require_account_login and identity is None:
+            raise HTTPException(403, "named request account login required")
+
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "series name cannot be empty")
+
+        resolution = await resolve_series_selection(
+            current,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+        )
+
+        missing = resolution["missing_books"]
+        already_present_count = len(resolution["already_present"])
+
+        if not missing and already_present_count > 0:
+            params = {
+                "submitted": "series_fulfilled",
+                "series_name": cleaned_series,
+                "series_total": resolution["total_books"],
+            }
+            return RedirectResponse(f"{root}?{urlencode(params)}", status_code=303)
+
+        if not missing and already_present_count == 0:
+            err_params = {
+                "request_error": (
+                    f"No releases found on MaM for series: {cleaned_series}"
+                )
+            }
+            return RedirectResponse(f"{root}?{urlencode(err_params)}", status_code=303)
+
+        identity_name = identity.username if identity else ""
+        identity_permissions = identity.permissions if identity else ()
+        is_auto_approve = bool(identity and "auto_approve" in identity.permissions)
+
+        if identity and identity.weekly_request_limit > 0:
+            used = await asyncio.to_thread(
+                repository.request_count_since,
+                identity.username,
+            )
+            remaining_quota = max(0, identity.weekly_request_limit - used)
+            if remaining_quota < len(missing):
+                message = (
+                    f"Weekly request limit reached. {identity.username} only has "
+                    f"{remaining_quota} request(s) remaining, but series "
+                    f"'{cleaned_series}' has {len(missing)} missing book(s)."
+                )
+                return RedirectResponse(
+                    f"{root}?{urlencode({'request_error': message})}",
+                    status_code=303,
+                )
+
+        source: dict[str, object] = {"kind": "manual", "series": cleaned_series}
+        if goodreads_url:
+            with suppress(GoodreadsLookupError):
+                source = {
+                    "kind": "goodreads",
+                    "url": goodreads_url,
+                    "goodreads_id": goodreads_book_id(goodreads_url),
+                    "series": cleaned_series,
+                }
+
+        submitted_count = 0
+        approved_count = 0
+        for book in missing:
+            mam_id = book["mam_id"]
+            release = book["release"]
+            book_note = f"Series: {cleaned_series} ({book['volume']}). {note}".strip()
+            record = await asyncio.to_thread(
+                repository.create_request,
+                mam_id=mam_id,
+                release=release,
+                requester_name=requester_name[:120],
+                requester_contact=requester_contact[:200],
+                requester_username=identity_name,
+                requester_permissions=identity_permissions,
+                requester_weekly_limit=(
+                    identity.weekly_request_limit if identity else 0
+                ),
+                note=book_note[:1000],
+                source=source,
+            )
+            submitted_count += 1
+            if is_auto_approve:
+                sub_res, _ = await approve_stored_request(
+                    record,
+                    decision_by=identity.username,
+                    automatic=True,
+                )
+                if sub_res == "approved":
+                    approved_count += 1
+
+        repository.log_activity(
+            "requests",
+            (
+                f"Series request for '{cleaned_series}': {submitted_count} book(s) "
+                f"submitted ({approved_count} auto-approved, {already_present_count} "
+                "already in library)"
+            ),
+            level="success",
+            context={
+                "series_name": cleaned_series,
+                "submitted_count": submitted_count,
+                "approved_count": approved_count,
+                "already_present_count": already_present_count,
+                "requester_username": identity_name,
+            },
+        )
+        snapshot_cache["expires"] = 0.0
+
+        status_flag = (
+            "series_approved"
+            if is_auto_approve and approved_count == submitted_count
+            else "series_pending"
+        )
+        query_params = {
+            "submitted": status_flag,
+            "series_name": cleaned_series,
+            "series_count": submitted_count,
+            "series_existing": already_present_count,
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(
+            f"{root}?{urlencode(query_params)}",
+            status_code=303,
+        )
+
     @app.get("/requests", response_class=HTMLResponse)
     async def request_inbox(
         request: Request,
@@ -1997,6 +2153,14 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 found=result["found"],
                 scanned=result["scanned"],
                 error=result["error"],
+                series_queued=(
+                    as_int(request.query_params["series_queued"])
+                    if "series_queued" in request.query_params
+                    else None
+                ),
+                series_existing=as_int(request.query_params.get("series_existing", 0)),
+                series_total=as_int(request.query_params.get("series_total", 0)),
+                series_name=request.query_params.get("series_name", ""),
             ),
         )
 
@@ -2016,6 +2180,64 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 409, "torrent did not match a configured preferred format"
             )
         return RedirectResponse("/records/selected_torrents", status_code=303)
+
+    @app.post("/search/series/select")
+    async def select_series(
+        series_name: str = Form(...),
+        media_type: str = Form(""),
+        filetype: str = Form(""),
+    ) -> RedirectResponse:
+        cleaned_series = series_name.strip()
+        if not cleaned_series:
+            raise HTTPException(400, "Series name cannot be empty")
+
+        resolution = await resolve_series_selection(
+            app.state.services.config,
+            repository,
+            app.state.services.mam,
+            cleaned_series,
+            preferred_media=media_type.strip() or None,
+            preferred_filetype=filetype.strip() or None,
+        )
+
+        queued_count = 0
+        for book in resolution["missing_books"]:
+            selected = await select_row(
+                app.state.services.config,
+                repository,
+                book["raw_row"],
+                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+            )
+            if selected:
+                queued_count += 1
+
+        if queued_count > 0:
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+            repository.log_activity(
+                "series",
+                (
+                    f"Queued entire series: {cleaned_series} ({queued_count} "
+                    f"book(s) queued, {len(resolution['already_present'])} "
+                    "already present)"
+                ),
+                level="success",
+                context={
+                    "series_name": cleaned_series,
+                    "queued_count": queued_count,
+                    "already_present": len(resolution["already_present"]),
+                    "total_books": resolution["total_books"],
+                },
+            )
+
+        params = {
+            "series": cleaned_series,
+            "series_name": cleaned_series,
+            "series_queued": queued_count,
+            "series_existing": len(resolution["already_present"]),
+            "series_total": resolution["total_books"],
+        }
+        return RedirectResponse(f"/search?{urlencode(params)}", status_code=303)
 
     @app.post("/actions/{name}")
     async def action(name: str) -> RedirectResponse:

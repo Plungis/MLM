@@ -10,6 +10,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+.venv/
+
 
 # Local legacy-export sources retained while the Python-only branch is prepared.
 /Cargo.toml

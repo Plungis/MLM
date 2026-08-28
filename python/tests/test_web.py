@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from mlm.config import load_config
 from mlm.database import connect, ensure_database
+from mlm.mam import MamClient
 from mlm.migration import canonical_json
 from mlm.repository import Repository
-from mlm.request_auth import verify_request_password
+from mlm.request_auth import hash_request_password, verify_request_password
 from mlm.scheduler import JobStatus
 from mlm.web import create_app
 
@@ -175,8 +177,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b62"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b62"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b63"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b63"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -282,7 +284,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b62" in spender_config.text
+    assert "0.5.0b63" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -883,3 +885,171 @@ def test_tutorial_page(tmp_path: Path) -> None:
     assert "How Everything Fits Together" in tutorial_get.text
     assert "Connecting Your MyAnonamouse Account" in tutorial_get.text
     assert "IMPORTANT SAFETY ADVICE" in tutorial_get.text
+
+
+def test_admin_search_series_select(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    services = FakeServices(load_config(config))
+
+    raw_releases = [
+        {
+            "id": 101,
+            "title": "Dungeon Crawler Carl Book 1",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["Dungeon Crawler Carl", "1"]}),
+            "author_info": json.dumps({"1": "Matt Dinniman"}),
+            "seeders": 20,
+            "free": 1,
+            "dl": "https://example.com/dl/101",
+        },
+        {
+            "id": 201,
+            "title": "Carl's Doomsday Scenario",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["Dungeon Crawler Carl", "2"]}),
+            "author_info": json.dumps({"1": "Matt Dinniman"}),
+            "seeders": 15,
+            "free": 0,
+            "dl": "https://example.com/dl/201",
+        },
+    ]
+
+    class FakeMam(MamClient):
+        def __init__(self):
+            pass
+
+        async def search(self, query: dict):
+            return {"data": raw_releases, "found": len(raw_releases)}
+
+        async def get_torrent_info_by_id(self, tid: int):
+            for r in raw_releases:
+                if r["id"] == tid:
+                    return r
+            return None
+
+    fake_mam = FakeMam()
+    services.mam = fake_mam
+    app.state.services = services
+    client = TestClient(app)
+
+    # Search GET with series filter shows the series banner and Grab Series buttons
+    search_res = client.get("/search?series=Dungeon+Crawler+Carl")
+    assert search_res.status_code == 200
+    assert "📚 Series: Dungeon Crawler Carl" in search_res.text
+    assert "Download Entire Series" in search_res.text
+    assert "Grab Series" in search_res.text
+
+    # POST /search/series/select queues all books in the series
+    post_res = client.post(
+        "/search/series/select",
+        data={"series_name": "Dungeon Crawler Carl"},
+        follow_redirects=True,
+    )
+    assert post_res.status_code == 200
+    assert 'Queued 2 books for series "Dungeon Crawler Carl"' in post_res.text
+
+    repo = Repository(database)
+    assert repo.has_pending_mam_id(101) is True
+    assert repo.has_pending_mam_id(201) is True
+
+
+def test_request_portal_series_submit(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    pwd_hash = hash_request_password("secret-password")
+    config.write_text(
+        'mam_id = ""\n'
+        "request_portal_enabled = true\n"
+        'request_portal_domains = ["requests.example.com"]\n'
+        "[[request_portal_users]]\n"
+        'username = "alice"\n'
+        f'password_hash = "{pwd_hash}"\n'
+        'permissions = ["auto_approve"]\n',
+        encoding="utf-8",
+    )
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    services = FakeServices(load_config(config))
+
+    raw_releases = [
+        {
+            "id": 501,
+            "title": "The Way of Kings",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["The Stormlight Archive", "1"]}),
+            "author_info": json.dumps({"1": "Brandon Sanderson"}),
+            "seeders": 50,
+            "free": 1,
+            "dl": "https://example.com/dl/501",
+        },
+        {
+            "id": 502,
+            "title": "Words of Radiance",
+            "filetype": "m4b",
+            "catname": "Audiobooks",
+            "mediatype": 1,
+            "main_cat": 13,
+            "series_info": json.dumps({"1": ["The Stormlight Archive", "2"]}),
+            "author_info": json.dumps({"1": "Brandon Sanderson"}),
+            "seeders": 45,
+            "free": 1,
+            "dl": "https://example.com/dl/502",
+        },
+    ]
+
+    class FakeMam(MamClient):
+        def __init__(self):
+            pass
+
+        async def search(self, query: dict):
+            return {"data": raw_releases, "found": len(raw_releases)}
+
+        async def get_torrent_info_by_id(self, tid: int):
+            for r in raw_releases:
+                if r["id"] == tid:
+                    return r
+            return None
+
+    fake_mam = FakeMam()
+    services.mam = fake_mam
+    app.state.services = services
+    client = TestClient(app)
+
+    # Login as alice (who has auto_approve)
+    login_res = client.post(
+        "/request/unlock",
+        data={"username": "alice", "password": "secret-password"},
+        follow_redirects=True,
+    )
+    assert login_res.status_code == 200
+
+    # Request entire series as alice
+    req_res = client.post(
+        "/request/series/submit",
+        data={
+            "series_name": "The Stormlight Archive",
+            "requester_name": "Alice",
+            "note": "Love this series!",
+        },
+        follow_redirects=True,
+    )
+    assert req_res.status_code == 200
+    assert "Series request automatically approved!" in req_res.text
+    assert "scheduled 2 missing books in series" in req_res.text
+
+    repo = Repository(database)
+    requests = repo.request_rows(status="approved")
+    assert len(requests) == 2
+    assert any(r["mam_id"] == 501 for r in requests)
+    assert any(r["mam_id"] == 502 for r in requests)

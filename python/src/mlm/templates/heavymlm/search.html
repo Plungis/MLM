@@ -4,7 +4,7 @@
   <div>
     <p class="eyebrow">HeavyMLM / manual acquisition</p>
     <h1>Search MaM</h1>
-    <p class="subtitle">Compare authors, editions, formats, and freeleech status before adding a release to the queue.</p>
+    <p class="subtitle">Compare authors, editions, formats, and freeleech status before adding a release or entire series to the queue.</p>
   </div>
   {% if rows %}
   <div class="page-meta">
@@ -13,6 +13,22 @@
   </div>
   {% endif %}
 </header>
+
+{% if series_queued is not none %}
+<div class="flash success" role="status">
+  <span>
+    {% if series_queued > 0 %}
+      Queued {{ series_queued }} book{% if series_queued != 1 %}s{% endif %} for series "{{ series_name }}".
+      {% if series_existing > 0 %}({{ series_existing }} book{% if series_existing != 1 %}s{% endif %} already in your library or queue).{% endif %}
+    {% elif series_existing > 0 %}
+      All {{ series_existing }} book{% if series_existing != 1 %}s{% endif %} in series "{{ series_name }}" are already in your library or queue!
+    {% else %}
+      No matching books found on MaM for series "{{ series_name }}".
+    {% endif %}
+  </span>
+  <span class="status ok">Series Updated</span>
+</div>
+{% endif %}
 
 <section class="panel search-panel">
   <div class="panel-body">
@@ -70,6 +86,24 @@
   </div>
 </section>
 
+{% if filters.series %}
+<section class="panel series-banner-panel" style="margin-bottom: 18px;">
+  <div class="panel-body split-actions">
+    <div>
+      <p class="eyebrow" style="margin: 0;">Series Collection</p>
+      <h2 style="margin: 4px 0;">📚 Series: {{ filters.series }}</h2>
+      <p class="muted" style="margin: 0;">Grab all available volumes and missing books in this series at once.</p>
+    </div>
+    <form action="/search/series/select" method="post">
+      <input type="hidden" name="series_name" value="{{ filters.series }}">
+      <input type="hidden" name="media_type" value="{{ filters.category }}">
+      <input type="hidden" name="filetype" value="{{ filters.filetype }}">
+      <button class="button primary" type="submit">Download Entire Series</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+
 {% if error %}
 <div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Failed</span></div>
 {% endif %}
@@ -96,16 +130,28 @@
 
         {% if row.series %}
         <p class="hm-secondary"><strong>Series</strong>
-          {% for series in row.series %}{{ series.name }}{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
+          {% for series in row.series %}
+            <a href="/search?series={{ series.name | urlencode }}" class="series-link" title="Search all books in {{ series.name }}">{{ series.name }}</a>{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}
+          {% endfor %}
         </p>
         {% endif %}
         {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
       </div>
 
-      <form class="hm-add-form" action="/search/select" method="post">
-        <input type="hidden" name="mam_id" value="{{ row.id }}">
-        <button class="primary" type="submit">Add to queue</button>
-      </form>
+      <div class="hm-card-actions">
+        <form class="hm-add-form" action="/search/select" method="post">
+          <input type="hidden" name="mam_id" value="{{ row.id }}">
+          <button class="primary" type="submit">Add to queue</button>
+        </form>
+        {% if row.series %}
+        <form class="hm-add-form" action="/search/series/select" method="post">
+          <input type="hidden" name="series_name" value="{{ row.series[0].name }}">
+          <input type="hidden" name="media_type" value="{{ filters.category }}">
+          <input type="hidden" name="filetype" value="{{ filters.filetype }}">
+          <button class="button secondary" type="submit" title="Download all books in {{ row.series[0].name }}">Grab Series</button>
+        </form>
+        {% endif %}
+      </div>
     </div>
 
     <dl class="hm-release-facts">

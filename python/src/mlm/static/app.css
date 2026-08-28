@@ -1471,14 +1471,39 @@ tbody tr:last-child td {
   text-transform: uppercase;
 }
 
-.hm-add-form {
+.hm-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   flex: 0 0 auto;
 }
 
+.hm-add-form {
+  margin: 0;
+}
+
 .hm-add-form button {
+  width: 100%;
   min-height: 35px;
   padding: 6px 10px;
   font-size: 10px;
+}
+
+.series-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  transition: color 120ms ease;
+}
+
+.series-link:hover {
+  color: var(--accent-strong);
+  text-decoration-style: solid;
+}
+
+.series-banner-panel {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.04);
 }
 
 .hm-release-facts {

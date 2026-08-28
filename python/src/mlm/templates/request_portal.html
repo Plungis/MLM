@@ -16,7 +16,7 @@
     </div>
     <p class="eyebrow">Private library acquisition portal</p>
     <h1>{{ portal_title }}</h1>
-    <p>Find the exact audiobook or ebook release you want, then submit it{% if portal_auto_approve %} directly to the automated download policy{% else %} for approval{% endif %}.</p>
+    <p>Find the exact audiobook, ebook, or entire series you want, then submit it{% if portal_auto_approve %} directly to the automated download policy{% else %} for approval{% endif %}.</p>
   </header>
 
   {% if portal_weekly_limit %}
@@ -29,6 +29,9 @@
   {% if submission_result %}
   <div class="request-success" role="status">
     {% if submission_result == "approved" %}<strong>Request automatically approved.</strong><span>HeavyMLM scheduled it under the normal download guardrails.</span>
+    {% elif submission_result == "series_approved" %}<strong>Series request automatically approved!</strong><span>HeavyMLM scheduled {{ series_count }} missing book{% if series_count != 1 %}s{% endif %} in series "{{ series_name }}"{% if series_existing > 0 %} ({{ series_existing }} was already in the library){% endif %}.</span>
+    {% elif submission_result == "series_pending" %}<strong>Series request received!</strong><span>Submitted {{ series_count }} book{% if series_count != 1 %}s{% endif %} in series "{{ series_name }}" for library-owner approval{% if series_existing > 0 %} ({{ series_existing }} was already available){% endif %}.</span>
+    {% elif submission_result == "series_fulfilled" %}<strong>You already have this entire series!</strong><span>All {{ series_total }} books in series "{{ series_name }}" are already in the library or download queue.</span>
     {% elif submission_result == "fulfilled" %}<strong>You already have this release.</strong><span>It is already in the library or pending for download.</span>
     {% else %}<strong>Request received.</strong><span>It is waiting in the approval inbox.</span>{% endif %}
   </div>
@@ -61,6 +64,20 @@
         {% if goodreads.isbn %}<span>ISBN {{ goodreads.isbn }}</span>{% endif %}
         {% if goodreads.format %}<span>{{ goodreads.format }}</span>{% endif %}
       </div>
+      {% if goodreads.series %}
+      <details class="request-submit-drawer" style="margin-top: 14px;">
+        <summary>Request Entire Series ({{ goodreads.series }})</summary>
+        <form action="/request/series/submit" method="post">
+          <input type="hidden" name="series_name" value="{{ goodreads.series }}">
+          <input type="hidden" name="goodreads_url" value="{{ goodreads_url }}">
+          <label><span>Your name <small>optional</small></span><input type="text" name="requester_name" maxlength="120" autocomplete="name" value="{{ requester_name }}"></label>
+          <label><span>Contact <small>optional</small></span><input type="text" name="requester_contact" maxlength="200" value="{{ requester_contact }}" placeholder="Email, Discord, etc."></label>
+          <label class="request-note"><span>Request note <small>optional</small></span><textarea name="note" maxlength="1000" rows="3" placeholder="Notes for the library owner regarding this series">{{ note }}</textarea></label>
+          <label class="request-honeypot" aria-hidden="true"><span>Website</span><input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+          <button class="primary" type="submit">{% if portal_auto_approve %}Request entire series automatically{% else %}Send series request for approval{% endif %}</button>
+        </form>
+      </details>
+      {% endif %}
     </div>
   </section>
   {% endif %}
@@ -91,6 +108,25 @@
     </div>
   </section>
 
+  {% if filters.series %}
+  <section class="panel series-banner-panel" style="margin-bottom: 18px;">
+    <div class="panel-body split-actions">
+      <div>
+        <p class="eyebrow" style="margin: 0;">Series Collection</p>
+        <h2 style="margin: 4px 0;">📚 Series: {{ filters.series }}</h2>
+        <p class="muted" style="margin: 0;">Request all missing books in this series at once.</p>
+      </div>
+      <form action="/request/series/submit" method="post">
+        <input type="hidden" name="series_name" value="{{ filters.series }}">
+        <input type="hidden" name="requester_name" value="{{ requester_name }}">
+        <input type="hidden" name="requester_contact" value="{{ requester_contact }}">
+        <input type="hidden" name="note" value="{{ note }}">
+        <button class="button primary" type="submit">{% if portal_auto_approve %}Request Entire Series{% else %}Request Series for Approval{% endif %}</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
   {% if error %}<div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Search failed</span></div>{% endif %}
 
   {% if rows %}
@@ -103,7 +139,13 @@
         <div class="hm-release-copy">
           <h2>{{ row.title }}</h2>
           {% if row.authors %}<p class="hm-authors"><span>by</span> {{ row.authors | join(", ") }}</p>{% else %}<p class="hm-authors muted">Author information unavailable</p>{% endif %}
-          {% if row.series %}<p class="hm-secondary"><strong>Series</strong> {% for series in row.series %}{{ series.name }}{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+          {% if row.series %}
+          <p class="hm-secondary"><strong>Series</strong>
+            {% for series in row.series %}
+              <a href="{{ portal_root }}?series={{ series.name | urlencode }}" class="series-link" title="Search all books in {{ series.name }}">{{ series.name }}</a>{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}
+            {% endfor %}
+          </p>
+          {% endif %}
           {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
         </div>
       </div>
@@ -120,6 +162,14 @@
           <label class="request-honeypot" aria-hidden="true"><span>Website</span><input type="text" name="website" tabindex="-1" autocomplete="off"></label>
           <button class="primary" type="submit">{% if portal_auto_approve %}Request and schedule automatically{% else %}Send request for approval{% endif %}</button>
         </form>
+        {% if row.series %}
+        <form action="/request/series/submit" method="post" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line-soft);">
+          <input type="hidden" name="series_name" value="{{ row.series[0].name }}">
+          <input type="hidden" name="requester_name" value="{{ requester_name }}">
+          <input type="hidden" name="requester_contact" value="{{ requester_contact }}">
+          <button class="button secondary" type="submit">Request Entire Series ({{ row.series[0].name }})</button>
+        </form>
+        {% endif %}
       </details>
     </article>
     {% endfor %}
