@@ -107,7 +107,14 @@ async def select_row(
     torrent_id = int(row.get("id", 0))
     if not torrent_id or torrent_id in config.ignore_torrents:
         return False
-    if not matches_filter(row, rule) or repository.has_mam_id(torrent_id):
+    if not matches_filter(row, rule):
+        return False
+    force_download = bool(
+        rule.get("force_download")
+        or rule.get("allow_duplicate")
+        or rule.get("name", "").startswith(("manual", "series:", "request:"))
+    )
+    if not force_download and repository.has_mam_id(torrent_id):
         return False
     requested_cost = rule.get("cost", "free")
     if requested_cost == "free" and not any(
@@ -123,14 +130,12 @@ async def select_row(
     preferred = _preferred_types(config, meta["media_type"])
     preference = _preference(meta["filetypes"], preferred)
     if preference is None:
-        if rule.get("allow_any_format") or rule.get("name", "").startswith(
-            ("manual", "series:", "request:")
-        ):
+        if rule.get("allow_any_format") or force_download:
             preference = len(preferred)
         else:
             return False
     duplicate = False
-    if not rule.get("allow_duplicate", False):
+    if not rule.get("allow_duplicate", False) and not force_download:
         for existing in repository.records_with_title(title_search):
             old_meta = existing.get("meta", {})
             if not metadata_matches(meta, old_meta):

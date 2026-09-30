@@ -11,7 +11,6 @@ from ...repository import Repository
 from ...search import (
     as_bool,
     as_int,
-    metadata_matches,
     normalize_title,
     torrent_meta,
 )
@@ -242,14 +241,8 @@ async def resolve_series_selection(
     for book in grouped_books:
         torrent_id = book["mam_id"]
         meta = book["meta"]
-        title_search = normalize_title(meta["title"])
 
-        is_present = repository.has_mam_id(torrent_id)
-        if not is_present:
-            for existing in repository.records_with_title(title_search):
-                if metadata_matches(meta, existing.get("meta", {})):
-                    is_present = True
-                    break
+        is_present = repository.is_book_present(torrent_id, meta)
 
         if is_present:
             book["status"] = "already_present"

@@ -354,6 +354,13 @@ async def grab_selected_torrents(
                     tags=selected.get("tags", []),
                     paused=config.add_torrents_stopped,
                 )
+            else:
+                state = str(existing[0].get("state", "")).lower()
+                if "pause" in state or "stop" in state:
+                    await qbit.resume_torrents([torrent_hash])
+                elif "error" in state or "missing" in state:
+                    await qbit.recheck_torrents([torrent_hash])
+                    await qbit.resume_torrents([torrent_hash])
             repository.record_started(selected, torrent_hash, wedged=wedged)
             downloaded += 1
             if uses_ratio:

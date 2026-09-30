@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mlm.config import load_config
-from mlm.database import ensure_database
+from mlm.database import connect, ensure_database
 from mlm.repository import Repository
 from mlm.request_auth import hash_request_password
 from mlm.request_portal import (
@@ -669,7 +669,95 @@ def test_loopback_reverse_proxy_does_not_bypass_shared_access_code(
             assert locked.status_code == 200
             assert "private request portal" in locked.text
             assert "Goodreads link reader" not in locked.text
-            assert 'href="/static/app.css?v=0.5.0b67"' in locked.text
+            assert 'href="/static/app.css?v=0.5.0b68"' in locked.text
             assert "http://requests.example.test/static/" not in locked.text
+
+    asyncio.run(exercise())
+
+
+def test_request_portal_re_requests_previously_completed_book(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    portal_config(
+        config_path,
+        require_account_login=True,
+        users=(
+            {
+                "username": "admin",
+                "password": "admin password",
+                "display_name": "Library Admin",
+                "permissions": ("auto_approve",),
+                "weekly_request_limit": 10,
+            },
+        ),
+    )
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    app = create_app(config_path, database)
+    services = PortalServices(load_config(config_path))
+    app.state.services = services
+
+    # Pre-populate torrents table with mam_id 321 (as if downloaded in the past)
+    with connect(database) as conn:
+        conn.execute(
+            """INSERT INTO torrents
+               (id, mam_id, title_search, created_at_json, payload_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                "oldhash321",
+                321,
+                "dungeon crawler carl",
+                '"2026-08-01T00:00:00Z"',
+                json.dumps(
+                    {
+                        "id": "oldhash321",
+                        "mam_id": 321,
+                        "title_search": "dungeon crawler carl",
+                        "library_path": str(tmp_path / "library" / "deleted_book"),
+                        "library_files": ["book.m4b"],
+                        "meta": {
+                            "title": "Dungeon Crawler Carl",
+                            "filetypes": ["m4b"],
+                            "media_type": "audiobook",
+                        },
+                    }
+                ),
+            ),
+        )
+
+    assert repository.has_mam_id(321) is True
+    assert repository.has_pending_mam_id(321) is False
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app, client=("203.0.113.20", 41234))
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="https://requests.example.test",
+        ) as client:
+            admin_login = await client.post(
+                "/request/unlock",
+                data={"username": "admin", "password": "admin password"},
+                follow_redirects=False,
+            )
+            assert admin_login.status_code == 303
+
+            # Submit request for the previously completed book
+            submit_res = await client.post(
+                "/request/submit",
+                data={"mam_id": "321", "requester_name": "Admin"},
+                follow_redirects=False,
+            )
+            assert submit_res.status_code == 303
+            assert submit_res.headers["location"] == "/?submitted=approved"
+
+            await asyncio.sleep(0)
+
+            # Verify it was re-queued into selected_torrents!
+            assert repository.pending_selected()[0]["mam_id"] == 321
+            assert "downloader" in services.triggered
+            record = repository.request_rows()[0]
+            assert record["status"] == "approved"
 
     asyncio.run(exercise())

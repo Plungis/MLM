@@ -160,10 +160,44 @@ def library_directory(
     return Path(library["library_dir"]) / relative
 
 
+FALLBACK_AUDIO_FORMATS = (
+    "m4b",
+    "mp3",
+    "m4a",
+    "flac",
+    "ogg",
+    "opus",
+    "aac",
+    "wav",
+    "mp4",
+    "wma",
+    "aiff",
+)
+FALLBACK_EBOOK_FORMATS = (
+    "epub",
+    "pdf",
+    "azw3",
+    "mobi",
+    "cbz",
+    "cbr",
+    "azw",
+    "fb2",
+    "djvu",
+)
+
+
 def select_format(
-    override: list[str] | None, preferred: tuple[str, ...], files: list[dict[str, Any]]
+    override: list[str] | None,
+    preferred: tuple[str, ...],
+    files: list[dict[str, Any]],
+    *,
+    fallback: tuple[str, ...] = (),
 ) -> str | None:
     for extension in override or list(preferred):
+        suffix = "." + extension.lower().lstrip(".")
+        if any(str(row.get("name", "")).lower().endswith(suffix) for row in files):
+            return suffix
+    for extension in fallback:
         suffix = "." + extension.lower().lstrip(".")
         if any(str(row.get("name", "")).lower().endswith(suffix) for row in files):
             return suffix
@@ -503,18 +537,45 @@ async def _organize_torrent(
         ):
             repository.mark_removed_from_mam(existing)
     if existing and existing.get("library_path"):
-        _progress(
-            progress,
-            f"Already organized: {torrent_name}",
-            level="debug",
-            context={**context, "library_path": existing.get("library_path")},
+        target_dir = Path(existing["library_path"])
+        library_files = existing.get("library_files") or []
+        files_exist = target_dir.exists() and (
+            any((target_dir / f).exists() for f in library_files)
+            if library_files
+            else (any(target_dir.iterdir()) if target_dir.is_dir() else False)
         )
-        return "already_organized"
+        if files_exist:
+            _progress(
+                progress,
+                f"Already organized: {torrent_name}",
+                level="debug",
+                context={**context, "library_path": existing.get("library_path")},
+            )
+            return "already_organized"
+        repository.log_activity(
+            "organizer",
+            (
+                f"Library files missing on disk for {torrent_name}; "
+                "reorganizing into library"
+            ),
+            level="info",
+            context={**context, "target_dir": str(target_dir)},
+        )
 
     _progress(progress, f"Inspecting files: {torrent_name}", context=context)
     files = await qbit.files(torrent_hash)
-    audio = select_format(library.get("audio_types"), config.audio_types, files)
-    ebook = select_format(library.get("ebook_types"), config.ebook_types, files)
+    audio = select_format(
+        library.get("audio_types"),
+        config.audio_types,
+        files,
+        fallback=FALLBACK_AUDIO_FORMATS,
+    )
+    ebook = select_format(
+        library.get("ebook_types"),
+        config.ebook_types,
+        files,
+        fallback=FALLBACK_EBOOK_FORMATS,
+    )
     if not audio and not ebook:
         repository.log_activity(
             "organizer",

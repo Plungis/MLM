@@ -37,3 +37,9 @@ def test_format_preference_and_path_traversal() -> None:
         safe_torrent_path("../escape.mp3")
     with pytest.raises(ValueError):
         safe_torrent_path("C:/escape.mp3")
+
+
+def test_format_preference_fallback() -> None:
+    files = [{"name": "book/audio.flac"}]
+    # audio_types only has m4b
+    assert select_format(None, ("m4b",), files, fallback=("flac",)) == ".flac"

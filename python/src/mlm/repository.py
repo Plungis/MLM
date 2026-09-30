@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .database import connect
 from .migration import canonical_json
-from .search import normalize_title
+from .search import metadata_matches, normalize_title
 
 
 class RequestLimitReached(RuntimeError):
@@ -360,9 +360,25 @@ class Repository:
             )
             return [json.loads(row[0]) for row in rows]
 
-    def upsert_abs_books(self, items: list[dict[str, Any]]) -> int:
+    def upsert_abs_books(
+        self, items: list[dict[str, Any]], *, prune_missing: bool = False
+    ) -> int:
         now = datetime.now(UTC).isoformat()
+        active_ids = {
+            str(item.get("id") or item.get("abs_id") or "").strip()
+            for item in items
+            if str(item.get("id") or item.get("abs_id") or "").strip()
+        }
         with connect(self.path) as connection, connection:
+            if prune_missing:
+                if active_ids:
+                    placeholders = ",".join("?" for _ in active_ids)
+                    connection.execute(
+                        f"DELETE FROM abs_books WHERE abs_id NOT IN ({placeholders})",
+                        tuple(active_ids),
+                    )
+                else:
+                    connection.execute("DELETE FROM abs_books")
             for item in items:
                 abs_id = str(item.get("id") or item.get("abs_id") or "")
                 if not abs_id:
@@ -409,6 +425,86 @@ class Repository:
                 )
         return len(items)
 
+    def is_book_present(self, mam_id: int, meta: dict[str, Any] | None = None) -> bool:
+        """Check if a book is present in active library, ABS, or download queue."""
+        title_search = normalize_title((meta or {}).get("title", "")) if meta else ""
+        with connect(self.path) as connection:
+            sel_row = connection.execute(
+                """SELECT 1 FROM selected_torrents
+                   WHERE mam_id = ?
+                     AND json_extract(payload_json, '$.removed_at') IS NULL""",
+                (mam_id,),
+            ).fetchone()
+            if sel_row is not None:
+                return True
+            if title_search:
+                sel_rows = connection.execute(
+                    """SELECT payload_json FROM selected_torrents
+                       WHERE title_search = ?
+                         AND json_extract(payload_json, '$.removed_at') IS NULL""",
+                    (title_search,),
+                ).fetchall()
+                for row in sel_rows:
+                    if not meta:
+                        return True
+                    sel_item = json.loads(row[0])
+                    if metadata_matches(meta, sel_item.get("meta", {})):
+                        return True
+
+            if title_search:
+                abs_rows = connection.execute(
+                    "SELECT payload_json FROM abs_books WHERE title_search = ?",
+                    (title_search,),
+                ).fetchall()
+                for row in abs_rows:
+                    if not meta:
+                        return True
+                    abs_item = json.loads(row[0])
+                    if metadata_matches(meta, abs_item.get("meta", {})):
+                        return True
+            torrent_row = connection.execute(
+                "SELECT payload_json FROM torrents WHERE mam_id = ?",
+                (mam_id,),
+            ).fetchone()
+            if torrent_row:
+                torrent_data = json.loads(torrent_row[0])
+                lib_path_val = torrent_data.get("library_path")
+                if lib_path_val:
+                    target_dir = Path(lib_path_val)
+                    files = torrent_data.get("library_files") or []
+                    if target_dir.exists():
+                        if files:
+                            if any((target_dir / f).exists() for f in files):
+                                return True
+                        elif any(target_dir.iterdir()):
+                            return True
+                else:
+                    return True
+            elif title_search:
+                torrent_rows = connection.execute(
+                    "SELECT payload_json FROM torrents WHERE title_search = ?",
+                    (title_search,),
+                ).fetchall()
+                for row in torrent_rows:
+                    torrent_data = json.loads(row[0])
+                    if meta and not metadata_matches(
+                        meta, torrent_data.get("meta", {})
+                    ):
+                        continue
+                    lib_path_val = torrent_data.get("library_path")
+                    if lib_path_val:
+                        target_dir = Path(lib_path_val)
+                        files = torrent_data.get("library_files") or []
+                        if target_dir.exists():
+                            if files:
+                                if any((target_dir / f).exists() for f in files):
+                                    return True
+                            elif any(target_dir.iterdir()):
+                                return True
+                    else:
+                        return True
+        return False
+
     def abs_books_count(self) -> int:
         with connect(self.path) as connection:
             row = connection.execute("SELECT COUNT(1) FROM abs_books").fetchone()
@@ -429,11 +525,20 @@ class Repository:
             return [json.loads(row[0]) for row in rows]
 
     def add_selected(self, selected: dict[str, Any]) -> None:
-        with connect(self.path) as connection:
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                "DELETE FROM duplicate_torrents WHERE mam_id = ?",
+                (selected["mam_id"],),
+            )
             connection.execute(
                 """INSERT INTO selected_torrents
                    (mam_id, hash, title_search, created_at_json, payload_json)
-                   VALUES (?, NULL, ?, ?, ?)""",
+                   VALUES (?, NULL, ?, ?, ?)
+                   ON CONFLICT(mam_id) DO UPDATE SET
+                     hash = excluded.hash,
+                     title_search = excluded.title_search,
+                     created_at_json = excluded.created_at_json,
+                     payload_json = excluded.payload_json""",
                 (
                     selected["mam_id"],
                     selected["title_search"],
@@ -852,10 +957,16 @@ class Repository:
                 (torrent_hash, canonical_json(selected), selected["mam_id"]),
             )
             connection.execute(
+                "DELETE FROM torrents WHERE mam_id = ? AND id <> ?",
+                (selected["mam_id"], torrent_hash),
+            )
+            connection.execute(
                 """INSERT INTO torrents
                        (id, mam_id, title_search, created_at_json, payload_json)
                        VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET
+                         mam_id=excluded.mam_id,
+                         title_search=excluded.title_search,
                          payload_json=excluded.payload_json""",
                 (
                     torrent_hash,

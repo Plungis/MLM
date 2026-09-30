@@ -812,6 +812,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "cost": "ratio",
                     "name": f"series:{cleaned_series}",
                     "allow_any_format": True,
+                    "allow_duplicate": True,
+                    "force_download": True,
                 },
             )
             if selected:
@@ -1891,15 +1893,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     ) -> tuple[str, str]:
         request_id = str(record["id"])
         mam_id = int(record["mam_id"])
-        if repository.has_mam_id(mam_id):
+        if repository.has_pending_mam_id(mam_id):
             await asyncio.to_thread(
                 repository.update_request,
                 request_id,
-                "fulfilled",
-                decision_note="Already present in the library or pending for download",
-                decision_by="system",
+                "approved",
+                decision_note="Already queued for download",
+                decision_by=decision_by,
             )
-            return "fulfilled", ""
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            return "approved", ""
         row = await app.state.services.mam.get_torrent_info_by_id(mam_id)
         if not row:
             return "pending", "The selected MaM release no longer exists"
@@ -1915,10 +1918,12 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     else f"request:{request_id}"
                 ),
                 "allow_any_format": True,
+                "allow_duplicate": True,
+                "force_download": True,
             },
         )
         if not selected:
-            return "pending", "Release does not match configured formats"
+            return "pending", "Release could not be added to download queue"
         decision_note = (
             f"Automatically approved for request account {decision_by}"
             if automatic
@@ -2024,16 +2029,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
         submission_result = "pending"
         auto_approval_error = ""
-        if repository.has_mam_id(mam_id):
-            submission_result, _ = await approve_stored_request(
-                record,
-                decision_by="system",
-                automatic=False,
-            )
-        elif identity and "auto_approve" in identity.permissions:
+        should_auto_approve = bool(
+            identity and "auto_approve" in identity.permissions
+        ) or (
+            identity is None
+            and getattr(current, "request_portal_auto_approve_public", False)
+        )
+        if should_auto_approve:
             submission_result, auto_approval_error = await approve_stored_request(
                 record,
-                decision_by=identity.username,
+                decision_by=identity.username if identity else "portal",
                 automatic=True,
             )
             if auto_approval_error:
@@ -2372,6 +2377,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "name": "manual",
                 "allow_any_format": True,
                 "allow_duplicate": True,
+                "force_download": True,
             },
         )
         if not selected and not repository.has_mam_id(mam_id):
@@ -2409,6 +2415,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     "cost": "ratio",
                     "name": f"series:{cleaned_series}",
                     "allow_any_format": True,
+                    "allow_duplicate": True,
+                    "force_download": True,
                 },
             )
             if selected:

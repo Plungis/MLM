@@ -138,3 +138,23 @@ class QbitClient:
             data={"hashes": "|".join(hashes), "tags": tags_value},
         )
         self._check(response)
+
+    async def resume_torrents(self, hashes: Iterable[str]) -> None:
+        hash_list = [h for h in hashes if h]
+        if not hash_list:
+            return
+        response = await self.client.post(
+            "/api/v2/torrents/resume",
+            data={"hashes": "|".join(hash_list)},
+        )
+        self._check(response)
+
+    async def recheck_torrents(self, hashes: Iterable[str]) -> None:
+        hash_list = [h for h in hashes if h]
+        if not hash_list:
+            return
+        response = await self.client.post(
+            "/api/v2/torrents/recheck",
+            data={"hashes": "|".join(hash_list)},
+        )
+        self._check(response)

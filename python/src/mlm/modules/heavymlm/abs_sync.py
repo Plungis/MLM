@@ -116,7 +116,7 @@ def sync_audiobookshelf_library(
 ) -> dict[str, Any]:
     """Synchronize Audiobookshelf library books into the HeavyMLM repository."""
     books = fetch_all_abs_library_books(settings, token=token)
-    count = repository.upsert_abs_books(books)
+    count = repository.upsert_abs_books(books, prune_missing=True)
 
     repository.log_activity(
         "absidekick",
