@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Suite preferences</p>
+    <h1>Settings</h1>
+    <p class="subtitle">Customize how HeavyMLM, ratio limits, and the request portal behave. Changes take effect right away.</p>
+  </div>
+  <div class="page-meta">
+    <span class="status ok">Safe auto-save</span>
+    <span class="chip">Settings are private</span>
+  </div>
+</header>
+
+{% if saved %}
+<div class="flash" role="status"><span>Settings saved successfully!</span><span class="status ok">Saved</span></div>
+{% endif %}
+{% if error %}
+<div class="flash error-flash" role="alert"><span>{{ error }}</span><span class="status error">Not saved</span></div>
+{% endif %}
+
+<section class="config-summary">
+  <div class="config-fact"><span>Slots used</span><strong>{% if mam_stats %}{{ mam_stats.slots_used }} / {{ mam_stats.slots_total }}{% else %}Syncing…{% endif %}</strong></div>
+  <div class="config-fact"><span>Configured ceiling</span><strong>{{ config.max_unsat_slots if config.max_unsat_slots is not none else "Site limit" }}</strong></div>
+  <div class="config-fact"><span>Wedges available</span><strong>{{ mam_stats.wedges if mam_stats else "Syncing…" }}</strong></div>
+  <div class="config-fact"><span>Wedges reserved</span><strong>{{ config.wedge_buffer }}</strong></div>
+</section>
+
+<form action="/config" method="post" class="config-editor">
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h2>Download &amp; Ratio Rules</h2>
+        <p>Set simple safety limits so downloading never hurts your tracker ratio or uses up all your slots.</p>
+      </div>
+      <span class="chip">Applies immediately</span>
+    </header>
+    <div class="panel-body setting-grid">
+      <label class="setting-field">
+        <span>Minimum ratio to maintain</span>
+        <input type="number" name="min_ratio" min="0.01" step="0.01" required value="{{ config.min_ratio }}">
+        <small>HeavyMLM will skip non-freeleech books if downloading would drop your ratio below this.</small>
+      </label>
+      <label class="setting-field">
+        <span>Maximum active slots</span>
+        <input type="number" name="max_unsat_slots" min="0" step="1" placeholder="Use site limit" value="{% if config.max_unsat_slots is not none %}{{ config.max_unsat_slots }}{% endif %}">
+        <small>Optional ceiling. For example, on a 150-slot account, set 140 to always keep 10 slots open.</small>
+      </label>
+      <label class="setting-field">
+        <span>Minimum slots to keep free</span>
+        <input type="number" name="unsat_buffer" min="0" step="1" required value="{{ config.unsat_buffer }}">
+        <small>How many open download slots HeavyMLM should keep free at all times.</small>
+      </label>
+      <label class="setting-field">
+        <span>Freeleech wedges to reserve</span>
+        <input type="number" name="wedge_buffer" min="0" step="1" required value="{{ config.wedge_buffer }}">
+        <small>Keep at least this many wedges saved in your account for emergencies.</small>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="prefer_wedges" value="true"{% if config.prefer_wedges %} checked{% endif %}>
+        <span><strong>Use freeleech wedges first</strong><small>When above your reserve, apply a freeleech wedge before downloading so books don't cost upload buffer.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="download_on_wedge_failure" value="true"{% if config.download_on_wedge_failure %} checked{% endif %}>
+        <span><strong>Download anyway if wedge fails</strong><small>If a wedge can't be applied, continue with a regular download if your ratio allows it.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="add_torrents_stopped" value="true"{% if config.add_torrents_stopped %} checked{% endif %}>
+        <span><strong>Send torrents paused</strong><small>Send new downloads to qBittorrent in a paused state so you can inspect them first.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="grab_both_formats" value="true"{% if config.grab_both_formats %} checked{% endif %}>
+        <span><strong>Grab both audiobook &amp; ebook</strong><small>For reading lists, look for both formats independently so you don't miss either version.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="absidekick_auto_sync" value="true"{% if config.absidekick_auto_sync %} checked{% endif %}>
+        <span><strong>Auto-sync with ABSidekick</strong><small>When a book finishes sorting, automatically trigger Audiobookshelf to scan and ABSidekick to match metadata.</small></span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div><h2>Request Portal &amp; Web Sharing</h2><p>Share a safe, locked-down book request page on your own domain with family and friends.</p></div>
+      <span class="chip">Applies immediately</span>
+    </header>
+    <div class="panel-body setting-grid">
+      <div class="config-security-callout" role="alert">
+        <strong>⚠️ Security Tip: Keep your admin dashboard private</strong>
+        <p><strong>Never expose port 3157 directly to the public internet.</strong> Your admin dashboard controls downloads, cookies, and system settings. When you set up a custom domain (like <code>requests.yourdomain.com</code>) through a reverse proxy, MyAnonaSuite automatically locks out all admin controls on that domain and shows only the friendly request box. Check the <a href="/tutorial">Setup Guide</a> for easy reverse proxy steps!</p>
+      </div>
+      <label class="setting-toggle">
+        <input type="checkbox" name="request_portal_enabled" value="true"{% if config.request_portal_enabled %} checked{% endif %}>
+        <span><strong>Enable request portal</strong><small>Turns on the public-safe request page on your configured domain.</small></span>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="request_portal_require_account_login" value="true"{% if config.request_portal_require_account_login %} checked{% endif %}>
+        <span><strong>Require individual logins</strong><small>Recommended. Makes users log in with their own password so you know who requested each book.</small></span>
+      </label>
+      <label class="setting-field">
+        <span>Custom request domain</span>
+        <input type="text" name="request_portal_domains" value="{{ config.request_portal_domains | join(', ') }}" placeholder="requests.yourdomain.com">
+        <small>Enter your domain name (e.g. <code>requests.yourdomain.com</code>) pointing to this server.</small>
+      </label>
+      <label class="setting-field">
+        <span>Portal title</span>
+        <input type="text" name="request_portal_title" maxlength="100" value="{{ config.request_portal_title }}">
+        <small>The friendly title shown at the top of the search and request page.</small>
+      </label>
+      <label class="setting-field">
+        <span>Requests per minute</span>
+        <input type="number" name="request_portal_rate_limit" min="1" max="300" value="{{ config.request_portal_rate_limit }}">
+        <small>Limits rapid requests to protect your server from spam.</small>
+      </label>
+      <label class="setting-field">
+        <span>Legacy shared username</span>
+        <input type="text" name="request_portal_username" maxlength="100" value="{{ config.request_portal_username }}" autocomplete="username" placeholder="family">
+        <small>Single shared account for existing setups. Named user accounts below are recommended instead.</small>
+      </label>
+      <label class="setting-field">
+        <span>Change shared password</span>
+        <input type="password" name="request_portal_password" minlength="8" value="" autocomplete="new-password" placeholder="{% if config.request_portal_password_hash %}Password set — leave blank to keep{% else %}At least 8 characters{% endif %}">
+        <small>Encrypted securely. Leave blank if you don't want to change it.</small>
+      </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="clear_request_portal_credentials" value="true">
+        <span><strong>Remove shared login</strong><small>Removes the shared username/password. Named individual accounts below will remain active.</small></span>
+      </label>
+      <details class="setting-field config-legacy-auth">
+        <summary>Legacy shared access code</summary>
+        <p class="muted">Kept for older setups. Individual username/password logins are recommended.</p>
+        <label class="setting-field">
+          <span>New access code</span>
+          <input type="password" name="request_portal_access_code" value="" autocomplete="new-password" placeholder="{% if config.request_portal_access_code %}Configured — leave blank to keep{% else %}Not configured{% endif %}">
+        </label>
+        <label class="setting-toggle">
+          <input type="checkbox" name="clear_request_portal_access_code" value="true">
+          <span><strong>Remove access code</strong><small>Removes the access code completely.</small></span>
+        </label>
+      </details>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div><h2>Scheduler timing</h2><p>Saving restarts the in-process scheduler so new intervals take effect immediately.</p></div>
+    </header>
+    <div class="panel-body setting-grid three">
+      <label class="setting-field">
+        <span>Search interval</span>
+        <input type="number" name="search_interval" min="1" step="1" required value="{{ config.search_interval }}">
+        <small>Minutes between autograb searches.</small>
+      </label>
+      <label class="setting-field">
+        <span>List refresh interval</span>
+        <input type="number" name="import_interval" min="1" step="1" required value="{{ config.import_interval }}">
+        <small>Minutes between Goodreads and Notion refreshes.</small>
+      </label>
+      <label class="setting-field">
+        <span>Organizer interval</span>
+        <input type="number" name="link_interval" min="1" step="1" required value="{{ config.link_interval }}">
+        <small>Minutes between library organization passes.</small>
+      </label>
+    </div>
+  </section>
+
+  <div class="config-savebar">
+    <div><strong>Quick policy save</strong><span>Applies these common runtime controls immediately and leaves every nested section untouched.</span></div>
+    <button class="primary" type="submit">Save and apply</button>
+  </div>
+</form>
+
+<section class="panel request-account-panel" id="request-accounts">
+  <header class="panel-header">
+    <div><h2>Request login accounts</h2><p>Give each requester a separate login and control whether their requests require review.</p></div>
+    <span class="chip">{{ config.request_portal_users | length }} named</span>
+  </header>
+  <div class="panel-body">
+    <div class="security-note"><strong>Permission boundary:</strong> Auto-approve only skips the request inbox decision. It does not grant access to HeavyMLM administration, configuration, or other MyAnonaSuite modules. Download guardrails and format rules still apply.</div>
+    {% if config.request_portal_enabled and config.request_portal_require_account_login and not config.request_portal_users and not config.request_portal_username %}<div class="flash error-flash"><span>The public request domain is safely locked because no request accounts exist yet. Create the first account below.</span><span class="status waiting">Setup required</span></div>{% endif %}
+    {% if config.request_portal_users %}
+    <div class="request-account-grid">
+      {% for user in config.request_portal_users %}
+      <article class="request-account-card">
+        <header><div><span class="status ok">Active account</span><h3>{{ user.display_name or user.username }}</h3><code>{{ user.username }}</code><small>{% if user.weekly_request_limit %}{{ user.weekly_request_limit }} requests per rolling week{% else %}Unlimited weekly requests{% endif %}</small></div>{% if "auto_approve" in user.permissions %}<span class="status running">Auto-approve</span>{% else %}<span class="status waiting">Review required</span>{% endif %}</header>
+        <form action="/config/request-users/save" method="post" class="request-account-form">
+          <input type="hidden" name="original_username" value="{{ user.username }}">
+          <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required value="{{ user.username }}" autocomplete="off"></label>
+          <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" value="{{ user.display_name }}" placeholder="Optional friendly name"></label>
+          <label class="setting-field"><span>Reset password</span><input type="password" name="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep current password"></label>
+          <label class="setting-field"><span>Requests per week</span><input type="number" name="weekly_request_limit" min="0" step="1" value="{{ user.weekly_request_limit }}"><small>Rolling seven-day limit. Use 0 for unlimited.</small></label>
+          <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"{% if "auto_approve" in user.permissions %} checked{% endif %}><span><strong>Auto-approve requests</strong><small>Immediately schedules valid requests from this account without inbox approval.</small></span></label>
+          <button class="primary" type="submit">Save account</button>
+        </form>
+        <form action="/config/request-users/delete" method="post" data-confirm="Delete request account {{ user.username }}? Existing request history will be kept, but this login will stop working immediately.">
+          <input type="hidden" name="username" value="{{ user.username }}">
+          <button class="danger" type="submit">Delete account</button>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <article class="request-account-card request-account-new">
+      <header><div><p class="eyebrow">Add login</p><h3>New request account</h3></div><span class="chip">Password required</span></header>
+      <form action="/config/request-users/save" method="post" class="request-account-form">
+        <label class="setting-field"><span>Username</span><input type="text" name="username" maxlength="100" required autocomplete="off" placeholder="reader-name"></label>
+        <label class="setting-field"><span>Display name</span><input type="text" name="display_name" maxlength="120" placeholder="Optional friendly name"></label>
+        <label class="setting-field"><span>Password</span><input type="password" name="password" minlength="8" required autocomplete="new-password" placeholder="At least 8 characters"></label>
+        <label class="setting-field"><span>Requests per week</span><input type="number" name="weekly_request_limit" min="0" step="1" value="0"><small>Set 10, 20, or any limit. Use 0 for unlimited.</small></label>
+        <label class="setting-toggle request-account-permission"><input type="checkbox" name="auto_approve" value="true"><span><strong>Auto-approve requests</strong><small>Use only for trusted accounts. All other accounts require your approval.</small></span></label>
+        <button class="primary" type="submit">Create account</button>
+      </form>
+    </article>
+  </div>
+</section>
+
+<section class="panel full-config-panel">
+  <header class="panel-header">
+    <div><h2>Complete configuration</h2><p>Edit every supported setting and nested section in the actual TOML document.</p></div>
+    <span class="chip">Full control</span>
+  </header>
+  {% if config_toml is not none %}
+  <form action="/config/full" method="post">
+  <div class="panel-body">
+    <div class="security-note"><strong>Local only:</strong> This editor includes credentials because it is available only from the computer running MyAnonaSuite. The entire document is validated before replacement.</div>
+    <label class="full-config-editor">
+      <span>{{ config_path }}</span>
+      <textarea name="config_toml" rows="34" spellcheck="false" autocapitalize="off" autocomplete="off">{{ config_toml }}</textarea>
+    </label>
+  </div>
+  <div class="config-savebar full-savebar">
+    <div><strong>Validate, save, and apply</strong><span>Schedulers, connections, and live policy reload immediately; existing queued items are re-evaluated under the new runtime policy on their next pass. Host and port changes take effect on the next launch because the current listener cannot move itself.</span></div>
+    <button class="primary" type="submit">Save complete config</button>
+  </div>
+  </form>
+  {% else %}
+  <div class="panel-body">
+    <div class="security-note"><strong>Protected:</strong> The complete editor is visible only on the computer running MyAnonaSuite. Open <code>http://127.0.0.1:3157/config</code> locally to use it.</div>
+    <details><summary>Show redacted configuration</summary><pre>{{ config | tojson(indent=2) }}</pre></details>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

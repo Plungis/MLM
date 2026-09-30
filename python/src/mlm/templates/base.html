@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#020604">
+  <title>{{ title }} · MyAnonaSuite</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  {% if suite_module == "absidekick" %}<link rel="stylesheet" href="/static/absidekick.css?v={{ version }}">{% endif %}
+</head>
+<body data-suite="{{ suite_module }}">
+<div class="app-shell">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <a class="brand" href="/" aria-label="MyAnonaSuite home">
+      <span class="brand-mark">H_</span>
+      <span class="brand-copy">
+        <strong>MyAnonaSuite</strong>
+      </span>
+    </a>
+
+    <div class="system-pill"><span class="status-dot"></span> {{ suite_info.name }} / {{ suite_info.status }}</div>
+
+    {% set path = request.url.path %}
+    {% if suite_module == "heavymlm" %}
+    <nav>
+      <div class="nav-group">
+        <p class="nav-label">Main</p>
+        <a class="nav-link{% if path == '/' %} active{% endif %}" href="/">
+          <span>Home</span>
+        </a>
+        <a class="nav-link{% if path == '/search' %} active{% endif %}" href="/search">
+          <span>Search MaM</span>
+        </a>
+        <a class="nav-link{% if path == '/requests' %} active{% endif %}" href="/requests">
+          <span>Requests</span><span class="nav-count{% if request_tracking.get('pending', 0) %} count-alert{% endif %}">{{ request_tracking.get("pending", 0) }}</span>
+        </a>
+        <a class="nav-link nav-link-child{% if path == '/request' %} active{% endif %}" href="/request" target="_blank" rel="noreferrer">
+          <span>Request Portal</span><span aria-hidden="true">↗</span>
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <p class="nav-label">Library</p>
+        <a class="nav-link{% if path == '/library' %} active{% endif %}" href="/library">
+          <span>Organized Library</span><span class="nav-count">{{ counts.get("torrents", 0) }}</span>
+        </a>
+        <a class="nav-link{% if path == '/lists' %} active{% endif %}" href="/lists">
+          <span>Reading Lists</span><span class="nav-count">{{ counts.get("list_items", 0) }}</span>
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <p class="nav-label">Activity</p>
+        <a class="nav-link{% if path == '/operations' %} active{% endif %}" href="/operations">
+          <span>Operations &amp; Logs</span><span class="nav-count{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }}</span>
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <p class="nav-label">Settings &amp; Tools</p>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules">
+          <span>Module Manager</span>
+        </a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial">
+          <span>Getting Started &amp; Help</span>
+        </a>
+        <a class="nav-link{% if path == '/config' %} active{% endif %}" href="/config">
+          <span>Settings</span>
+        </a>
+        <a class="nav-link" href="/health"><span>Health API</span></a>
+      </div>
+    </nav>
+    {% elif suite_module == "absidekick" %}
+    <nav class="module-nav">
+      <div class="nav-group">
+        <p class="nav-label">Matching</p>
+        <a class="nav-link{% if absidekick_view == 'run' %} active{% endif %}" href="/suite/absidekick/run"><span>Run Center</span></a>
+        <a class="nav-link{% if absidekick_view == 'review' %} active{% endif %}" href="/suite/absidekick/review"><span>Review Desk</span></a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-label">Rules</p>
+        <a class="nav-link{% if absidekick_view == 'targeting' %} active{% endif %}" href="/suite/absidekick/targeting"><span>Targeting</span></a>
+        <a class="nav-link{% if absidekick_view == 'matching' %} active{% endif %}" href="/suite/absidekick/matching"><span>Matching</span></a>
+        <a class="nav-link{% if absidekick_view == 'tags' %} active{% endif %}" href="/suite/absidekick/tags"><span>Tags &amp; Actions</span></a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-label">Settings &amp; Tools</p>
+        <a class="nav-link{% if absidekick_view == 'connection' %} active{% endif %}" href="/suite/absidekick/config"><span>Settings</span></a>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
+      </div>
+    </nav>
+    {% elif suite_module == "mam-spender" %}
+    <nav class="module-nav">
+      <div class="nav-group">
+        <p class="nav-label">Bonus Spender</p>
+        <a class="nav-link{% if spender_view == 'dashboard' %} active{% endif %}" href="/suite/mam-spender/dashboard"><span>Dashboard</span></a>
+        <a class="nav-link{% if spender_view == 'config' %} active{% endif %}" href="/suite/mam-spender/config"><span>Settings</span></a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-label">History &amp; Stats</p>
+        <a class="nav-link{% if spender_view == 'analytics' %} active{% endif %}" href="/suite/mam-spender/analytics"><span>Points Graph</span></a>
+        <a class="nav-link{% if spender_view == 'history' %} active{% endif %}" href="/suite/mam-spender/history"><span>Purchase History</span></a>
+        <a class="nav-link{% if spender_view == 'mam-data' %} active{% endif %}" href="/suite/mam-spender/mam-data"><span>All MaM Data</span></a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-label">Settings &amp; Tools</p>
+        <a class="nav-link{% if path == '/modules' %} active{% endif %}" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link{% if path == '/tutorial' %} active{% endif %}" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
+      </div>
+    </nav>
+    {% else %}
+    <nav class="module-nav">
+      <div class="nav-group">
+        <p class="nav-label">{{ suite_info.name }}</p>
+        <a class="nav-link active" href="/suite/{{ suite_module }}"><span>Status</span></a>
+        <a class="nav-link" href="/modules"><span>Module Manager</span></a>
+        <a class="nav-link" href="/tutorial"><span>Getting Started &amp; Help</span></a>
+        <a class="nav-link" href="/"><span>Back to HeavyMLM</span></a>
+      </div>
+    </nav>
+    {% endif %}
+
+    <div class="suite-switcher" aria-label="MyAnonaSuite module switcher">
+      <div class="suite-switcher-header">
+        <p class="nav-label">Suite switcher</p>
+        <a href="/modules" class="switcher-manage-link" title="Manage modules">⚙</a>
+      </div>
+      <div class="suite-switcher-grid">
+        <a class="suite-module heavymlm{% if suite_module == 'heavymlm' %} active{% endif %}{% if 'heavymlm' not in enabled_modules %} module-disabled{% endif %}" href="/" title="HeavyMLM">
+          <span>H_</span><small>MLM</small>
+        </a>
+        <a class="suite-module absidekick{% if suite_module == 'absidekick' %} active{% endif %}{% if 'absidekick' not in enabled_modules %} module-disabled{% endif %}" href="/suite/absidekick/run" title="ABSidekick">
+          <span>A_</span><small>ABS</small>
+        </a>
+        <a class="suite-module mam-spender{% if suite_module == 'mam-spender' %} active{% endif %}{% if 'mam_spender' not in enabled_modules %} module-disabled{% endif %}" href="/suite/mam-spender/dashboard" title="MAM-Spender">
+          <span>M$</span><small>Spend</small>
+        </a>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      MyAnonaSuite {{ version }}<br>
+      {{ suite_info.name }} module
+    </div>
+  </aside>
+
+  <section class="content-shell">
+    <header class="mobile-bar">
+      <span class="mobile-title">MyAnonaSuite / {{ suite_info.name }}</span>
+      <button type="button" data-menu-toggle aria-expanded="false" aria-label="Toggle navigation">Menu</button>
+    </header>
+    <main class="page">
+      {% block content %}{% endblock %}
+      <footer class="page-footer">
+        <span>MyAnonaSuite {{ version }} / {{ suite_info.name }}</span>
+        <span>{{ record_total }} indexed records</span>
+      </footer>
+    </main>
+  </section>
+</div>
+<script src="/static/app.js?v={{ version }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
