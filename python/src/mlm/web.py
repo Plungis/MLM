@@ -2384,6 +2384,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             if repository.has_duplicate_id(mam_id):
                 return RedirectResponse("/library?view=duplicates", status_code=303)
             raise HTTPException(409, "torrent could not be added to the queue")
+        if hasattr(app.state, "services"):
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
         return RedirectResponse("/records/selected_torrents", status_code=303)
 
     @app.post("/search/series/select")
@@ -2461,6 +2464,25 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def remove_selected(mam_id: int = Form(...)) -> RedirectResponse:
         repository.delete_selected(mam_id)
         return RedirectResponse("/records/selected_torrents", status_code=303)
+
+    @app.post("/selected/download")
+    async def download_selected(mam_id: int = Form(...)) -> RedirectResponse:
+        repository.force_selected(mam_id)
+        if hasattr(app.state, "services"):
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+        return RedirectResponse(
+            "/records/selected_torrents?downloading=1", status_code=303
+        )
+
+    @app.post("/selected/download-all")
+    async def download_all_selected() -> RedirectResponse:
+        if hasattr(app.state, "services"):
+            asyncio.create_task(app.state.services.trigger("downloader"))
+            snapshot_cache["expires"] = 0.0
+        return RedirectResponse(
+            "/records/selected_torrents?triggered=1", status_code=303
+        )
 
     @app.get("/health")
     async def health() -> dict:

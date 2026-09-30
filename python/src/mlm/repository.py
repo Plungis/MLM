@@ -917,6 +917,9 @@ class Repository:
         selected = dict(selected)
         selected["hash"] = torrent_hash
         selected["started_at"] = now
+        selected["last_check_status"] = "started"
+        selected["last_check_reason"] = "In qBittorrent"
+        selected["last_check_at"] = now
         torrent = {
             "id": torrent_hash,
             "id_is_hash": True,
@@ -993,6 +996,46 @@ class Repository:
                 (canonical_json({"Grabber": selected["mam_id"]}),),
             )
 
+    def record_grab_deferral(
+        self,
+        selected: dict[str, Any],
+        reason: str,
+        details: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        selected["last_check_status"] = "deferred"
+        selected["last_check_reason"] = reason
+        selected["last_check_details"] = details
+        selected["last_check_at"] = now
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                """UPDATE selected_torrents
+                   SET payload_json = ?
+                   WHERE mam_id = ?""",
+                (canonical_json(selected), selected["mam_id"]),
+            )
+
+    def force_selected(self, mam_id: int) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with connect(self.path) as connection, connection:
+            row = connection.execute(
+                "SELECT payload_json FROM selected_torrents WHERE mam_id = ?",
+                (mam_id,),
+            ).fetchone()
+            if not row:
+                return False
+            payload = json.loads(row[0])
+            payload["force_download"] = True
+            payload["last_check_status"] = "forced"
+            payload["last_check_reason"] = "Manual force-download requested"
+            payload.pop("last_check_details", None)
+            payload["last_check_at"] = now
+            connection.execute(
+                "UPDATE selected_torrents SET payload_json = ? WHERE mam_id = ?",
+                (canonical_json(payload), mam_id),
+            )
+            return True
+
     def record_grab_error(
         self,
         selected: dict[str, Any],
@@ -1001,6 +1044,9 @@ class Repository:
         context: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
+        selected["last_check_status"] = "error"
+        selected["last_check_reason"] = str(error)
+        selected["last_check_at"] = now
         identifier = {"Grabber": selected["mam_id"]}
         row = {
             "id": identifier,
@@ -1010,7 +1056,13 @@ class Repository:
             "context": context or {},
             "created_at": now,
         }
-        with connect(self.path) as connection:
+        with connect(self.path) as connection, connection:
+            connection.execute(
+                """UPDATE selected_torrents
+                   SET payload_json = ?
+                   WHERE mam_id = ?""",
+                (canonical_json(selected), selected["mam_id"]),
+            )
             connection.execute(
                 """INSERT INTO errored_torrents
                    (id_json, created_at_json, payload_json) VALUES (?, ?, ?)

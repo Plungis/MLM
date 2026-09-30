@@ -177,8 +177,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b68"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b68"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b69"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b69"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -284,7 +284,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b68" in spender_config.text
+    assert "0.5.0b69" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -567,6 +567,61 @@ def test_errors_explain_recovery_and_support_retry_and_dismiss(
         "Torrents, downloads, files, and job history were not changed"
         in dismissal_confirmation.text
     )
+
+
+def test_selected_torrents_page_actions_and_deferral_visibility(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('mam_id = ""\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    selected = {
+        "mam_id": 42,
+        "goodreads_id": None,
+        "hash": None,
+        "dl_link": "private-hash",
+        "unsat_buffer": 0,
+        "wedge_buffer": 0,
+        "cost": "Ratio",
+        "category": "Audiobooks",
+        "tags": [],
+        "title_search": "test queued book",
+        "meta": {"mam_id": 42, "title": "Test Queued Book", "authors": ["Author"]},
+        "grabber": "test",
+        "created_at": "2025-01-01T00:00:00Z",
+        "started_at": None,
+        "removed_at": None,
+    }
+    repository.add_selected(selected)
+    repository.record_grab_deferral(
+        selected, "Ratio reserve", "Needs 500 MB; buffer has 0 B"
+    )
+
+    app = create_app(config_path, database)
+    client = TestClient(app)
+
+    page = client.get("/records/selected_torrents")
+    assert page.status_code == 200
+    assert "Run checks now" in page.text
+    assert "Deferred" in page.text
+    assert "Ratio reserve" in page.text
+    assert "Needs 500 MB; buffer has 0 B" in page.text
+    assert 'action="/selected/download"' in page.text
+    assert 'action="/selected/download-all"' in page.text
+
+    # Test clicking Download Now
+    download_res = client.post(
+        "/selected/download", data={"mam_id": "42"}, follow_redirects=False
+    )
+    assert download_res.status_code == 303
+    row = repository.table_rows("selected_torrents")[0]
+    assert row["force_download"] is True
+
+    # Test download-all trigger
+    all_res = client.post("/selected/download-all", follow_redirects=False)
+    assert all_res.status_code == 303
 
 
 def test_organizer_copy_failure_is_visible_on_dashboard_and_errors(

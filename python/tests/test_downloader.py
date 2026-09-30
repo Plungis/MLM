@@ -446,3 +446,86 @@ def test_wedge_failure_fallback_still_obeys_ratio_reserve(tmp_path: Path) -> Non
     assert result.skip_reasons == {"ratio_buffer": 1}
     assert qbit.added == []
     assert repository.pending_selected()[0]["mam_id"] == 42
+
+
+def test_manual_download_bypasses_ratio_reserve_and_slot_cap(tmp_path: Path) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    repository.add_selected(
+        {
+            "mam_id": 99,
+            "goodreads_id": None,
+            "hash": None,
+            "dl_link": "manual-hash",
+            "unsat_buffer": 0,
+            "wedge_buffer": None,
+            "cost": "Ratio",
+            "category": None,
+            "tags": [],
+            "title_search": "manual book",
+            "meta": {"mam_id": 99, "title": "Manual Book", "size": 50_000},
+            "grabber": "manual",
+            "created_at": "2025-01-01T00:00:00Z",
+            "started_at": None,
+            "removed_at": None,
+            "force_download": True,
+        }
+    )
+    mam = FakeMam()
+
+    async def no_slots_and_no_buffer() -> dict:
+        user = await FakeMam.user_info(mam)
+        user["unsat"] = {"limit": 1, "count": 1}
+        user["uploaded_bytes"] = 0
+        user["downloaded_bytes"] = 10_000
+        return user
+
+    mam.user_info = no_slots_and_no_buffer  # type: ignore[method-assign]
+    qbit = FakeQbit()
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(mam_id="cookie", min_ratio=2),
+            repository,
+            mam,
+            qbit,
+        )
+    )
+
+    assert result.downloaded == 1
+    assert result.skipped == 0
+    assert len(qbit.added) == 1
+    assert repository.pending_selected() == []
+
+
+def test_download_job_records_deferral_status_on_selected_record(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    add_selected(repository, size=6_000)
+    qbit = FakeQbit()
+
+    result = asyncio.run(
+        grab_selected_torrents(
+            Config(mam_id="cookie", min_ratio=2),
+            repository,
+            FakeMam(),
+            qbit,
+        )
+    )
+
+    assert result.skipped == 1
+    rows = repository.table_rows("selected_torrents")
+    assert len(rows) == 1
+    assert rows[0]["last_check_status"] == "deferred"
+    assert rows[0]["last_check_reason"] == "Ratio reserve"
+    assert "Needs 6000 bytes" in rows[0]["last_check_details"]
+
+    # Now verify force_selected clears the deferral and enables force_download
+    assert repository.force_selected(42) is True
+    updated_rows = repository.table_rows("selected_torrents")
+    assert updated_rows[0]["force_download"] is True
+    assert updated_rows[0]["last_check_status"] == "forced"

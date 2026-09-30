@@ -24,9 +24,26 @@
       {% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}
     </span>
     {% endif %}
-    {% if table == "selected_torrents" %}<a class="button primary" href="/search">Add release</a>{% endif %}
+    {% if table == "selected_torrents" %}
+    <form action="/selected/download-all" method="post" style="display:inline;">
+      <button class="button secondary" type="submit">Run checks now</button>
+    </form>
+    <a class="button primary" href="/search">Add release</a>
+    {% endif %}
   </div>
 </header>
+
+{% if table == "selected_torrents" %}
+  {% if not config.get("qbittorrent") %}
+  <div class="panel" style="margin-bottom: 1.25rem; border-color: rgba(234, 179, 8, 0.4); background: rgba(234, 179, 8, 0.08);">
+    <strong>qBittorrent is not configured:</strong> No <code>[[qbittorrent]]</code> client was found in your <code>config.toml</code>. Torrents will remain in "Awaiting checks" until a qBittorrent client is added to the configuration.
+  </div>
+  {% elif jobs.get("downloader") and jobs.get("downloader").last_error %}
+  <div class="panel" style="margin-bottom: 1.25rem; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.08);">
+    <strong>Downloader Job Error:</strong> {{ jobs.get("downloader").last_error }}
+  </div>
+  {% endif %}
+{% endif %}
 
 <section class="panel">
   {% if rows %}
@@ -43,19 +60,37 @@
             {% if row.get("id") %} · ID {{ row.get("id") }}{% endif %}
             {% if meta.get("authors") %} · {{ meta.get("authors") | join(", ") }}{% endif %}
           </span>
+          {% if table == "selected_torrents" and row.get("last_check_reason") and not row.get("started_at") %}
+          <div class="record-note" style="color: var(--warning, #f59e0b); font-size: 0.85rem; margin-top: 0.25rem;">
+            <strong>Check Note:</strong> {{ row.get("last_check_reason") }}{% if row.get("last_check_details") %} ({{ row.get("last_check_details") }}){% endif %}
+          </div>
+          {% endif %}
           {% if table in ["lists", "list_items"] and row.get("last_result") %}
           <span class="record-note">{{ row.get("last_result") }}</span>
           {% endif %}
         </div>
         <div class="record-actions">
-          {% if table == "selected_torrents" %}
-          <form action="/selected/remove" method="post">
+          {% if table == "selected_torrents" and not row.get("started_at") %}
+          <form action="/selected/download" method="post" style="display:inline;">
+            <input type="hidden" name="mam_id" value="{{ row.mam_id }}">
+            <button class="button primary" type="submit">Download now</button>
+          </form>
+          <form action="/selected/remove" method="post" style="display:inline;">
+            <input type="hidden" name="mam_id" value="{{ row.mam_id }}">
+            <button class="danger" type="submit">Remove</button>
+          </form>
+          {% elif table == "selected_torrents" %}
+          <form action="/selected/remove" method="post" style="display:inline;">
             <input type="hidden" name="mam_id" value="{{ row.mam_id }}">
             <button class="danger" type="submit">Remove</button>
           </form>
           {% endif %}
           {% if table == "selected_torrents" and row.get("started_at") %}
           <span class="status running">In qBittorrent</span>
+          {% elif table == "selected_torrents" and row.get("last_check_status") == "deferred" %}
+          <span class="status warning" title="{{ row.get('last_check_details') }}">Deferred</span>
+          {% elif table == "selected_torrents" and row.get("last_check_status") == "error" %}
+          <span class="status error" title="{{ row.get('last_check_reason') }}">Error</span>
           {% elif table == "selected_torrents" %}
           <span class="status waiting">Awaiting checks</span>
           {% elif table == "list_items" and row.get("source_status") == "removed" %}

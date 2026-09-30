@@ -66,9 +66,24 @@ async def run_autograbber(
     index: int = 0,
 ) -> int:
     user = await mam.user_info()
-    unsat = user.get("unsat", {})
-    site_limit = max(0, int(unsat.get("limit", 0)))
-    used = max(0, int(unsat.get("count", 0)))
+    raw_unsat = user.get("unsat")
+    if not isinstance(raw_unsat, dict):
+        raw_unsat = user.get("unsats") or user.get("unsatisfied")
+    if isinstance(raw_unsat, dict):
+        limit_val = raw_unsat.get("limit")
+        site_limit = max(0, int(limit_val)) if limit_val is not None else 0
+        used = max(0, int(raw_unsat.get("count") or 0))
+    elif isinstance(raw_unsat, (int, str)) and str(raw_unsat).isdigit():
+        site_limit = 0
+        used = int(raw_unsat)
+    else:
+        site_limit = 0
+        used = 0
+    if site_limit == 0:
+        if config.max_unsat_slots is not None:
+            site_limit = config.max_unsat_slots
+        else:
+            site_limit = max(150, used + 10)
     slot_buffer = int(rule.get("unsat_buffer", config.unsat_buffer))
     slot_cap = max(0, site_limit - slot_buffer)
     if config.max_unsat_slots is not None:
@@ -161,6 +176,7 @@ async def select_row(
         "created_at": datetime.now(UTC).isoformat(),
         "started_at": None,
         "removed_at": None,
+        "force_download": bool(rule.get("force_download") or force_download),
     }
     if duplicate:
         if not rule.get("dry_run", False):

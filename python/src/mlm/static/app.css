@@ -971,6 +971,11 @@ h3 {
   color: var(--warning);
 }
 
+.status.warning {
+  border-color: rgba(230, 238, 112, 0.4);
+  color: var(--warning);
+}
+
 .status.waiting {
   border-color: var(--line-strong);
   color: var(--muted);
