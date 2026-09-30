@@ -83,3 +83,42 @@ def test_wedge_http_failure_keeps_status_and_endpoint() -> None:
             assert caught.value.context["endpoint"].endswith("?tid=42&fl")
 
     asyncio.run(run())
+
+
+def test_check_mam_id_accepts_json_api_session_code_200() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='{"code":200,"msg":"Session type - API session"}',
+            headers={"content-type": "text/html; charset=UTF-8"},
+        )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://www.myanonamouse.net",
+            transport=httpx.MockTransport(handler),
+        ) as http:
+            mam = MamClient("cookie", client=http)
+            await mam.check_mam_id()
+
+    asyncio.run(run())
+
+
+def test_check_mam_id_rejects_error_code_with_detail() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='{"code":403,"msg":"Invalid session"}',
+            headers={"content-type": "application/json"},
+        )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            base_url="https://www.myanonamouse.net",
+            transport=httpx.MockTransport(handler),
+        ) as http:
+            mam = MamClient("cookie", client=http)
+            with pytest.raises(Exception, match="Invalid session"):
+                await mam.check_mam_id()
+
+    asyncio.run(run())

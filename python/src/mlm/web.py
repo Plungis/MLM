@@ -34,7 +34,7 @@ from .config import (
 )
 from .database import ensure_database
 from .error_guidance import error_guidance
-from .mam import authenticated_mam_client
+from .mam import MamClient, MamError, authenticated_mam_client
 from .modules.absidekick import SOURCE_VERSION, ABSidekickService
 from .modules.absidekick.core import ABSAPIError
 from .modules.heavymlm.abs_sync import sync_audiobookshelf_library
@@ -116,11 +116,24 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        mam = await authenticated_mam_client(
-            config.mam_id,
-            stored_mam_id=repository.config_value("mam_id"),
-            cookie_store=lambda value: repository.set_config_value("mam_id", value),
-        )
+        mam: MamClient
+        try:
+            mam = await authenticated_mam_client(
+                config.mam_id,
+                stored_mam_id=repository.config_value("mam_id"),
+                cookie_store=lambda value: repository.set_config_value("mam_id", value),
+            )
+        except MamError as error:
+            repository.log_activity(
+                "mam",
+                (
+                    f"MAM authentication failed during startup: {error}. "
+                    "Check mam_id in Settings."
+                ),
+                level="error",
+            )
+            mam = MamClient(config.mam_id or "unauthenticated")
+
         state = ServiceState(config, repository, mam, absidekick=absidekick)
         app.state.services = state
         try:

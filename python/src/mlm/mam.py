@@ -99,7 +99,11 @@ class MamClient:
                 result = parsed
         except ValueError:
             pass
-        success = result is not None and result.get("Success") is True
+        success = result is not None and (
+            result.get("Success") is True
+            or result.get("code") == 200
+            or "session type" in str(result.get("msg", "")).casefold()
+        )
         if not success:
             success = (
                 re.search(
@@ -110,11 +114,19 @@ class MamClient:
                 is not None
             )
         if not success:
-            success = text.strip().casefold().startswith("session type - api session")
+            success = (
+                "session type" in text.strip().casefold()
+                or '"code":200' in text.replace(" ", "")
+            )
         if not success:
             detail = None
             if result is not None:
-                detail = result.get("Error") or result.get("Message")
+                detail = (
+                    result.get("Error")
+                    or result.get("error")
+                    or result.get("Message")
+                    or result.get("msg")
+                )
             if detail:
                 raise MamError(f"session check rejected the mam_id cookie: {detail}")
             content_type = response.headers.get("content-type", "unknown")
