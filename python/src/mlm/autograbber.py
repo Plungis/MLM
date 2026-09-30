@@ -123,16 +123,22 @@ async def select_row(
     preferred = _preferred_types(config, meta["media_type"])
     preference = _preference(meta["filetypes"], preferred)
     if preference is None:
-        return False
+        if rule.get("allow_any_format") or rule.get("name", "").startswith(
+            ("manual", "series:", "request:")
+        ):
+            preference = len(preferred)
+        else:
+            return False
     duplicate = False
-    for existing in repository.records_with_title(title_search):
-        old_meta = existing.get("meta", {})
-        if not metadata_matches(meta, old_meta):
-            continue
-        old_preference = _preference(old_meta.get("filetypes", []), preferred)
-        if old_preference is not None and old_preference <= preference:
-            duplicate = True
-            break
+    if not rule.get("allow_duplicate", False):
+        for existing in repository.records_with_title(title_search):
+            old_meta = existing.get("meta", {})
+            if not metadata_matches(meta, old_meta):
+                continue
+            old_preference = _preference(old_meta.get("filetypes", []), preferred)
+            if old_preference is not None and old_preference <= preference:
+                duplicate = True
+                break
     category, tags = _tagging(config, row)
     candidate = {
         "mam_id": torrent_id,

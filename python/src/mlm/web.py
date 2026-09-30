@@ -808,7 +808,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 app.state.services.config,
                 repository,
                 raw_row,
-                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+                {
+                    "cost": "ratio",
+                    "name": f"series:{cleaned_series}",
+                    "allow_any_format": True,
+                },
             )
             if selected:
                 queued_count += 1
@@ -1910,6 +1914,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     if automatic
                     else f"request:{request_id}"
                 ),
+                "allow_any_format": True,
             },
         )
         if not selected:
@@ -2362,12 +2367,17 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             app.state.services.config,
             repository,
             row,
-            {"cost": "ratio", "name": "manual"},
+            {
+                "cost": "ratio",
+                "name": "manual",
+                "allow_any_format": True,
+                "allow_duplicate": True,
+            },
         )
         if not selected and not repository.has_mam_id(mam_id):
-            raise HTTPException(
-                409, "torrent did not match a configured preferred format"
-            )
+            if repository.has_duplicate_id(mam_id):
+                return RedirectResponse("/library?view=duplicates", status_code=303)
+            raise HTTPException(409, "torrent could not be added to the queue")
         return RedirectResponse("/records/selected_torrents", status_code=303)
 
     @app.post("/search/series/select")
@@ -2395,7 +2405,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 app.state.services.config,
                 repository,
                 book["raw_row"],
-                {"cost": "ratio", "name": f"series:{cleaned_series}"},
+                {
+                    "cost": "ratio",
+                    "name": f"series:{cleaned_series}",
+                    "allow_any_format": True,
+                },
             )
             if selected:
                 queued_count += 1

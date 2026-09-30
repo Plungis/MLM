@@ -177,8 +177,8 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert 'id="policySummary"' in absidekick.text
     assert 'id="useEmbeddedFileMetadata"' in absidekick.text
     assert 'id="repairSeries"' in absidekick.text
-    assert 'src="/static/absidekick.js?v=0.5.0b66"' in absidekick.text
-    assert 'href="/static/absidekick.css?v=0.5.0b66"' in absidekick.text
+    assert 'src="/static/absidekick.js?v=0.5.0b67"' in absidekick.text
+    assert 'href="/static/absidekick.css?v=0.5.0b67"' in absidekick.text
     absidekick_script = client.get("/static/absidekick.js")
     assert absidekick_script.status_code == 200
     assert 'api("/api/review/search"' in absidekick_script.text
@@ -284,7 +284,7 @@ def test_dashboard_and_health_on_fresh_database(tmp_path: Path) -> None:
     assert "MAM-Spender configuration" in spender_config.text
     assert "Import old config.json" in spender_config.text
     assert "MAM-Spender Web Edition v1.4.0" in spender_config.text
-    assert "0.5.0b66" in spender_config.text
+    assert "0.5.0b67" in spender_config.text
     assert "What should the spender buy?" in spender_config.text
     assert "Module theme" not in spender_config.text
     assert 'href="/suite/mam-spender/config"' in spender_config.text
@@ -1224,3 +1224,43 @@ def test_library_abs_view_and_sync(tmp_path: Path, monkeypatch) -> None:
     assert "Unsouled" in abs_view_res.text
     assert "Soulsmith" in abs_view_res.text
     assert "ABS #item-abc" in abs_view_res.text
+
+
+def test_search_select_allows_unconfigured_format(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    # audio_types only has m4b
+    config.write_text('mam_id = ""\naudio_types = ["m4b"]\n', encoding="utf-8")
+    database = tmp_path / "data.sqlite"
+    app = create_app(config, database)
+    services = FakeServices(load_config(config))
+    repo = Repository(database)
+
+    # Release is flac (not in audio_types)
+    flac_release = {
+        "id": 999,
+        "title": "FLAC Audiobook",
+        "filetype": "flac",
+        "mediatype": 1,
+        "main_cat": 13,
+        "size": "500 MiB",
+        "dl": "https://example.com/dl/999",
+    }
+
+    class FakeMam(MamClient):
+        def __init__(self):
+            pass
+
+        async def get_torrent_info_by_id(self, tid: int):
+            return flac_release if tid == 999 else None
+
+    services.mam = FakeMam()
+    app.state.services = services
+    client = TestClient(app)
+
+    response = client.post(
+        "/search/select",
+        data={"mam_id": 999},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert repo.has_pending_mam_id(999) is True
