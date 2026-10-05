@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div><p class="eyebrow">HeavyMLM / Requests</p><h1>Request Inbox</h1><p class="subtitle">Review incoming book requests from friends and family, and view automatically approved items.</p></div>
+  <div class="page-meta"><a class="button primary" href="/request" target="_blank" rel="noreferrer">Open request portal ↗</a><span class="status waiting">{{ request_tracking.get("pending", 0) }} pending</span><span class="chip">{{ request_tracking.get("total", 0) }} total</span></div>
+</header>
+
+{% if approved %}<div class="flash success"><span>Request approved! Added to your download queue.</span><span class="status ok">Approved</span></div>{% endif %}
+{% if rejected %}<div class="flash"><span>Request has been rejected.</span><span class="status waiting">Closed</span></div>{% endif %}
+{% if error %}<div class="flash error-text"><span>{{ error }}</span><span class="status error">Not approved</span></div>{% endif %}
+
+<nav class="request-inbox-tabs" aria-label="Request status">
+  {% for value,label in [("pending","Pending"),("approved","Approved"),("fulfilled","Already available"),("rejected","Rejected"),("all","All")] %}<a class="button{% if selected_status == value %} primary{% endif %}" href="/requests?status={{ value }}">{{ label }}</a>{% endfor %}
+</nav>
+
+<div class="callout tip" style="margin-bottom: 20px;">
+  <span class="callout-icon">💡</span>
+  <div>
+    <strong>Safe Remote Sharing:</strong> Learn how to safely expose the request portal to family and friends with custom domains, named accounts, and rate limiting in the <a href="/tutorial#step-5">Setup Guide</a>.
+  </div>
+</div>
+
+{% if rows %}<section class="request-admin-grid">
+  {% for row in rows %}
+  <article class="panel request-admin-card">
+    <header class="panel-header"><div><span class="status {% if row.status == 'pending' %}waiting{% elif row.status in ['approved','fulfilled'] %}ok{% else %}error{% endif %}">{{ row.status }}</span><h2>{{ row.release.title }}</h2><p>{% if row.release.authors %}{{ row.release.authors | join(", ") }}{% else %}Unknown author{% endif %}</p></div><span class="hm-release-id">MaM #{{ row.mam_id }}</span></header>
+    <div class="panel-body">
+      <div class="request-admin-facts"><span>{{ row.release.filetypes | join(" / ") or "Unknown format" }}</span><span>{{ row.release.category }}</span><span>{{ row.release.size }}</span><span>{{ row.release.seeders }} seeders</span></div>
+      {% if row.release.series %}<p><strong>Series:</strong> {% for series in row.release.series %}{{ series.name }}{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% endfor %}</p>{% endif %}
+      <div class="requester-block"><strong>{{ row.requester_name or row.requester_username or "Anonymous requester" }}</strong>{% if row.requester_username %}<span>Account: {{ row.requester_username }}{% if "auto_approve" in row.requester_permissions %} · trusted for auto-approval{% endif %}</span>{% endif %}{% if row.requester_contact %}<span>{{ row.requester_contact }}</span>{% endif %}{% if row.note %}<p>{{ row.note }}</p>{% endif %}</div>
+      {% if row.source.kind == 'goodreads' %}<p><a href="{{ row.source.url }}" target="_blank" rel="noreferrer">Open Goodreads source</a></p>{% endif %}
+      {% if row.decision_note %}<div class="security-note"><strong>Decision{% if row.decision_by %} by {{ row.decision_by }}{% endif %}:</strong> {{ row.decision_note }}</div>{% endif %}
+    </div>
+    {% if row.status == 'pending' %}<footer class="request-admin-actions">
+      <form action="/requests/approve" method="post"><input type="hidden" name="request_id" value="{{ row.id }}"><button class="primary" type="submit">Approve and schedule</button></form>
+      <form action="/requests/reject" method="post"><input type="hidden" name="request_id" value="{{ row.id }}"><input type="text" name="decision_note" maxlength="500" placeholder="Optional rejection reason"><button type="submit">Reject</button></form>
+    </footer>{% endif %}
+  </article>
+  {% endfor %}
+</section>{% else %}<section class="panel empty-state"><div><strong>No {{ selected_status }} requests</strong><p>New portal submissions will appear here.</p></div></section>{% endif %}
+{% endblock %}

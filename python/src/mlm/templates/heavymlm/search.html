@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / manual acquisition</p>
+    <h1>Search MaM</h1>
+    <p class="subtitle">Compare authors, editions, formats, and freeleech status before adding a release or entire series to the queue.</p>
+  </div>
+  {% if rows %}
+  <div class="page-meta">
+    <span class="chip">{{ rows | length }} filtered match{% if rows | length != 1 %}es{% endif %}</span>
+    <span class="chip">Scanned {{ scanned }}{% if found > scanned %} of {{ found }}{% endif %} MaM releases</span>
+  </div>
+  {% endif %}
+</header>
+
+{% if series_queued is not none %}
+<div class="flash success" role="status">
+  <span>
+    {% if series_queued > 0 %}
+      Queued {{ series_queued }} book{% if series_queued != 1 %}s{% endif %} for series "{{ series_name }}".
+      {% if series_existing > 0 %}({{ series_existing }} book{% if series_existing != 1 %}s{% endif %} already in your library or queue).{% endif %}
+    {% elif series_existing > 0 %}
+      All {{ series_existing }} book{% if series_existing != 1 %}s{% endif %} in series "{{ series_name }}" are already in your library or queue!
+    {% else %}
+      No matching books found on MaM for series "{{ series_name }}".
+    {% endif %}
+  </span>
+  <span class="status ok">Series Updated</span>
+</div>
+{% endif %}
+
+<section class="panel search-panel">
+  <div class="panel-body">
+    <form class="hm-filter-form" method="get" role="search">
+      <div class="hm-filter-lead">
+        <label>
+          <span>Any keywords</span>
+          <input type="search" name="q" value="{{ filters.q }}" placeholder="Title, author, narrator, ISBN…" autofocus>
+        </label>
+        <button class="primary" type="submit">Apply all filters</button>
+        <a class="button" href="/search">Clear</a>
+      </div>
+      <div class="hm-filter-grid">
+        <label><span>Title contains</span><input type="text" name="title" value="{{ filters.title }}" placeholder="The Eye of the Bedlam Bride"></label>
+        <label><span>Author contains</span><input type="text" name="author" value="{{ filters.author }}" placeholder="Matt Dinniman"></label>
+        <label><span>Series contains</span><input type="text" name="series" value="{{ filters.series }}" placeholder="Dungeon Crawler Carl"></label>
+        <label><span>Narrator contains</span><input type="text" name="narrator" value="{{ filters.narrator }}" placeholder="Jeff Hays"></label>
+        <label>
+          <span>File type</span>
+          <select name="filetype">
+            {% for value,label in [("","Any format"),("m4b","M4B"),("mp3","MP3"),("m4a","M4A"),("flac","FLAC"),("epub","EPUB"),("pdf","PDF"),("mobi","MOBI"),("azw3","AZW3"),("cbz","CBZ"),("cbr","CBR")] %}
+            <option value="{{ value }}"{% if filters.filetype == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Category</span>
+          <select name="category">
+            {% for value,label in [("","Any category"),("audiobook","Audiobook"),("ebook","Ebook"),("comic","Comic book"),("manga","Manga"),("musicology","Musicology"),("radio","Radio")] %}
+            <option value="{{ value }}"{% if filters.category == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label><span>Language</span><input type="text" name="language" value="{{ filters.language }}" placeholder="English"></label>
+        <label>
+          <span>Download cost</span>
+          <select name="availability">
+            {% for value,label in [("","Any cost"),("freeleech","Any freeleech"),("global","Global freeleech"),("personal","Personal freeleech"),("vip","VIP freeleech"),("ratio","Ratio download")] %}
+            <option value="{{ value }}"{% if filters.availability == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label><span>Minimum seeders</span><input type="number" name="min_seeders" min="0" value="{{ filters.min_seeders }}"></label>
+        <label>
+          <span>Sort results</span>
+          <select name="sort">
+            {% for value,label in [("relevance","MaM relevance"),("title","Title"),("author","Author"),("series","Series"),("filetype","File type"),("newest","Newest"),("seeders","Most seeders"),("size_asc","Smallest"),("size_desc","Largest")] %}
+            <option value="{{ value }}"{% if filters.sort == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <p class="hm-filter-hint"><strong>AND policy:</strong> every filled field must match. Example: Author = Matt Dinniman + Series = Dungeon Crawler Carl + File type = M4B.</p>
+    </form>
+  </div>
+</section>
+
+{% if filters.series %}
+<section class="panel series-banner-panel" style="margin-bottom: 18px;">
+  <div class="panel-body split-actions">
+    <div>
+      <p class="eyebrow" style="margin: 0;">Series Collection</p>
+      <h2 style="margin: 4px 0;">📚 Series: {{ filters.series }}</h2>
+      <p class="muted" style="margin: 0;">Grab all available volumes and missing books in this series at once.</p>
+    </div>
+    <form action="/search/series/select" method="post">
+      <input type="hidden" name="series_name" value="{{ filters.series }}">
+      <input type="hidden" name="media_type" value="{{ filters.category }}">
+      <input type="hidden" name="filetype" value="{{ filters.filetype }}">
+      <button class="button primary" type="submit">Download Entire Series</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+
+{% if error %}
+<div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Failed</span></div>
+{% endif %}
+
+{% if rows %}
+<section class="hm-search-results" aria-label="MaM search results">
+  {% for row in rows %}
+  <article class="hm-release-card">
+    <header class="hm-release-header">
+      <div class="hm-availability">
+        {% for badge in row.availability %}<span class="availability-badge {{ badge.tone }}">{{ badge.label }}</span>{% endfor %}
+      </div>
+      <span class="hm-release-id">MaM #{{ row.id }}</span>
+    </header>
+
+    <div class="hm-release-main">
+      <div class="hm-release-copy">
+        <h2>{{ row.title }}</h2>
+        {% if row.authors %}
+        <p class="hm-authors"><span>by</span> {{ row.authors | join(", ") }}</p>
+        {% else %}
+        <p class="hm-authors muted">Author information unavailable</p>
+        {% endif %}
+
+        {% if row.series %}
+        <p class="hm-secondary"><strong>Series</strong>
+          {% for series in row.series %}
+            <a href="/search?series={{ series.name | urlencode }}" class="series-link" title="Search all books in {{ series.name }}">{{ series.name }}</a>{% if series.entries %} #{{ series.entries | join(", ") }}{% endif %}{% if not loop.last %} · {% endif %}
+          {% endfor %}
+        </p>
+        {% endif %}
+        {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
+      </div>
+
+      <div class="hm-card-actions">
+        <form class="hm-add-form" action="/search/select" method="post">
+          <input type="hidden" name="mam_id" value="{{ row.id }}">
+          <button class="primary" type="submit">Add to queue</button>
+        </form>
+        {% if row.series %}
+        <form class="hm-add-form" action="/search/series/select" method="post">
+          <input type="hidden" name="series_name" value="{{ row.series[0].name }}">
+          <input type="hidden" name="media_type" value="{{ filters.category }}">
+          <input type="hidden" name="filetype" value="{{ filters.filetype }}">
+          <button class="button secondary" type="submit" title="Download all books in {{ row.series[0].name }}">Grab Series</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <dl class="hm-release-facts">
+      <div><dt>Format</dt><dd>{% if row.filetypes %}{{ row.filetypes | join(" / ") }}{% else %}Unknown{% endif %}</dd></div>
+      <div><dt>Category</dt><dd>{{ row.category }}</dd></div>
+      <div><dt>Size</dt><dd>{{ row.size }}</dd></div>
+      <div><dt>Language</dt><dd>{{ row.language }}</dd></div>
+      <div><dt>Files</dt><dd>{{ row.num_files or "—" }}</dd></div>
+    </dl>
+
+    <footer class="hm-release-footer">
+      <div class="hm-peer-stats">
+        <span><strong>{{ row.seeders }}</strong> seeders</span>
+        <span><strong>{{ row.leechers }}</strong> leechers</span>
+        <span><strong>{{ row.snatched }}</strong> snatched</span>
+      </div>
+      {% if row.uploader or row.uploaded_at %}
+      <span class="hm-upload-meta">{% if row.uploader %}Uploaded by {{ row.uploader }}{% endif %}{% if row.uploader and row.uploaded_at %} · {% endif %}{{ row.uploaded_at }}</span>
+      {% endif %}
+    </footer>
+  </article>
+  {% endfor %}
+</section>
+{% elif searched and not error %}
+<section class="panel empty-state">
+  <div><strong>No releases passed every filter</strong><p>Broaden one field at a time. All filled filters use AND logic.</p></div>
+</section>
+{% else %}
+<section class="panel empty-state">
+  <div><strong>Ready to search</strong><p>Enter a title, author, narrator, or identifier above.</p></div>
+</section>
+{% endif %}
+{% endblock %}

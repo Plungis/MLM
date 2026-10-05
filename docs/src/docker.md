@@ -1,12 +1,21 @@
 # Docker
 
-The recommended installation method on anything but Windows is to use docker compose.
+Docker Compose is the recommended installation method.
 
-Example docker compose file:
+Clone the repository and run:
+
+```shell
+docker compose up --build -d
+```
+
+The included Compose file mounts `./config` and `./data`. A larger example:
+
 ```yaml
 services:
   mlm:
-    image: ghcr.io/stirlingmouse/mlm:main 
+    build: .
+    ports:
+      - "3157:3157"
     volumes:
       - ./config:/config # folder for the config file, place it in config/config.toml
       - ./data:/data # folder where mlm will keep a database

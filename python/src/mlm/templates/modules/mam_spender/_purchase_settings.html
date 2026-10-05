@@ -1,0 +1,28 @@
+<form class="panel panel-body spender-settings" data-spender-settings>
+  <p class="eyebrow">Purchase policy</p>
+  <h2>What should the spender buy?</h2>
+  <label class="toggle-setting"><input type="checkbox" name="buy_vip" {% if spender.settings.buy_vip %}checked{% endif %}><span><strong>Renew maximum VIP</strong><small>Purchase when VIP has 83 days or less remaining.</small></span></label>
+  <label class="toggle-setting"><input type="checkbox" name="buy_upload_credit" {% if spender.settings.buy_upload_credit %}checked{% endif %}><span><strong>Buy upload credit</strong><small>50 GiB per 25,000 points, capped at 150 GiB per run.</small></span></label>
+  <label class="toggle-setting"><input type="checkbox" name="fl_only" {% if spender.settings.fl_only %}checked{% endif %}><span><strong>Freeleech Wedges only</strong><small>Never purchase upload credit during normal scheduled runs.</small></span></label>
+  <label class="toggle-setting"><input type="checkbox" name="alternate_fl_upload" {% if spender.settings.alternate_fl_upload %}checked{% endif %}><span><strong>Alternate wedge and upload</strong><small>Switch the target after each confirmed purchase.</small></span></label>
+
+  <div class="form-grid two">
+    <div class="spender-number-setting">
+      <label><span>Points reserve</span><input type="number" name="points_buffer" min="0" max="25000" step="100" value="{{ spender.settings.points_buffer }}"><small>Always left untouched, up to 25,000.</small></label>
+      <div class="spender-setting-presets" aria-label="Points reserve presets">
+        {% for value,label in [(10000,"10k"),(15000,"15k"),(20000,"20k"),(25000,"25k")] %}<button class="chip" type="button" data-spender-setting-target="points_buffer" data-spender-setting-value="{{ value }}">{{ label }}</button>{% endfor %}
+      </div>
+    </div>
+    <div class="spender-number-setting">
+      <label><span>Scan interval (minutes)</span><input type="number" name="next_run_delay_minutes" min="2" step="1" value="{{ spender.settings.next_run_delay_minutes }}"><small>Minimum two minutes.</small></label>
+      <div class="spender-setting-presets" aria-label="Scan interval presets">
+        {% for value,label in [(2,"2m"),(60,"1h"),(360,"6h"),(720,"12h"),(1440,"24h")] %}<button class="chip" type="button" data-spender-setting-target="next_run_delay_minutes" data-spender-setting-value="{{ value }}">{{ label }}</button>{% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="spender-setting-actions">
+    <button class="button primary" type="submit">Save and apply</button>
+    <button class="button" type="button" data-spender-action="run-fl">Run one wedge-only scan</button>
+  </div>
+  <p class="muted" data-spender-alternate>Next alternating target: {{ spender.settings.alternate_next_purchase | replace('_', ' ') }}.</p>
+</form>
