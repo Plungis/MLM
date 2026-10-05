@@ -34,6 +34,7 @@ from .config import (
 )
 from .database import ensure_database
 from .error_guidance import error_guidance
+from .library import check_record_hardlink_status, test_all_library_hardlinks
 from .mam import MamClient, MamError, authenticated_mam_client
 from .modules.absidekick import SOURCE_VERSION, ABSidekickService
 from .modules.absidekick.core import ABSAPIError
@@ -48,6 +49,7 @@ from .modules.heavymlm.series import (
     resolve_series_selection,
 )
 from .modules.mam_spender import default_public_state
+from .qbittorrent import QbitClient
 from .repository import Repository, RequestLimitReached
 from .request_auth import hash_request_password, verify_request_password
 from .request_portal import (
@@ -149,6 +151,11 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if hasattr(app.state, "services"):
             return app.state.services.config
         return load_config(config_path)
+
+    def current_qbit() -> QbitClient | None:
+        if hasattr(app.state, "services"):
+            return getattr(app.state.services, "qbit", None)
+        return None
 
     def spender_service():
         services = getattr(app.state, "services", None)
@@ -533,11 +540,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         activity: list[dict] = []
         rows: list[dict] = []
         total = 0
+        hardlink_tests: list[dict[str, Any]] = []
         if selected_view == "diagnostics":
             activity = await asyncio.to_thread(
                 repository.recent_activity,
                 limit=300,
                 component=component or None,
+            )
+            hardlink_tests = await test_all_library_hardlinks(
+                active_config(),
+                current_qbit(),
             )
         else:
             table = "events" if selected_view == "events" else "errored_torrents"
@@ -568,6 +580,12 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 component=component,
                 live=live != "0",
                 rows=rows,
+                hardlink_tests=hardlink_tests,
+                all_hardlinks_ok=(
+                    all(t.get("success") for t in hardlink_tests)
+                    if hardlink_tests
+                    else True
+                ),
                 page=page,
                 page_count=page_count,
                 total=total,
@@ -714,6 +732,14 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
         )
 
+        page_hardlinked_count = 0
+        if selected_view == "processed":
+            for row in rows:
+                row["hardlink_info"] = check_record_hardlink_status(row)
+            page_hardlinked_count = sum(
+                1 for r in rows if r.get("hardlink_info", {}).get("hardlinked") is True
+            )
+
         return templates.TemplateResponse(
             request,
             "library.html",
@@ -723,6 +749,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 library_view=selected_view,
                 table=table,
                 rows=rows,
+                page_hardlinked_count=page_hardlinked_count,
                 page=page,
                 page_count=page_count,
                 total=total,
@@ -1240,6 +1267,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     @app.get("/config", response_class=HTMLResponse)
     async def show_config(request: Request) -> HTMLResponse:
         editable = local_request(request)
+        hardlink_tests = await test_all_library_hardlinks(
+            active_config(),
+            current_qbit(),
+        )
         return templates.TemplateResponse(
             request,
             "config.html",
@@ -1247,6 +1278,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 request,
                 title="Configuration",
                 config=_redacted_config(active_config()),
+                hardlink_tests=hardlink_tests,
                 saved=request.query_params.get("saved") == "1",
                 error=request.query_params.get("user_error") or None,
                 config_path=str(config_path),
@@ -1268,6 +1300,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         grab_both_formats: str | None = Form(None),
         absidekick_auto_sync: str | None = Form(None),
         add_torrents_stopped: str | None = Form(None),
+        force_hardlinks: str | None = Form(None),
         request_portal_enabled: str | None = Form(None),
         request_portal_require_account_login: str | None = Form(None),
         request_portal_domains: str = Form(""),
@@ -1299,6 +1332,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 "grab_both_formats": grab_both_formats is not None,
                 "absidekick_auto_sync": absidekick_auto_sync is not None,
                 "add_torrents_stopped": add_torrents_stopped is not None,
+                "force_hardlinks": force_hardlinks is not None,
                 "request_portal_enabled": request_portal_enabled is not None,
                 "request_portal_require_account_login": (
                     request_portal_require_account_login is not None
@@ -1342,6 +1376,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             updated = save_root_config_values(config_path, values)
             await app.state.services.reconfigure(updated)
         except (ConfigError, ValueError) as error:
+            hardlink_tests = await test_all_library_hardlinks(
+                active_config(),
+                current_qbit(),
+            )
             return templates.TemplateResponse(
                 request,
                 "config.html",
@@ -1349,6 +1387,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     request,
                     title="Configuration",
                     config=_redacted_config(active_config()),
+                    hardlink_tests=hardlink_tests,
                     saved=False,
                     error=str(error),
                     config_path=str(config_path),
@@ -1361,6 +1400,22 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 status_code=400,
             )
         return RedirectResponse("/config?saved=1", status_code=303)
+
+    @app.get("/api/hardlink-test", response_class=JSONResponse)
+    async def run_hardlink_test() -> JSONResponse:
+        current = active_config()
+        tests = await test_all_library_hardlinks(
+            current,
+            current_qbit(),
+        )
+        all_supported = all(t.get("success") for t in tests) if tests else True
+        return JSONResponse(
+            {
+                "force_hardlinks": current.force_hardlinks,
+                "tests": tests,
+                "all_supported": all_supported,
+            }
+        )
 
     def request_user_rows_for_save(
         users: list[RequestPortalUser],

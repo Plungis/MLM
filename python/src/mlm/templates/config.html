@@ -76,6 +76,41 @@
         <input type="checkbox" name="absidekick_auto_sync" value="true"{% if config.absidekick_auto_sync %} checked{% endif %}>
         <span><strong>Auto-sync with ABSidekick</strong><small>When a book finishes sorting, automatically trigger Audiobookshelf to scan and ABSidekick to match metadata.</small></span>
       </label>
+      <label class="setting-toggle">
+        <input type="checkbox" name="force_hardlinks" value="true"{% if config.force_hardlinks %} checked{% endif %}>
+        <span><strong>Force hardlinks (never copy)</strong><small>Strictly enforce zero-space hardlinks. HeavyMLM will refuse to duplicate disk space by copying. If a book cannot be hardlinked (e.g. download and library are on different drives), it stops with an error instead of eating disk space.</small></span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h2>Hardlink &amp; Storage Verification</h2>
+        <p>Live filesystem test between your download folder and library folders to verify whether hardlinks work without duplicating disk space.</p>
+      </div>
+      <span class="chip">Live Filesystem Test</span>
+    </header>
+    <div class="panel-body">
+      {% if hardlink_tests %}
+      <div class="hardlink-test-results">
+        {% for test in hardlink_tests %}
+        <div class="hardlink-test-card {% if test.success %}success{% else %}warning{% endif %}">
+          <div class="test-header">
+            <strong>Category: {{ test.category or "Default Library" }}</strong>
+            <span class="status {% if test.success %}ok{% else %}error{% endif %}">
+              {% if test.success %}✅ Hardlinks Supported (0 B Extra Space){% else %}❌ Cannot Hardlink (Cross-Drive){% endif %}
+            </span>
+          </div>
+          <p><code>Library folder: {{ test.library_dir }}</code></p>
+          {% if test.download_dir %}<p><code>Download folder: {{ test.download_dir }}</code></p>{% endif %}
+          <p class="test-explanation">{{ test.message }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><div><strong>No libraries configured</strong><p>Add a <code>[[library]]</code> section to your config.toml to organize downloads.</p></div></div>
+      {% endif %}
     </div>
   </section>
 

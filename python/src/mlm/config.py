@@ -47,6 +47,7 @@ class Config:
     grab_both_formats: bool = False
     add_torrents_stopped: bool = False
     exclude_narrator_in_library_dir: bool = False
+    force_hardlinks: bool = False
     search_interval: int = 30
     link_interval: int = 10
     import_interval: int = 135
@@ -85,6 +86,7 @@ _ALIASES = {
     "tag": "tags",
     "library": "libraries",
     "request_portal_user": "request_portal_users",
+    "force_hardlink": "force_hardlinks",
 }
 
 

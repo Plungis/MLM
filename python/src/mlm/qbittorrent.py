@@ -158,3 +158,10 @@ class QbitClient:
             data={"hashes": "|".join(hash_list)},
         )
         self._check(response)
+
+    async def default_save_path(self) -> str:
+        try:
+            response = self._check(await self.client.get("/api/v2/app/defaultSavePath"))
+            return response.text.strip()
+        except Exception:
+            return ""

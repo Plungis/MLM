@@ -544,3 +544,180 @@ def test_organizer_only_requests_configured_library_categories(
     assert qbit.requested_categories == ["Audiobooks", "Ebooks"]
     assert result.scanned == 2
     assert result.incomplete == 2
+
+
+def test_organizer_records_hardlink_diagnostics(tmp_path: Path) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"sample audio content")
+    library_root = tmp_path / "library"
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(library_root),
+                "method": "hardlink",
+            },
+        ),
+    )
+
+    qbit = FakeQbit(downloads)
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            qbit,
+            FakeMam(),
+        )
+    )
+
+    assert result.linked == 1
+    stored = repository.torrent("abc123")
+    assert stored is not None
+    assert stored["hardlinked"] is True
+    assert stored["placement_method"] == "hardlink"
+    assert stored["space_duplicated"] == 0
+    assert len(stored["file_diagnostics"]) == 1
+    assert stored["file_diagnostics"][0]["hardlinked"] is True
+    assert stored["file_diagnostics"][0]["nlink"] >= 2
+
+
+def test_organizer_force_hardlinks_prevents_copy_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"sample audio content")
+    library_root = tmp_path / "library"
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        force_hardlinks=True,
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(library_root),
+                "method": "hardlink_or_copy",
+            },
+        ),
+    )
+
+    # Simulate cross-volume os.link failure
+    def fake_link(_src, _dst):
+        raise OSError(17, "The system cannot move the file to a different disk drive")
+
+    monkeypatch.setattr(os, "link", fake_link)
+
+    qbit = FakeQbit(downloads)
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            qbit,
+            FakeMam(),
+        )
+    )
+
+    assert result.failed == 1
+    assert result.linked == 0
+    assert len(result.failures) == 1
+    assert "Force hardlinks" in result.failures[0]["error"]
+    assert "remediation" in result.failures[0]
+    # Verify no copied files were placed in the library
+    destination = library_root / "An Author" / "Book {A Narrator}" / "book.m4b"
+    assert not destination.exists()
+    assert not (library_root / "An Author" / "Book {A Narrator}").exists()
+
+
+def test_organizer_allows_copy_fallback_when_force_hardlinks_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads = tmp_path / "downloads"
+    source = downloads / "download" / "book.m4b"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"sample audio content")
+    library_root = tmp_path / "library"
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    config = Config(
+        mam_id="cookie",
+        force_hardlinks=False,
+        qbittorrent=(QbitConfig(url="http://qbit"),),
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(library_root),
+                "method": "hardlink_or_copy",
+            },
+        ),
+    )
+
+    def fake_link(_src, _dst):
+        raise OSError(17, "The system cannot move the file to a different disk drive")
+
+    monkeypatch.setattr(os, "link", fake_link)
+
+    qbit = FakeQbit(downloads)
+    result = asyncio.run(
+        organize_completed(
+            config,
+            repository,
+            config.qbittorrent[0],
+            qbit,
+            FakeMam(),
+        )
+    )
+
+    assert result.linked == 1
+    stored = repository.torrent("abc123")
+    assert stored is not None
+    assert stored["hardlinked"] is False
+    assert stored["space_duplicated"] == len(b"sample audio content")
+    destination = library_root / "An Author" / "Book {A Narrator}" / "book.m4b"
+    assert destination.exists()
+    assert destination.read_bytes() == b"sample audio content"
+
+
+def test_hardlink_compatibility_testing(tmp_path: Path) -> None:
+    from mlm.library import test_all_library_hardlinks, test_library_hardlink
+
+    d1 = tmp_path / "dir1"
+    d2 = tmp_path / "dir2"
+    d1.mkdir()
+    d2.mkdir()
+
+    res = test_library_hardlink(d2, d1)
+    assert res["success"] is True
+    assert res["nlink"] >= 2
+    assert "Hardlinks verified" in res["message"]
+
+    config = Config(
+        mam_id="cookie",
+        force_hardlinks=True,
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(d2),
+                "download_dir": str(d1),
+            },
+        ),
+    )
+    all_tests = asyncio.run(test_all_library_hardlinks(config))
+    assert len(all_tests) == 1
+    assert all_tests[0]["success"] is True
+    assert all_tests[0]["category"] == "Audiobooks"
+    assert all_tests[0]["force_hardlinks_active"] is True
+

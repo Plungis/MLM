@@ -294,3 +294,20 @@ def test_enabled_modules_and_absidekick_auto_sync_defaults_and_save(
     reloaded = load_config(path)
     assert reloaded.enabled_modules == ("mam_spender",)
     assert reloaded.absidekick_auto_sync is False
+
+
+def test_force_hardlinks_default_alias_and_save(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('mam_id = "secret"\n', encoding="utf-8")
+
+    config = load_config(path)
+    assert config.force_hardlinks is False
+
+    path.write_text('mam_id = "secret"\nforce_hardlink = true\n', encoding="utf-8")
+    assert load_config(path).force_hardlinks is True
+
+    updated = save_root_config_values(path, {"force_hardlinks": True})
+    assert updated.force_hardlinks is True
+    assert "force_hardlinks = true" in path.read_text(encoding="utf-8")
+    assert "force_hardlink = true" not in path.read_text(encoding="utf-8")
+

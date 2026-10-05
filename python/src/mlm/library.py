@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -222,36 +223,185 @@ def _destination_relative(torrent_path: Path) -> Path:
     )
 
 
-def _place_file(source: Path, destination: Path, method: str) -> None:
+@dataclass(frozen=True)
+class FilePlacementResult:
+    method_used: str
+    hardlinked: bool
+    samefile: bool
+    nlink: int
+    bytes_duplicated: int
+
+
+def _place_file(
+    source: Path,
+    destination: Path,
+    method: str,
+    *,
+    force_hardlinks: bool = False,
+    source_size: int = 0,
+) -> FilePlacementResult:
     if destination.exists():
         if method.startswith("hardlink") and os.path.samefile(source, destination):
-            return
+            nlink = 2
+            with suppress(OSError):
+                nlink = destination.stat().st_nlink
+            return FilePlacementResult(
+                method_used="existing_hardlink",
+                hardlinked=True,
+                samefile=True,
+                nlink=nlink,
+                bytes_duplicated=0,
+            )
         raise FileExistsError(f"library file already exists: {destination}")
-    if method == "hardlink":
+
+    effective_method = (
+        "hardlink" if force_hardlinks and method != "no_link" else method
+    )
+
+    if effective_method == "hardlink":
         try:
             os.link(source, destination)
         except OSError as error:
+            if force_hardlinks:
+                raise FilePlacementError(
+                    f"could not hardlink {source} to {destination} ({error}). "
+                    "Copying was blocked because 'Force hardlinks' is "
+                    "enabled in settings.",
+                    source=source,
+                    destination=destination,
+                    method="hardlink",
+                    remediation=(
+                        "Zero-space hardlinks require the download directory "
+                        "and library folder to be on the same physical filesystem "
+                        "volume or drive letter. Hardlinks cannot cross drive "
+                        "letters (e.g. C: to E:) or network UNC shares. "
+                        "To use hardlinks without duplicating space, configure "
+                        "qBittorrent to download directly to the same drive as "
+                        "your library."
+                    ),
+                ) from error
             raise OSError(
                 f"could not hardlink {source} to {destination}; if the download and "
                 "library are on different drives, set method = "
                 '"hardlink_or_copy" in that [[library]] section'
             ) from error
-    elif method == "hardlink_or_copy":
+        same = False
+        nlink = 1
+        with suppress(OSError):
+            same = os.path.samefile(source, destination)
+            nlink = destination.stat().st_nlink
+        return FilePlacementResult(
+            method_used="hardlink",
+            hardlinked=True,
+            samefile=same,
+            nlink=nlink,
+            bytes_duplicated=0,
+        )
+    elif effective_method == "hardlink_or_copy":
         try:
             os.link(source, destination)
-        except OSError:
+            same = False
+            nlink = 1
+            with suppress(OSError):
+                same = os.path.samefile(source, destination)
+                nlink = destination.stat().st_nlink
+            return FilePlacementResult(
+                method_used="hardlink",
+                hardlinked=True,
+                samefile=same,
+                nlink=nlink,
+                bytes_duplicated=0,
+            )
+        except OSError as error:
+            if force_hardlinks:
+                raise FilePlacementError(
+                    f"could not hardlink {source} to {destination}. "
+                    "Copy fallback was blocked because 'Force hardlinks' "
+                    "is enabled in settings.",
+                    source=source,
+                    destination=destination,
+                    method="hardlink",
+                    remediation=(
+                        "Zero-space hardlinks require the download directory "
+                        "and library folder to be on the same physical filesystem "
+                        "volume or drive letter. Configure qBittorrent to download "
+                        "directly to the same drive as your library."
+                    ),
+                ) from error
             shutil.copy2(source, destination)
-    elif method == "hardlink_or_symlink":
+            return FilePlacementResult(
+                method_used="copy",
+                hardlinked=False,
+                samefile=False,
+                nlink=1,
+                bytes_duplicated=source_size,
+            )
+    elif effective_method == "hardlink_or_symlink":
         try:
             os.link(source, destination)
+            same = False
+            nlink = 1
+            with suppress(OSError):
+                same = os.path.samefile(source, destination)
+                nlink = destination.stat().st_nlink
+            return FilePlacementResult(
+                method_used="hardlink",
+                hardlinked=True,
+                samefile=same,
+                nlink=nlink,
+                bytes_duplicated=0,
+            )
         except OSError:
             destination.symlink_to(source)
-    elif method == "copy":
+            return FilePlacementResult(
+                method_used="symlink",
+                hardlinked=False,
+                samefile=False,
+                nlink=1,
+                bytes_duplicated=0,
+            )
+    elif effective_method == "copy":
+        if force_hardlinks:
+            raise FilePlacementError(
+                f"file placement copy blocked for {source} -> {destination} "
+                "because 'Force hardlinks' is enabled in settings",
+                source=source,
+                destination=destination,
+                method="copy",
+                remediation=(
+                    "Force hardlinks is enabled, so HeavyMLM refused to duplicate "
+                    "disk space by copying. Update this [[library]] section in "
+                    "config.toml to use method = 'hardlink', and ensure your download "
+                    "directory is on the same drive."
+                ),
+            )
         shutil.copy2(source, destination)
-    elif method == "symlink":
+        return FilePlacementResult(
+            method_used="copy",
+            hardlinked=False,
+            samefile=False,
+            nlink=1,
+            bytes_duplicated=source_size,
+        )
+    elif effective_method == "symlink":
         destination.symlink_to(source)
-    elif method != "no_link":
+        return FilePlacementResult(
+            method_used="symlink",
+            hardlinked=False,
+            samefile=False,
+            nlink=1,
+            bytes_duplicated=0,
+        )
+    elif effective_method != "no_link":
         raise ValueError(f"unknown library method: {method}")
+
+    return FilePlacementResult(
+        method_used="no_link",
+        hardlinked=False,
+        samefile=False,
+        nlink=0,
+        bytes_duplicated=0,
+    )
 
 
 def _source_size(source: Path, destination: Path, method: str) -> int:
@@ -619,6 +769,8 @@ async def _organize_torrent(
 
     meta = torrent_meta(mam_row)
     method = str(library.get("method", "hardlink"))
+    if config.force_hardlinks and method != "no_link":
+        method = "hardlink"
     target_dir = (
         None
         if method == "no_link"
@@ -716,6 +868,7 @@ async def _organize_torrent(
             },
         )
         staging_dir: Path | None = None
+        placement_results: list[dict[str, Any]] = []
         try:
             staging_dir = await asyncio.to_thread(
                 _prepare_staging_directory, target_dir
@@ -740,8 +893,13 @@ async def _organize_torrent(
                     staging_destination.parent.mkdir, parents=True, exist_ok=True
                 )
                 try:
-                    await asyncio.to_thread(
-                        _place_file, source, staging_destination, method
+                    placement_res = await asyncio.to_thread(
+                        _place_file,
+                        source,
+                        staging_destination,
+                        method,
+                        force_hardlinks=config.force_hardlinks,
+                        source_size=source_size,
                     )
                     await asyncio.to_thread(
                         _validate_placed_file,
@@ -765,15 +923,30 @@ async def _organize_torrent(
                         ),
                     ) from error
                 library_files.append(str(relative))
+                placement_results.append({
+                    "relative": str(relative),
+                    "hardlinked": placement_res.hardlinked,
+                    "samefile": placement_res.samefile,
+                    "nlink": placement_res.nlink,
+                    "method": placement_res.method_used,
+                    "bytes_duplicated": placement_res.bytes_duplicated,
+                    "source_size": source_size,
+                })
+                verified_note = (
+                    "🔗 hardlinked (0 B extra)"
+                    if placement_res.hardlinked
+                    else f"📄 copied ({source_size} B duplicated)"
+                )
                 _progress(
                     progress,
-                    f"Verified: {relative} ({source_size} bytes)",
+                    f"Verified: {relative} ({verified_note})",
                     level="success",
                     context={
                         **context,
                         "source": str(source),
                         "destination": str(final_destination),
                         "bytes": source_size,
+                        "hardlinked": placement_res.hardlinked,
                     },
                 )
             try:
@@ -814,6 +987,32 @@ async def _organize_torrent(
                     context={**context, "target": str(target_dir)},
                 )
 
+    file_diagnostics: list[dict[str, Any]] = []
+    all_hardlinked = bool(placement_results)
+    total_space_duplicated = 0
+    if target_dir is not None:
+        for item in placement_results:
+            final_file = target_dir / item["relative"]
+            is_hl = item["hardlinked"]
+            nlink = item["nlink"]
+            try:
+                if final_file.exists():
+                    nlink = final_file.stat().st_nlink
+                    is_hl = is_hl or nlink > 1
+            except OSError:
+                pass
+            if not is_hl:
+                all_hardlinked = False
+                total_space_duplicated += item["bytes_duplicated"]
+            file_diagnostics.append({
+                "file": item["relative"],
+                "hardlinked": is_hl,
+                "nlink": nlink,
+                "method": item["method"],
+                "bytes_duplicated": 0 if is_hl else item["bytes_duplicated"],
+                "size": item["source_size"],
+            })
+
     now = datetime.now(UTC).isoformat()
     torrent = {
         "id": torrent_hash,
@@ -834,27 +1033,41 @@ async def _organize_torrent(
         "request_matadata_update": False,
         "library_mismatch": None,
         "client_status": existing.get("client_status") if existing else None,
+        "placement_method": method,
+        "hardlinked": all_hardlinked,
+        "space_duplicated": total_space_duplicated,
+        "file_diagnostics": file_diagnostics,
     }
     repository.record_linked(torrent, meta["mam_id"])
+    link_summary = (
+        "🔗 Verified Hardlink (0 B duplicate space)"
+        if all_hardlinked
+        else f"📄 Copied ({total_space_duplicated} B duplicate space)"
+    )
     repository.log_activity(
         "organizer",
-        f"Organized {torrent_name} into the library",
+        f"Organized {torrent_name} into the library — {link_summary}",
         context={
             **context,
             "library_path": str(target_dir) if target_dir else None,
             "files": sorted(library_files),
             "method": method,
+            "hardlinked": all_hardlinked,
+            "space_duplicated": total_space_duplicated,
+            "file_diagnostics": file_diagnostics,
         },
     )
     _progress(
         progress,
-        f"Organized: {torrent_name}",
+        f"Organized: {torrent_name} ({link_summary})",
         level="success",
         context={
             **context,
             "library_path": str(target_dir) if target_dir else None,
             "files": len(library_files),
             "method": method,
+            "hardlinked": all_hardlinked,
+            "space_duplicated": total_space_duplicated,
         },
     )
     return "linked"
@@ -992,3 +1205,206 @@ async def organize_completed(
         },
     )
     return result
+
+
+def test_library_hardlink(
+    library_path: Path,
+    download_path: Path | None = None,
+) -> dict[str, Any]:
+    """Test whether files can be hardlinked between download_path and library_path."""
+    lib_path = Path(library_path)
+    if not lib_path.exists():
+        try:
+            lib_path.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            return {
+                "success": False,
+                "message": (
+                    f"Library directory does not exist and could not be created: {err}"
+                ),
+                "library_dir": str(lib_path),
+                "download_dir": str(download_path) if download_path else None,
+            }
+
+    if download_path is None:
+        test_src = lib_path / f".heavymlm_test_src_{uuid4().hex[:8]}.tmp"
+        test_dst = lib_path / f".heavymlm_test_dst_{uuid4().hex[:8]}.tmp"
+        try:
+            test_src.write_bytes(b"test")
+            os.link(test_src, test_dst)
+            nlink = test_dst.stat().st_nlink
+            same = os.path.samefile(test_src, test_dst)
+            return {
+                "success": True,
+                "samefile": same,
+                "nlink": nlink,
+                "library_dir": str(lib_path),
+                "download_dir": "Not configured / Inferred from library drive",
+                "message": (
+                    f"Filesystem at '{lib_path}' supports NTFS hardlinks "
+                    f"(link count={nlink}). Ensure your qBittorrent downloads "
+                    "are on this same drive."
+                ),
+            }
+        except OSError as err:
+            return {
+                "success": False,
+                "library_dir": str(lib_path),
+                "download_dir": None,
+                "message": (
+                    f"Filesystem at '{lib_path}' does not support hardlinks: {err}"
+                ),
+            }
+        finally:
+            test_dst.unlink(missing_ok=True)
+            test_src.unlink(missing_ok=True)
+
+    dl_path = Path(download_path)
+    if not dl_path.exists():
+        with suppress(OSError):
+            dl_path.mkdir(parents=True, exist_ok=True)
+
+    if not dl_path.exists():
+        return {
+            "success": False,
+            "library_dir": str(lib_path),
+            "download_dir": str(dl_path),
+            "message": (
+                f"Download directory '{dl_path}' does not exist on this machine."
+            ),
+        }
+
+    test_src = dl_path / f".heavymlm_test_src_{uuid4().hex[:8]}.tmp"
+    test_dst = lib_path / f".heavymlm_test_dst_{uuid4().hex[:8]}.tmp"
+    try:
+        test_src.write_bytes(b"test")
+        os.link(test_src, test_dst)
+        same = os.path.samefile(test_src, test_dst)
+        nlink = test_dst.stat().st_nlink
+        return {
+            "success": True,
+            "samefile": same,
+            "nlink": nlink,
+            "library_dir": str(lib_path),
+            "download_dir": str(dl_path),
+            "message": (
+                f"Hardlinks verified! Source '{dl_path}' and destination "
+                f"'{lib_path}' share the same volume (verified {nlink} links). "
+                "Zero duplicate disk space will be used."
+            ),
+        }
+    except OSError as err:
+        return {
+            "success": False,
+            "library_dir": str(lib_path),
+            "download_dir": str(dl_path),
+            "message": (
+                f"Cannot hardlink across locations: {err}. "
+                f"Download path ('{dl_path}') and library path ('{lib_path}') "
+                "are on different drives, volumes, or network shares. "
+                "Hardlinks cannot cross drive letters or network boundaries."
+            ),
+        }
+    finally:
+        test_dst.unlink(missing_ok=True)
+        test_src.unlink(missing_ok=True)
+
+
+async def test_all_library_hardlinks(
+    config: Config,
+    qbit: QbitClient | None = None,
+) -> list[dict[str, Any]]:
+    path_mapping = config.qbittorrent[0].path_mapping if config.qbittorrent else {}
+    results: list[dict[str, Any]] = []
+    default_save = ""
+    categories_map: dict[str, dict] = {}
+    if qbit is not None:
+        try:
+            default_save = await qbit.default_save_path()
+            categories_map = await qbit.categories()
+        except Exception:
+            pass
+
+    for library in config.libraries:
+        lib_dir = library.get("library_dir")
+        if not lib_dir:
+            continue
+        category = str(library.get("category", "")).strip()
+        dl_dir_raw = library.get("download_dir")
+        if not dl_dir_raw and category and category in categories_map:
+            dl_dir_raw = categories_map[category].get("savePath")
+        if not dl_dir_raw and default_save:
+            dl_dir_raw = default_save
+
+        dl_path = (
+            map_path(path_mapping, dl_dir_raw) if dl_dir_raw else None
+        )
+        test_res = await asyncio.to_thread(
+            test_library_hardlink, Path(lib_dir), dl_path
+        )
+        test_res["category"] = category or library.get("name", "Default")
+        test_res["method"] = str(library.get("method", "hardlink"))
+        test_res["force_hardlinks_active"] = config.force_hardlinks
+        results.append(test_res)
+
+    return results
+
+
+def check_record_hardlink_status(row: dict[str, Any]) -> dict[str, Any]:
+    if "hardlinked" in row:
+        hardlinked = bool(row["hardlinked"])
+        nlink = 2 if hardlinked else 1
+        diagnostics = row.get("file_diagnostics") or []
+        if diagnostics and isinstance(diagnostics, list):
+            nlink = max(
+                (d.get("nlink", 1) for d in diagnostics if isinstance(d, dict)),
+                default=nlink,
+            )
+        return {
+            "hardlinked": hardlinked,
+            "nlink": nlink,
+            "label": (
+                f"🔗 Hardlink ({nlink} links, 0 B extra)"
+                if hardlinked
+                else "📄 Copied (Duplicate Space)"
+            ),
+            "status_class": "ok" if hardlinked else "warning",
+            "checked_live": False,
+        }
+    lib_path = row.get("library_path")
+    files = row.get("library_files") or []
+    if lib_path:
+        try:
+            target = Path(lib_path)
+            sample_file = None
+            if files:
+                sample_file = target / files[0]
+            elif target.is_dir():
+                for f in target.iterdir():
+                    if f.is_file():
+                        sample_file = f
+                        break
+            if sample_file and sample_file.exists():
+                st = sample_file.stat()
+                is_hl = st.st_nlink > 1
+                return {
+                    "hardlinked": is_hl,
+                    "nlink": st.st_nlink,
+                    "label": (
+                        f"🔗 Hardlink ({st.st_nlink} links, 0 B extra)"
+                        if is_hl
+                        else "📄 Copied (1 link)"
+                    ),
+                    "status_class": "ok" if is_hl else "warning",
+                    "checked_live": True,
+                }
+        except OSError:
+            pass
+    return {
+        "hardlinked": None,
+        "nlink": 1,
+        "label": "Processed",
+        "status_class": "ok",
+        "checked_live": False,
+    }
+

@@ -30,6 +30,14 @@
     </div>
   </article>
 
+  <article class="debug-window">
+    <header><span>STORAGE_HARDLINKS</span><span class="window-light"></span></header>
+    <div class="debug-facts">
+      <div><strong>{% if config.force_hardlinks %}FORCED{% else %}FLEXIBLE{% endif %}</strong><span>hardlink policy</span></div>
+      <div><strong>{% if all_hardlinks_ok %}VERIFIED{% else %}CHECK PATHS{% endif %}</strong><span>filesystem link</span></div>
+    </div>
+  </article>
+
   <article class="debug-window wide">
     <header><span>SCHEDULER_JOBS</span><span class="window-light"></span></header>
     <div class="job-strip">

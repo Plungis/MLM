@@ -212,6 +212,21 @@
     </div>
     <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}</span>
   </header>
+  {% if library_view == "processed" and rows %}
+  <div class="hardlink-summary-bar">
+    <div>
+      <strong>Storage Mode:</strong>
+      {% if config.force_hardlinks %}
+      <span class="status ok">🛡️ Force Hardlinks Active (Zero Duplication)</span>
+      {% else %}
+      <span class="status waiting">Standard Hardlink (Copies allowed on cross-drive)</span>
+      {% endif %}
+    </div>
+    <div>
+      <span>This page: <strong>{{ page_hardlinked_count }}</strong> of {{ rows | length }} books hardlinked (zero extra space)</span>
+    </div>
+  </div>
+  {% endif %}
   {% if rows %}<div class="record-list">
     {% for row in rows %}
     {% set meta = row.get("meta") or {} %}
@@ -223,10 +238,23 @@
             {% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }} · {% elif row.get("abs_id") %}ABS #{{ row.get("abs_id") }} · {% endif %}
             {% if meta.get("authors") or row.get("authors") %}{{ (meta.get("authors") or row.get("authors")) | join(", ") }} · {% endif %}
             {% if row.get("library_path") %}{{ row.get("library_path") }}{% endif %}
+            {% if library_view == "processed" and row.hardlink_info %} · <span class="chip small">{{ row.hardlink_info.label }}</span>{% endif %}
           </span>
           {% if library_view == "duplicates" and row.get("duplicate_of") %}<span class="record-note">Duplicate of {{ row.get("duplicate_of") }}</span>{% endif %}
         </div>
-        <span class="status {% if library_view == 'duplicates' %}waiting{% else %}ok{% endif %}">{% if library_view == "abs" %}Audiobookshelf{% elif library_view == "duplicates" %}Review candidate{% else %}Processed{% endif %}</span>
+        <span class="status {% if library_view == 'duplicates' %}waiting{% elif library_view == 'processed' and row.hardlink_info %}{{ row.hardlink_info.status_class }}{% else %}ok{% endif %}">
+          {% if library_view == "abs" %}
+            Audiobookshelf
+          {% elif library_view == "duplicates" %}
+            Review candidate
+          {% elif library_view == "processed" and row.hardlink_info and row.hardlink_info.hardlinked is true %}
+            🔗 Hardlinked
+          {% elif library_view == "processed" and row.hardlink_info and row.hardlink_info.hardlinked is false %}
+            📄 Copied
+          {% else %}
+            Processed
+          {% endif %}
+        </span>
       </div>
       <details><summary>Record details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
     </article>
