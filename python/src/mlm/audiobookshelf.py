@@ -8,6 +8,14 @@ import httpx
 from .repository import Repository
 
 
+class AudiobookshelfError(Exception):
+    pass
+
+
+class AudiobookshelfUserExistsError(AudiobookshelfError):
+    pass
+
+
 class AudiobookshelfClient:
     def __init__(
         self,
@@ -26,6 +34,77 @@ class AudiobookshelfClient:
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
+
+    async def get_users(self) -> list[dict[str, Any]]:
+        response = await self.client.get("/api/users")
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict):
+            return data.get("users", [])
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def create_user(
+        self,
+        username: str,
+        password: str,
+        *,
+        user_type: str = "user",
+        permissions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "username": username.strip(),
+            "password": password,
+            "type": user_type,
+        }
+        if permissions:
+            payload["permissions"] = permissions
+        try:
+            response = await self.client.post("/api/users", json=payload)
+        except httpx.HTTPStatusError as error:
+            error_text = error.response.text.lower()
+            if error.response.status_code in (400, 409) and any(
+                phrase in error_text
+                for phrase in ("already exists", "already taken", "taken", "duplicate")
+            ):
+                raise AudiobookshelfUserExistsError(
+                    f"User '{username}' already exists in Audiobookshelf"
+                ) from error
+            if error.response.status_code in (401, 403):
+                raise AudiobookshelfError(
+                    "Audiobookshelf token lacks admin permissions to create users"
+                ) from error
+            status = error.response.status_code
+            msg = error.response.text
+            raise AudiobookshelfError(
+                f"Audiobookshelf returned error ({status}): {msg}"
+            ) from error
+        except httpx.RequestError as error:
+            url = self.client.base_url
+            raise AudiobookshelfError(
+                f"Could not connect to Audiobookshelf at {url}: {error}"
+            ) from error
+
+        if response.status_code not in (200, 201):
+            error_text = response.text.lower()
+            if response.status_code in (400, 409) and any(
+                phrase in error_text
+                for phrase in ("already exists", "already taken", "taken", "duplicate")
+            ):
+                raise AudiobookshelfUserExistsError(
+                    f"User '{username}' already exists in Audiobookshelf"
+                )
+            if response.status_code in (401, 403):
+                raise AudiobookshelfError(
+                    "Audiobookshelf token lacks admin permissions to create users"
+                )
+            raise AudiobookshelfError(
+                f"Failed to create Audiobookshelf user ({response.status_code}): "
+                f"{response.text}"
+            )
+
+        return response.json()
 
     async def find_book(self, torrent: dict[str, Any]) -> dict[str, Any] | None:
         library_path = torrent.get("library_path")

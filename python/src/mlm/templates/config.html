@@ -211,6 +211,12 @@
     <span class="chip">{{ config.request_portal_users | length }} named</span>
   </header>
   <div class="panel-body">
+    <div class="callout tip" style="margin-bottom: 16px;">
+      <span class="callout-icon">🚀</span>
+      <div>
+        <strong>Fast Unified Onboarding:</strong> Set up a new reader across Audiobookshelf and the Request Portal with an instant access pass in the <a href="/onboarding">User Onboarding Center</a>.
+      </div>
+    </div>
     <div class="security-note"><strong>Permission boundary:</strong> Auto-approve only skips the request inbox decision. It does not grant access to HeavyMLM administration, configuration, or other MyAnonaSuite modules. Download guardrails and format rules still apply.</div>
     {% if config.request_portal_enabled and config.request_portal_require_account_login and not config.request_portal_users and not config.request_portal_username %}<div class="flash error-flash"><span>The public request domain is safely locked because no request accounts exist yet. Create the first account below.</span><span class="status waiting">Setup required</span></div>{% endif %}
     {% if config.request_portal_users %}

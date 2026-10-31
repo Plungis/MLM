@@ -265,6 +265,45 @@ def _toml_scalar(value: object) -> str:
     raise ConfigError(f"unsupported editable value: {value!r}")
 
 
+def _replace_root_entry(text: str, key: str, replacement: str) -> tuple[str, int]:
+    match = re.search(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=", text)
+    if not match:
+        return text, 0
+    start = match.start()
+    i = match.end()
+    while i < len(text) and text[i] in " \t":
+        i += 1
+    if i < len(text) and text[i] in "[{":
+        opener = text[i]
+        closer = "]" if opener == "[" else "}"
+        depth = 0
+        in_quote = None
+        while i < len(text):
+            ch = text[i]
+            if in_quote:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == in_quote:
+                    in_quote = None
+            else:
+                if ch in ('"', "'"):
+                    in_quote = ch
+                elif ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+            i += 1
+    while i < len(text) and text[i] != "\n":
+        i += 1
+    if i < len(text) and text[i] == "\n":
+        i += 1
+    return text[:start] + replacement + text[i:], 1
+
+
 def save_root_config_values(path: Path, values: Mapping[str, object | None]) -> Config:
     try:
         text = path.read_text(encoding="utf-8")
@@ -283,13 +322,9 @@ def save_root_config_values(path: Path, values: Mapping[str, object | None]) -> 
             root = legacy_pattern.sub("", root)
     missing: list[str] = []
     for key, value in values.items():
-        pattern = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=.*(?:\r?\n|$)")
-        if value is None:
-            root = pattern.sub("", root)
-            continue
-        replacement = f"{key} = {_toml_scalar(value)}\n"
-        root, count = pattern.subn(replacement, root, count=1)
-        if count == 0:
+        replacement = "" if value is None else f"{key} = {_toml_scalar(value)}\n"
+        root, count = _replace_root_entry(root, key, replacement)
+        if count == 0 and value is not None:
             missing.append(replacement)
 
     if missing:

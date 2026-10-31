@@ -23,6 +23,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
+from .audiobookshelf import (
+    AudiobookshelfClient,
+    AudiobookshelfUserExistsError,
+)
 from .autograbber import select_row
 from .config import (
     Config,
@@ -49,6 +53,10 @@ from .modules.heavymlm.series import (
     resolve_series_selection,
 )
 from .modules.mam_spender import default_public_state
+from .onboarding import (
+    generate_onboarding_blurb,
+    generate_suggested_password,
+)
 from .qbittorrent import QbitClient
 from .repository import Repository, RequestLimitReached
 from .request_auth import hash_request_password, verify_request_password
@@ -1521,6 +1529,224 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
         return RedirectResponse(
             "/config?saved=1#request-accounts",
+            status_code=303,
+        )
+
+    def get_abs_connection(config: Config) -> tuple[str, str]:
+        url = ""
+        token = ""
+        if isinstance(config.audiobookshelf, dict):
+            url = str(
+                config.audiobookshelf.get("url")
+                or config.audiobookshelf.get("base_url")
+                or ""
+            ).rstrip("/")
+            token = str(config.audiobookshelf.get("token") or "")
+        elif config.audiobookshelf:
+            url = str(
+                getattr(config.audiobookshelf, "url", None)
+                or getattr(config.audiobookshelf, "base_url", "")
+            ).rstrip("/")
+            token = str(getattr(config.audiobookshelf, "token", ""))
+
+        if not url:
+            url = str(
+                absidekick.settings.get("connection", {}).get("baseUrl") or ""
+            ).rstrip("/")
+        if not token:
+            token = str(absidekick.token or "")
+        return url, token
+
+    def get_portal_public_url(request: Request, config: Config) -> str:
+        if config.request_portal_domains:
+            domain = config.request_portal_domains[0].strip()
+            if domain:
+                return f"https://{domain}"
+        return f"{str(request.base_url).rstrip('/')}/request"
+
+    @app.get("/onboarding", response_class=HTMLResponse)
+    async def user_onboarding(request: Request) -> HTMLResponse:
+        if not local_request(request):
+            raise HTTPException(403, "Onboarding is only allowed from this computer")
+        current = active_config()
+        abs_url, abs_token = get_abs_connection(current)
+        portal_url = get_portal_public_url(request, current)
+
+        selected_username = request.query_params.get("user", "").strip()
+        selected_pass = request.query_params.get("pass", "").strip()
+        blurb_data = None
+        if selected_username:
+            target_user = request_user(current, selected_username)
+            if target_user:
+                display_name = target_user.display_name or target_user.username
+                auto_approve = "auto_approve" in target_user.permissions
+                weekly_limit = target_user.weekly_request_limit
+                password_display = selected_pass or "(Password is securely hashed)"
+                blurb_text = generate_onboarding_blurb(
+                    username=target_user.username,
+                    password=password_display,
+                    display_name=display_name,
+                    abs_url=abs_url,
+                    portal_url=portal_url,
+                    auto_approve=auto_approve,
+                    weekly_request_limit=weekly_limit,
+                )
+                blurb_data = {
+                    "username": target_user.username,
+                    "password": password_display,
+                    "display_name": display_name,
+                    "abs_url": abs_url,
+                    "portal_url": portal_url,
+                    "auto_approve": auto_approve,
+                    "weekly_request_limit": weekly_limit,
+                    "blurb": blurb_text,
+                    "from_new": bool(selected_pass),
+                }
+
+        return templates.TemplateResponse(
+            request,
+            "onboarding.html",
+            await context(
+                request,
+                title="User Onboarding Center",
+                abs_url=abs_url,
+                abs_configured=bool(abs_url and abs_token),
+                portal_url=portal_url,
+                portal_configured=current.request_portal_enabled,
+                suggested_password=generate_suggested_password(),
+                users=current.request_portal_users,
+                blurb_data=blurb_data,
+                abs_status=request.query_params.get("abs_status", ""),
+                portal_status=request.query_params.get("portal_status", ""),
+                onboard_error=request.query_params.get("error", ""),
+            ),
+        )
+
+    @app.post("/onboarding")
+    async def onboard_user_submit(
+        request: Request,
+        username: str = Form(...),
+        password: str = Form(...),
+        display_name: str = Form(""),
+        weekly_request_limit: int = Form(10),
+        auto_approve: str | None = Form(None),
+        create_abs: str | None = Form(None),
+        create_portal: str | None = Form(None),
+    ) -> RedirectResponse:
+        if not local_request(request):
+            raise HTTPException(403, "Onboarding is only allowed from this computer")
+
+        clean_username = username.strip()
+        clean_password = password.strip()
+        clean_display_name = display_name.strip() or clean_username
+        is_auto_approve = auto_approve is not None
+        do_create_abs = create_abs is not None
+        do_create_portal = create_portal is not None
+
+        if not clean_username:
+            return RedirectResponse(
+                "/onboarding?error=Username+cannot+be+empty",
+                status_code=303,
+            )
+        if len(clean_password) < 8:
+            return RedirectResponse(
+                "/onboarding?error=Password+must+be+at+least+8+characters",
+                status_code=303,
+            )
+
+        current = active_config()
+        abs_status_msg = ""
+        portal_status_msg = ""
+
+        # 1. Create or update Request Portal Account
+        if do_create_portal:
+            try:
+                users = list(current.request_portal_users)
+                existing_idx = next(
+                    (
+                        i
+                        for i, u in enumerate(users)
+                        if u.username.casefold() == clean_username.casefold()
+                    ),
+                    None,
+                )
+                password_hash = await asyncio.to_thread(
+                    hash_request_password, clean_password
+                )
+                new_user = RequestPortalUser(
+                    username=clean_username,
+                    password_hash=password_hash,
+                    display_name=clean_display_name,
+                    permissions=("auto_approve",) if is_auto_approve else (),
+                    weekly_request_limit=max(0, weekly_request_limit),
+                )
+                if existing_idx is not None:
+                    users[existing_idx] = new_user
+                    portal_status_msg = "updated"
+                else:
+                    users.append(new_user)
+                    portal_status_msg = "created"
+
+                updated = save_root_config_values(
+                    config_path,
+                    {"request_portal_users": request_user_rows_for_save(users)},
+                )
+                if hasattr(app.state, "services") and app.state.services:
+                    await app.state.services.reconfigure(updated)
+                repository.log_activity(
+                    "configuration",
+                    f"Onboarded user {clean_username} for Request Portal",
+                    level="success",
+                    context={
+                        "username": clean_username,
+                        "auto_approve": is_auto_approve,
+                    },
+                )
+                current = updated
+            except Exception as err:
+                portal_status_msg = f"error:{err}"
+        else:
+            portal_status_msg = "skipped"
+
+        # 2. Create Audiobookshelf Account
+        if do_create_abs:
+            abs_url, abs_token = get_abs_connection(current)
+            if not abs_url or not abs_token:
+                abs_status_msg = "not_configured"
+            else:
+                abs_client = AudiobookshelfClient(abs_url, abs_token)
+                try:
+                    try:
+                        await abs_client.create_user(
+                            clean_username, clean_password
+                        )
+                        abs_status_msg = "created"
+                        repository.log_activity(
+                            "audiobookshelf",
+                            f"Created Audiobookshelf account: {clean_username}",
+                            level="success",
+                            context={
+                                "username": clean_username,
+                                "server": abs_url,
+                            },
+                        )
+                    except AudiobookshelfUserExistsError:
+                        abs_status_msg = "exists"
+                    except Exception as err:
+                        abs_status_msg = f"error:{err}"
+                finally:
+                    await abs_client.close()
+        else:
+            abs_status_msg = "skipped"
+
+        params = {
+            "user": clean_username,
+            "pass": clean_password,
+            "abs_status": abs_status_msg,
+            "portal_status": portal_status_msg,
+        }
+        return RedirectResponse(
+            f"/onboarding?{urlencode(params)}#onboarding-pass-section",
             status_code=303,
         )
 
