@@ -99,6 +99,10 @@ def test_onboarding_blurb_generation():
     assert "https://requests.example.com" in blurb
     assert "Instant Auto-Approval" in blurb
     assert "15 books per rolling 7 days" in blurb
+    assert "Absorb" in blurb
+    assert "https://apps.apple.com/app/absorb-for-audiobookshelf/id6477741369" in blurb
+    assert "com.audiobookshelf.app" in blurb
+    assert "com.barnabas.absorb" in blurb
 
 
 def test_suggested_password():
@@ -159,6 +163,9 @@ token = "test_abs_token"
     assert "new_reader" in post_res.text
     assert "Password123!" in post_res.text
     assert "Request Portal account created" in post_res.text
+    assert "Absorb" in post_res.text
+    assert "id6477741369" in post_res.text
+    assert "com.audiobookshelf.app" in post_res.text
 
     # Verify config file updated with new user
     updated_cfg = load_config(config_file)

@@ -4282,3 +4282,55 @@ pre {
     background: #f0f0f0 !important;
   }
 }
+
+.app-links-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.platform-heading {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.app-buttons-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-store-button {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  color: var(--text);
+  font-size: 0.8rem;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.app-store-button:hover {
+  background: var(--surface-hover);
+  border-color: var(--line);
+  color: var(--accent);
+}
+
+.app-store-button.primary-app {
+  border-color: var(--line);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent-strong);
+}
+
+.app-store-button.primary-app:hover {
+  background: rgba(var(--accent-rgb), 0.2);
+}

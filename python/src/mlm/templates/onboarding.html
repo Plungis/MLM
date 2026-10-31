@@ -130,18 +130,48 @@
       <div class="card-services-grid">
         <div class="card-service-box">
           <div class="service-box-header">
-            <h4>🎧 Part 1: Audiobookshelf</h4>
+            <h4>🎧 Part 1: Audiobookshelf &amp; Absorb</h4>
             <span class="chip">Listen &amp; Read</span>
           </div>
           <p class="service-desc">Stream or download audiobooks and ebooks with automatic progress syncing across your devices.</p>
           <div class="service-url">
             <strong>Server URL:</strong>
             <code>{{ blurb_data.abs_url or "Configured by Administrator" }}</code>
+            {% if blurb_data.abs_url %}
+            <button type="button" class="mini-copy" onclick="copyText('{{ blurb_data.abs_url }}', this)">Copy</button>
+            {% endif %}
           </div>
-          <ol class="service-steps">
-            <li>Download the <strong>Audiobookshelf</strong> app on iOS (App Store) or Android (Play Store), or open in browser.</li>
-            <li>Connect using the <strong>Server URL</strong> above.</li>
-            <li>Sign in with your <strong>Username</strong> and <strong>Password</strong>.</li>
+
+          <div class="app-links-section">
+            <div class="app-platform-block">
+              <span class="platform-heading">📱 iPhone &amp; iPad (iOS)</span>
+              <div class="app-buttons-row">
+                <a class="app-store-button primary-app" href="https://apps.apple.com/app/absorb-for-audiobookshelf/id6477741369" target="_blank" rel="noreferrer">
+                  <span>🍏 <strong>Absorb</strong> (App Store · Recommended) ↗</span>
+                </a>
+                <a class="app-store-button" href="https://testflight.apple.com/join/wiic9QIW" target="_blank" rel="noreferrer">
+                  <span>🍏 Official ABS (TestFlight Beta) ↗</span>
+                </a>
+              </div>
+            </div>
+
+            <div class="app-platform-block" style="margin-top: 10px;">
+              <span class="platform-heading">🤖 Android</span>
+              <div class="app-buttons-row">
+                <a class="app-store-button primary-app" href="https://play.google.com/store/apps/details?id=com.audiobookshelf.app" target="_blank" rel="noreferrer">
+                  <span>🤖 <strong>Official ABS</strong> (Google Play) ↗</span>
+                </a>
+                <a class="app-store-button" href="https://play.google.com/store/apps/details?id=com.barnabas.absorb" target="_blank" rel="noreferrer">
+                  <span>🤖 <strong>Absorb</strong> (Google Play) ↗</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <ol class="service-steps" style="margin-top: 14px;">
+            <li>Install <strong>Absorb</strong> or the official <strong>Audiobookshelf</strong> app from the links above.</li>
+            <li>Open the app and enter the <strong>Server URL</strong> shown above.</li>
+            <li>Sign in with your <strong>Username</strong> and <strong>Password</strong> to stream or download books!</li>
           </ol>
         </div>
 
@@ -154,6 +184,9 @@
           <div class="service-url">
             <strong>Portal URL:</strong>
             <code>{{ blurb_data.portal_url }}</code>
+            {% if blurb_data.portal_url %}
+            <button type="button" class="mini-copy" onclick="copyText('{{ blurb_data.portal_url }}', this)">Copy</button>
+            {% endif %}
           </div>
           <ol class="service-steps">
             <li>Open the <strong>Request Portal</strong> link in any web browser.</li>

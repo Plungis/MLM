@@ -1,3 +1,3 @@
 """MyAnonaSuite runtime and HeavyMLM automation module."""
 
-__version__ = "0.5.0b71"
+__version__ = "0.5.0b72"

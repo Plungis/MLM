@@ -79,13 +79,26 @@ def generate_onboarding_blurb(
     abs_section = ""
     if abs_url:
         abs_section = f"""--------------------------------------------------
-🎧 PART 1: HOW TO LISTEN & READ (Audiobookshelf)
+🎧 PART 1: HOW TO LISTEN & READ (Audiobookshelf & Absorb)
 --------------------------------------------------
 • Server URL: {abs_url}
-• Mobile App: Download "Audiobookshelf" from the App Store (iOS)
-  or Google Play Store (Android).
+
+• Mobile App Options:
+  📱 iPhone / iPad (iOS):
+     • Absorb (Recommended - on the App Store):
+       https://apps.apple.com/app/absorb-for-audiobookshelf/id6477741369
+     • Official Audiobookshelf (TestFlight Beta):
+       https://testflight.apple.com/join/wiic9QIW
+       (Or open {abs_url} in Safari and tap "Add to Home Screen")
+
+  🤖 Android:
+     • Official Audiobookshelf (on Google Play):
+       https://play.google.com/store/apps/details?id=com.audiobookshelf.app
+     • Absorb (on Google Play):
+       https://play.google.com/store/apps/details?id=com.barnabas.absorb
+
 • How to Connect:
-  1. Open the Audiobookshelf app or navigate to {abs_url} in your browser.
+  1. Install your preferred app (Absorb or Audiobookshelf) or open {abs_url}.
   2. Enter Server URL: {abs_url}
   3. Sign in with your username and password above.
 • Features:
@@ -95,7 +108,7 @@ def generate_onboarding_blurb(
 """
     else:
         abs_section = """--------------------------------------------------
-🎧 PART 1: HOW TO LISTEN & READ (Audiobookshelf)
+🎧 PART 1: HOW TO LISTEN & READ (Audiobookshelf & Absorb)
 --------------------------------------------------
 Ask your administrator for the Audiobookshelf server address.
 """
