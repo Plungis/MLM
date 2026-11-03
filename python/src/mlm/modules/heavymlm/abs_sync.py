@@ -20,13 +20,6 @@ def fetch_all_abs_library_books(
 ) -> list[dict[str, Any]]:
     """Fetch all audiobooks from an Audiobookshelf library without filtering."""
     connection = settings.get("connection", {})
-    library_id = connection.get("libraryId")
-    if not library_id:
-        raise ValueError(
-            "Audiobookshelf library ID is not configured. "
-            "Please select a library in ABSidekick settings."
-        )
-
     base_url = connection.get("baseUrl")
     auth_token = token or connection.get("token") or ""
     if not base_url or not auth_token:
@@ -36,6 +29,28 @@ def fetch_all_abs_library_books(
         )
 
     client = create_client(settings, token=auth_token)
+    library_id = connection.get("libraryId")
+    if not library_id:
+        try:
+            libs_payload = client.get("/api/libraries")
+            libs = (
+                libs_payload.get("libraries", [])
+                if isinstance(libs_payload, dict)
+                else []
+            )
+            book_libs = [lib for lib in libs if lib.get("mediaType") == "book"]
+            target_lib = book_libs[0] if book_libs else (libs[0] if libs else None)
+            if target_lib:
+                library_id = str(target_lib.get("id"))
+                connection["libraryId"] = library_id
+        except Exception:
+            pass
+
+    if not library_id:
+        raise ValueError(
+            "Audiobookshelf library ID is not configured. "
+            "Please select a library in ABSidekick settings."
+        )
     page_size = 100
     page = 0
     normalized_books: list[dict[str, Any]] = []

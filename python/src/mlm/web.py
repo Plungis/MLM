@@ -134,6 +134,58 @@ def _redacted_config(config: Config) -> dict:
     return value
 
 
+def resolve_abs_library_settings(
+    absidekick: Any, config: Config
+) -> tuple[dict[str, Any], str | None, bool]:
+    """Extract merged Audiobookshelf settings, token, and configuration status."""
+    settings = (
+        deepcopy(absidekick.settings)
+        if absidekick and hasattr(absidekick, "settings")
+        else {}
+    )
+    settings.setdefault("connection", {})
+    conn = settings["connection"]
+    token = absidekick.token if absidekick and hasattr(absidekick, "token") else None
+
+    abs_cfg = getattr(config, "audiobookshelf", None)
+    if abs_cfg:
+        if isinstance(abs_cfg, dict):
+            cfg_base = (
+                abs_cfg.get("baseUrl")
+                or abs_cfg.get("base_url")
+                or abs_cfg.get("url")
+            )
+            cfg_token = abs_cfg.get("token")
+            cfg_lib = (
+                abs_cfg.get("libraryId")
+                or abs_cfg.get("library_id")
+                or abs_cfg.get("library")
+                or abs_cfg.get("libraries")
+            )
+        else:
+            cfg_base = getattr(abs_cfg, "base_url", None) or getattr(
+                abs_cfg, "url", None
+            )
+            cfg_token = getattr(abs_cfg, "token", None)
+            cfg_lib = (
+                getattr(abs_cfg, "library_id", None)
+                or getattr(abs_cfg, "library", None)
+                or getattr(abs_cfg, "libraries", None)
+            )
+
+        if not conn.get("baseUrl") and cfg_base:
+            conn["baseUrl"] = str(cfg_base).rstrip("/")
+        if not token and cfg_token:
+            token = str(cfg_token)
+        if not conn.get("libraryId") and cfg_lib:
+            conn["libraryId"] = str(
+                cfg_lib[0] if isinstance(cfg_lib, (list, tuple)) else cfg_lib
+            )
+
+    is_configured = bool(token and conn.get("baseUrl"))
+    return settings, token, is_configured
+
+
 def create_app(config_path: Path, database_path: Path) -> FastAPI:
     ensure_database(database_path)
     config = load_config(config_path)
@@ -168,6 +220,39 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         app.state.services = state
         try:
             state.start()
+
+            async def startup_abs_sync() -> None:
+                try:
+                    settings, token, is_configured = resolve_abs_library_settings(
+                        absidekick, config
+                    )
+                    if is_configured:
+                        repository.log_activity(
+                            "absidekick",
+                            "Starting automatic ABS sync on server startup...",
+                            level="info",
+                        )
+                        result = await asyncio.to_thread(
+                            sync_audiobookshelf_library,
+                            repository,
+                            settings,
+                            token=token,
+                        )
+                        count = result.get("total_synced", 0)
+                        repository.log_activity(
+                            "absidekick",
+                            f"Startup ABS sync complete: {count} refreshed.",
+                            level="success",
+                        )
+                except Exception as exc:
+                    repository.log_activity(
+                        "absidekick",
+                        f"Startup ABS sync failed: {exc}",
+                        level="warning",
+                    )
+
+            asyncio.create_task(startup_abs_sync())
+
             yield
         finally:
             await state.close()
@@ -796,22 +881,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 status_code=307,
             )
 
-        abs_configured = bool(
-            (
-                absidekick.token
-                or (config.audiobookshelf and config.audiobookshelf.token)
-            )
-            and (
-                absidekick.settings.get("connection", {}).get("baseUrl")
-                or (config.audiobookshelf and config.audiobookshelf.base_url)
-            )
-            and (
-                absidekick.settings.get("connection", {}).get("libraryId")
-                or (
-                    config.audiobookshelf
-                    and getattr(config.audiobookshelf, "library_id", None)
-                )
-            )
+        _, _, abs_configured = resolve_abs_library_settings(
+            absidekick, active_config()
         )
 
         page_hardlinked_count = 0
@@ -883,20 +954,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     @app.post("/library/sync-abs")
     async def sync_abs_library() -> RedirectResponse:
-        settings = deepcopy(absidekick.settings)
-        token = absidekick.token
-        if (
-            not token or not settings.get("connection", {}).get("baseUrl")
-        ) and config.audiobookshelf:
-            settings.setdefault("connection", {})
-            if (
-                not settings["connection"].get("baseUrl")
-                and config.audiobookshelf.base_url
-            ):
-                settings["connection"]["baseUrl"] = config.audiobookshelf.base_url
-            if not token and config.audiobookshelf.token:
-                token = config.audiobookshelf.token
-
+        settings, token, _ = resolve_abs_library_settings(
+            absidekick, active_config()
+        )
         try:
             result = await asyncio.to_thread(
                 sync_audiobookshelf_library,
@@ -1790,29 +1850,9 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         )
 
     def get_abs_connection(config: Config) -> tuple[str, str]:
-        url = ""
-        token = ""
-        if isinstance(config.audiobookshelf, dict):
-            url = str(
-                config.audiobookshelf.get("url")
-                or config.audiobookshelf.get("base_url")
-                or ""
-            ).rstrip("/")
-            token = str(config.audiobookshelf.get("token") or "")
-        elif config.audiobookshelf:
-            url = str(
-                getattr(config.audiobookshelf, "url", None)
-                or getattr(config.audiobookshelf, "base_url", "")
-            ).rstrip("/")
-            token = str(getattr(config.audiobookshelf, "token", ""))
-
-        if not url:
-            url = str(
-                absidekick.settings.get("connection", {}).get("baseUrl") or ""
-            ).rstrip("/")
-        if not token:
-            token = str(absidekick.token or "")
-        return url, token
+        settings, token, _ = resolve_abs_library_settings(absidekick, config)
+        url = str(settings.get("connection", {}).get("baseUrl") or "").rstrip("/")
+        return url, str(token or "")
 
     def get_portal_public_url(request: Request, config: Config) -> str:
         if config.request_portal_domains:

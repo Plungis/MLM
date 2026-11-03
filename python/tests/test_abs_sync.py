@@ -4,20 +4,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
+from mlm.config import Config
 from mlm.database import ensure_database
 from mlm.modules.heavymlm.abs_sync import (
     fetch_all_abs_library_books,
     sync_audiobookshelf_library,
 )
 from mlm.repository import Repository
+from mlm.web import create_app, resolve_abs_library_settings
 
 
 def test_fetch_all_abs_library_books_validation():
-    # Missing libraryId
-    with pytest.raises(ValueError, match="Audiobookshelf library ID is not configured"):
-        fetch_all_abs_library_books({"connection": {}})
-
     # Missing baseUrl or token
     with pytest.raises(ValueError, match="Audiobookshelf URL or API token is missing"):
         fetch_all_abs_library_books({"connection": {"libraryId": "lib-1"}})
@@ -91,3 +90,42 @@ def test_sync_audiobookshelf_library(tmp_path: Path, monkeypatch):
     assert len(books) == 2
     assert books[0]["title"] in {"Unsouled", "Soulsmith"}
     assert books[1]["title"] in {"Unsouled", "Soulsmith"}
+
+
+def test_resolve_abs_library_settings_with_dict():
+    config = Config(
+        mam_id="test",
+        audiobookshelf={
+            "url": "http://abs.example.com:13378",
+            "token": "test-secret-token",
+            "library": "lib-uuid-1234",
+        },
+    )
+    settings, token, is_configured = resolve_abs_library_settings(None, config)
+    assert is_configured is True
+    assert token == "test-secret-token"
+    assert settings["connection"]["baseUrl"] == "http://abs.example.com:13378"
+    assert settings["connection"]["libraryId"] == "lib-uuid-1234"
+
+
+def test_library_page_loads_with_dict_audiobookshelf(tmp_path: Path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """mam_id = "test"
+[audiobookshelf]
+url = "http://abs.example.com:13378"
+token = "test-secret-token"
+library = "lib-uuid-1234"
+""",
+        encoding="utf-8",
+    )
+    database_path = tmp_path / "data.sqlite3"
+    ensure_database(database_path)
+
+    app = create_app(config_path, database_path)
+    client = TestClient(app)
+
+    response = client.get("/library")
+    assert response.status_code == 200
+    assert "Unified Books Catalog" in response.text
+    assert "Sync with ABS" in response.text
