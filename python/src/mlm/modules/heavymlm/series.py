@@ -308,6 +308,8 @@ def detect_library_series(repository: Repository) -> list[dict[str, Any]]:
     seen_abs_ids: set[str] = set()
 
     for record in all_records:
+        if record.get("deleted_from_disk_at"):
+            continue
         mam_id = as_int(record.get("mam_id"))
         abs_id = str(record.get("abs_id") or record.get("id") or "")
         if mam_id and mam_id in seen_ids:

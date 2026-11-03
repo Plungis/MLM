@@ -38,11 +38,16 @@ from .config import (
 )
 from .database import ensure_database
 from .error_guidance import error_guidance
-from .library import check_record_hardlink_status, test_all_library_hardlinks
+from .library import (
+    check_record_hardlink_status,
+    reconcile_library,
+    test_all_library_hardlinks,
+)
 from .mam import MamClient, MamError, authenticated_mam_client
 from .modules.absidekick import SOURCE_VERSION, ABSidekickService
 from .modules.absidekick.core import ABSAPIError
 from .modules.heavymlm.abs_sync import sync_audiobookshelf_library
+from .modules.heavymlm.catalog import get_unified_book_catalog
 from .modules.heavymlm.search import (
     filter_search_results,
     present_search_result,
@@ -678,26 +683,77 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     @app.get("/library", response_class=HTMLResponse)
     async def combined_library(
         request: Request,
-        view: str = "processed",
+        view: str = "books",
         series: str = "",
+        format: str = "all",
+        search: str = "",
         page: int = 1,
     ) -> HTMLResponse:
         selected_view = (
             view
-            if view in {"processed", "duplicates", "missing", "abs"}
-            else "processed"
+            if view in {"books", "processed", "duplicates", "missing", "abs"}
+            else "books"
         )
         table = "torrents" if selected_view == "processed" else "duplicate_torrents"
         page = max(1, page)
         page_size = 50
         rows: list[dict] = []
+        books: list[dict] = []
+        catalog_stats = {
+            "total": 0,
+            "audio": 0,
+            "ebook": 0,
+            "both": 0,
+            "missing_audio": 0,
+            "missing_ebook": 0,
+        }
         total = 0
         library_series: list[dict] = []
         series_scan_resolution: dict[str, Any] | None = None
         cleaned_series = series.strip()
         abs_books_count = await asyncio.to_thread(repository.abs_books_count)
 
-        if selected_view == "missing":
+        if selected_view == "books":
+            unfiltered_catalog = await asyncio.to_thread(
+                get_unified_book_catalog,
+                repository,
+                active_config(),
+                filter_format="all",
+                search_query="",
+            )
+            catalog_stats = {
+                "total": len(unfiltered_catalog),
+                "audio": sum(
+                    1 for b in unfiltered_catalog if b["audio"]["present"]
+                ),
+                "ebook": sum(
+                    1 for b in unfiltered_catalog if b["ebook"]["present"]
+                ),
+                "both": sum(
+                    1 for b in unfiltered_catalog if b["format_status"] == "both"
+                ),
+                "missing_audio": sum(
+                    1
+                    for b in unfiltered_catalog
+                    if b["ebook"]["present"] and not b["audio"]["present"]
+                ),
+                "missing_ebook": sum(
+                    1
+                    for b in unfiltered_catalog
+                    if b["audio"]["present"] and not b["ebook"]["present"]
+                ),
+            }
+            all_filtered = await asyncio.to_thread(
+                get_unified_book_catalog,
+                repository,
+                active_config(),
+                filter_format=format,
+                search_query=search,
+            )
+            total = len(all_filtered)
+            page_count = max(1, math.ceil(total / page_size))
+            books = all_filtered[(page - 1) * page_size : page * page_size]
+        elif selected_view == "missing":
             library_series = await asyncio.to_thread(detect_library_series, repository)
             total = len(library_series)
             if cleaned_series:
@@ -775,6 +831,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 library_view=selected_view,
                 table=table,
                 rows=rows,
+                books=books,
+                catalog_stats=catalog_stats,
+                active_format=format,
+                search_query=search,
+                reconciled=request.query_params.get("reconciled") == "1",
+                reconciled_pruned=as_int(request.query_params.get("pruned", 0)),
+                reconciled_restored=as_int(request.query_params.get("restored", 0)),
                 page_hardlinked_count=page_hardlinked_count,
                 page=page,
                 page_count=page_count,
@@ -801,6 +864,21 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 series_total=as_int(request.query_params.get("series_total", 0)),
                 series_name=request.query_params.get("series_name", ""),
             ),
+        )
+
+    @app.post("/library/reconcile")
+    async def reconcile_library_route() -> RedirectResponse:
+        res = await asyncio.to_thread(
+            reconcile_library, active_config(), repository
+        )
+        rec_params = {
+            "reconciled": "1",
+            "pruned": res.get("pruned", 0),
+            "restored": res.get("restored", 0),
+        }
+        return RedirectResponse(
+            f"/library?{urlencode(rec_params)}",
+            status_code=303,
         )
 
     @app.post("/library/sync-abs")

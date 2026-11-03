@@ -12,7 +12,7 @@ from .autograbber import run_autograbber
 from .cleaner import clean_superseded
 from .config import Config
 from .downloader import grab_selected_torrents
-from .library import organize_completed
+from .library import organize_completed, reconcile_library
 from .lists import run_goodreads_import, run_notion_import
 from .mam import MamClient
 from .modules.mam_spender import MamSpenderService
@@ -223,6 +223,9 @@ class ServiceState:
             await qbit.close()
 
     async def cleaner(self) -> None:
+        await asyncio.to_thread(
+            reconcile_library, self.config, self.repository
+        )
         clients: list[tuple[dict, QbitClient]] = []
         try:
             for index in range(len(self.config.qbittorrent)):

@@ -1408,3 +1408,56 @@ def check_record_hardlink_status(row: dict[str, Any]) -> dict[str, Any]:
         "checked_live": False,
     }
 
+def reconcile_library(
+    config: Config,
+    repository: Repository,
+) -> dict[str, Any]:
+    """Scan library records and disk to verify presence and prune deleted items."""
+    torrents = repository.table_rows("torrents", limit=50000, offset=0)
+    pruned = 0
+    restored = 0
+    scanned = 0
+
+    for item in torrents:
+        scanned += 1
+        t_id = str(item.get("id"))
+        lib_path = item.get("library_path")
+        is_deleted = bool(item.get("deleted_from_disk_at"))
+
+        if not lib_path:
+            continue
+
+        target = Path(lib_path)
+        exists_on_disk = False
+        try:
+            if target.is_absolute():
+                if target.exists():
+                    files = item.get("library_files") or []
+                    if files:
+                        exists_on_disk = any((target / f).exists() for f in files)
+                    elif target.is_file():
+                        exists_on_disk = True
+                    elif target.is_dir():
+                        exists_on_disk = any(target.iterdir())
+                else:
+                    exists_on_disk = False
+            else:
+                exists_on_disk = not is_deleted
+        except OSError:
+            exists_on_disk = False
+
+        if not exists_on_disk and not is_deleted:
+            repository.mark_torrent_deleted_from_disk(
+                t_id, "files_missing_from_disk"
+            )
+            pruned += 1
+        elif exists_on_disk and is_deleted:
+            repository.restore_torrent_on_disk(t_id)
+            restored += 1
+
+    return {
+        "scanned": scanned,
+        "pruned": pruned,
+        "restored": restored,
+    }
+

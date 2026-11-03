@@ -468,16 +468,21 @@ class Repository:
             ).fetchone()
             if torrent_row:
                 torrent_data = json.loads(torrent_row[0])
+                if torrent_data.get("deleted_from_disk_at"):
+                    return False
                 lib_path_val = torrent_data.get("library_path")
                 if lib_path_val:
                     target_dir = Path(lib_path_val)
                     files = torrent_data.get("library_files") or []
+                    if target_dir.is_absolute() and not target_dir.exists():
+                        return False
                     if target_dir.exists():
                         if files:
                             if any((target_dir / f).exists() for f in files):
                                 return True
                         elif any(target_dir.iterdir()):
                             return True
+                        return False
                 else:
                     return True
             elif title_search:
@@ -487,6 +492,8 @@ class Repository:
                 ).fetchall()
                 for row in torrent_rows:
                     torrent_data = json.loads(row[0])
+                    if torrent_data.get("deleted_from_disk_at"):
+                        continue
                     if meta and not metadata_matches(
                         meta, torrent_data.get("meta", {})
                     ):
@@ -495,6 +502,8 @@ class Repository:
                     if lib_path_val:
                         target_dir = Path(lib_path_val)
                         files = torrent_data.get("library_files") or []
+                        if target_dir.is_absolute() and not target_dir.exists():
+                            continue
                         if target_dir.exists():
                             if files:
                                 if any((target_dir / f).exists() for f in files):
@@ -585,6 +594,7 @@ class Repository:
             rows = connection.execute(
                 """SELECT payload_json FROM torrents
                    WHERE json_extract(payload_json, '$.library_path') IS NOT NULL
+                     AND json_extract(payload_json, '$.deleted_from_disk_at') IS NULL
                    ORDER BY title_search"""
             )
             return [json.loads(row[0]) for row in rows]
@@ -658,6 +668,60 @@ class Repository:
                     canonical_json(torrent),
                     torrent["id"],
                 ),
+            )
+
+    def mark_torrent_deleted_from_disk(
+        self, torrent_id: str, reason: str = "files_missing"
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        payload = None
+        with connect(self.path) as connection, connection:
+            row = connection.execute(
+                "SELECT payload_json FROM torrents WHERE id = ?", (torrent_id,)
+            ).fetchone()
+            if row:
+                payload = json.loads(row[0])
+                payload["deleted_from_disk_at"] = now
+                payload["deleted_reason"] = reason
+                connection.execute(
+                    "UPDATE torrents SET payload_json = ? WHERE id = ?",
+                    (canonical_json(payload), torrent_id),
+                )
+        if payload:
+            self.log_activity(
+                "library",
+                f"Library item pruned (deleted from disk): {payload.get('title')}",
+                level="info",
+                context={
+                    "id": torrent_id,
+                    "reason": reason,
+                    "library_path": payload.get("library_path"),
+                },
+            )
+
+    def restore_torrent_on_disk(self, torrent_id: str) -> None:
+        payload = None
+        with connect(self.path) as connection, connection:
+            row = connection.execute(
+                "SELECT payload_json FROM torrents WHERE id = ?", (torrent_id,)
+            ).fetchone()
+            if row:
+                payload = json.loads(row[0])
+                payload.pop("deleted_from_disk_at", None)
+                payload.pop("deleted_reason", None)
+                connection.execute(
+                    "UPDATE torrents SET payload_json = ? WHERE id = ?",
+                    (canonical_json(payload), torrent_id),
+                )
+        if payload:
+            self.log_activity(
+                "library",
+                f"Library item restored (found on disk): {payload.get('title')}",
+                level="info",
+                context={
+                    "id": torrent_id,
+                    "library_path": payload.get("library_path"),
+                },
             )
 
     def mark_removed_from_mam(self, torrent: dict[str, Any]) -> None:

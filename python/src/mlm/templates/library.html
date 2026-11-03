@@ -2,24 +2,36 @@
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">HeavyMLM / library organizer</p>
-    <h1>{% if library_view == "missing" %}Missing Series Books{% elif library_view == "abs" %}Audiobookshelf Library Catalog{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Library{% endif %}</h1>
-    <p class="subtitle">{% if library_view == "missing" %}Audit your entire library (HeavyMLM downloads + Audiobookshelf) for missing books and grab installments directly from MyAnonamouse.{% elif library_view == "abs" %}All audiobooks synchronized directly from your Audiobookshelf server.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Everything HeavyMLM has processed, with duplicate and replacement candidates kept alongside the library view.{% endif %}</p>
+    <p class="eyebrow">HeavyMLM / Library &amp; Formats</p>
+    <h1>{% if library_view == "books" %}Unified Books Catalog{% elif library_view == "missing" %}Missing Series Books{% elif library_view == "abs" %}Audiobookshelf Library Catalog{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Torrents{% endif %}</h1>
+    <p class="subtitle">{% if library_view == "books" %}Your entire collection organized by book, showing active availability for Audiobooks, eBooks, or Both formats with live disk verification.{% elif library_view == "missing" %}Audit your entire library for missing books and grab installments directly from MyAnonamouse.{% elif library_view == "abs" %}All audiobooks synchronized directly from your Audiobookshelf server.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Raw torrent records tracked by HeavyMLM's download pipeline.{% endif %}</p>
   </div>
   <div class="page-meta">
-    <span class="chip">{{ counts.get("torrents", 0) }} MLM downloads</span>
-    <span class="chip">{{ abs_books_count }} ABS audiobooks</span>
-    <span class="chip">{{ counts.get("duplicate_torrents", 0) }} duplicates</span>
-    {% if library_series %}<span class="chip">{{ library_series | length }} series detected</span>{% endif %}
+    <span class="chip">📚 {{ catalog_stats.total }} Books</span>
+    <span class="chip" style="color: #38bdf8;">🎧 {{ catalog_stats.audio }} Audiobooks</span>
+    <span class="chip" style="color: #c084fc;">📖 {{ catalog_stats.ebook }} eBooks</span>
+    <span class="chip" style="color: #34d399;">✨ {{ catalog_stats.both }} Both Formats</span>
+    <form method="post" action="/library/reconcile" class="inline-form">
+      <button type="submit" class="button secondary small" title="Verify files on disk and prune deleted items">⟳ Rescan &amp; Verify Disk</button>
+    </form>
     {% if abs_configured %}
     <form method="post" action="/library/sync-abs" class="inline-form">
-      <button type="submit" class="button secondary small">🔄 Sync with Audiobookshelf</button>
+      <button type="submit" class="button secondary small">🔄 Sync with ABS</button>
     </form>
     {% else %}
     <a class="button ghost small" href="/suite/absidekick/config">⚙️ Connect ABS</a>
     {% endif %}
   </div>
 </header>
+
+{% if reconciled %}
+<div class="flash success" role="status">
+  <span>
+    Library verified against filesystem! Pruned <strong>{{ reconciled_pruned }}</strong> deleted item(s){% if reconciled_restored %}, restored <strong>{{ reconciled_restored }}</strong> item(s){% endif %}.
+  </span>
+  <span class="status ok">Disk Reconciled</span>
+</div>
+{% endif %}
 
 {% if abs_synced is not none %}
 <div class="flash success" role="status">
@@ -54,13 +66,130 @@
 {% endif %}
 
 <nav class="request-inbox-tabs" aria-label="Organized library views">
-  <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed library · {{ counts.get("torrents", 0) }}</a>
-  <a class="button{% if library_view == 'abs' %} primary{% endif %}" href="/library?view=abs">Audiobookshelf library · {{ abs_books_count }}</a>
-  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates &amp; replacements · {{ counts.get("duplicate_torrents", 0) }}</a>
+  <a class="button{% if library_view == 'books' %} primary{% endif %}" href="/library?view=books">Books Catalog · {{ catalog_stats.total }}</a>
   <a class="button{% if library_view == 'missing' %} primary{% endif %}" href="/library?view=missing">Missing series books</a>
+  <a class="button{% if library_view == 'abs' %} primary{% endif %}" href="/library?view=abs">Audiobookshelf library · {{ abs_books_count }}</a>
+  <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed torrents · {{ counts.get("torrents", 0) }}</a>
+  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates · {{ counts.get("duplicate_torrents", 0) }}</a>
 </nav>
 
-{% if library_view == "missing" %}
+{% if library_view == "books" %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Library Books &amp; Formats</h2>
+      <p>Every active book in your collection with audio and ebook format status. Deleted files are automatically pruned to keep your library accurate.</p>
+    </div>
+    <span class="chip">Showing {{ first_record }}–{{ last_record }} of {{ total }} books</span>
+  </header>
+
+  <!-- Filter & Search Controls -->
+  <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border, #334155); display: flex; flex-direction: column; gap: 0.75rem;">
+    <form method="get" action="/library" class="series-search-form" style="margin-bottom: 0;">
+      <input type="hidden" name="view" value="books" />
+      <input type="hidden" name="format" value="{{ active_format }}" />
+      <input type="search" name="search" value="{{ search_query }}" placeholder="Filter books by title, author, or series name..." />
+      <button type="submit" class="button primary small">Search</button>
+      {% if search_query %}<a class="button ghost small" href="/library?view=books&format={{ active_format }}">Clear</a>{% endif %}
+    </form>
+
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+      <span style="font-size: 0.85rem; color: #94a3b8;">Format Filter:</span>
+      <a class="button small{% if active_format == 'all' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=all{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">All ({{ catalog_stats.total }})</a>
+      <a class="button small{% if active_format == 'both' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=both{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">Both Formats ({{ catalog_stats.both }})</a>
+      <a class="button small{% if active_format == 'audiobook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=audiobook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">Audiobooks ({{ catalog_stats.audio }})</a>
+      <a class="button small{% if active_format == 'ebook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=ebook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">eBooks ({{ catalog_stats.ebook }})</a>
+      <a class="button small{% if active_format == 'missing_audio' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=missing_audio{% if search_query %}&search={{ search_query | urlencode }}{% endif %}" style="color: #fb7185;">Missing Audio ({{ catalog_stats.missing_audio }})</a>
+      <a class="button small{% if active_format == 'missing_ebook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=missing_ebook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}" style="color: #fb7185;">Missing eBook ({{ catalog_stats.missing_ebook }})</a>
+    </div>
+  </div>
+
+  {% if books %}
+  <div class="record-list">
+    {% for b in books %}
+    <article class="record">
+      <div class="record-summary" style="align-items: flex-start; padding: 1rem 1.25rem;">
+        <div style="flex-grow: 1;">
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+            <strong style="font-size: 1.05rem; color: #f8fafc;">{{ b.title }}</strong>
+            {% if b.series_name %}
+            <span class="chip" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600;">
+              {{ b.series_name }} {% if b.series_volume %}#{{ b.series_volume }}{% endif %}
+            </span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.75rem;">
+            by {{ b.authors | join(', ') if b.authors else 'Unknown Author' }}
+            {% if b.narrators %} · Narrated by {{ b.narrators | join(', ') }}{% endif %}
+          </div>
+
+          <!-- Format Availability Rows -->
+          <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+            <!-- Audiobook Format -->
+            <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
+              {% if b.audio.present %}
+              <span class="chip" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-weight: 600;">✓ 🎧 Audiobook</span>
+              <span style="color: #cbd5e1;">{{ b.audio.filetypes | join(', ') | upper if b.audio.filetypes else 'AUDIO' }} {% if b.audio.size %}· {{ b.audio.size }}{% endif %}</span>
+              {% if b.audio.source == 'audiobookshelf' %}<span class="chip small" style="background: rgba(56, 189, 248, 0.1); color: #38bdf8;">ABS</span>{% endif %}
+              {% else %}
+              <span class="chip" style="background: rgba(244, 63, 94, 0.12); color: #fb7185;">✗ 🎧 No Audiobook</span>
+              <a class="button ghost small" href="/search?title={{ b.title | urlencode }}&author={{ (b.authors[0] if b.authors else '') | urlencode }}&category=Audiobook">+ Find Audiobook on MAM</a>
+              {% endif %}
+            </div>
+
+            <!-- eBook Format -->
+            <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
+              {% if b.ebook.present %}
+              <span class="chip" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; font-weight: 600;">✓ 📖 eBook</span>
+              <span style="color: #cbd5e1;">{{ b.ebook.filetypes | join(', ') | upper if b.ebook.filetypes else 'EBOOK' }} {% if b.ebook.size %}· {{ b.ebook.size }}{% endif %}</span>
+              {% else %}
+              <span class="chip" style="background: rgba(244, 63, 94, 0.12); color: #fb7185;">✗ 📖 No eBook</span>
+              <a class="button ghost small" href="/search?title={{ b.title | urlencode }}&author={{ (b.authors[0] if b.authors else '') | urlencode }}&category=Ebook">+ Find eBook on MAM</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; flex-shrink: 0;">
+          {% if b.format_status == 'both' %}
+          <span class="status ok" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">🎧+📖 Both Formats</span>
+          {% elif b.format_status == 'audiobook' %}
+          <span class="status ok" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🎧 Audiobook Only</span>
+          {% elif b.format_status == 'ebook' %}
+          <span class="status ok" style="background: rgba(192, 132, 252, 0.15); color: #c084fc;">📖 eBook Only</span>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>No books found matching this filter</strong>
+      <p>Try clearing your search or switching format filters above. You can also click "Rescan &amp; Verify Disk" to verify all folders.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% if page_count > 1 %}
+<nav class="pagination" aria-label="Library pages">
+  {% if page > 1 %}
+  <a class="button" href="/library?view=books&format={{ active_format }}{% if search_query %}&search={{ search_query | urlencode }}{% endif %}&page={{ page - 1 }}">Previous</a>
+  {% else %}
+  <span class="button disabled">Previous</span>
+  {% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}
+  <a class="button" href="/library?view=books&format={{ active_format }}{% if search_query %}&search={{ search_query | urlencode }}{% endif %}&page={{ page + 1 }}">Next</a>
+  {% else %}
+  <span class="button disabled">Next</span>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% elif library_view == "missing" %}
 <section class="panel">
   <header class="panel-header">
     <div>
