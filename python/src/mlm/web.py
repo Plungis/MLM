@@ -244,6 +244,23 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                             f"Startup ABS sync complete: {count} refreshed.",
                             level="success",
                         )
+                        discovered = settings.get("connection", {}).get("libraryId")
+                        if (
+                            discovered
+                            and absidekick
+                            and hasattr(absidekick, "settings")
+                        ):
+                            cur = absidekick.settings.get("connection", {}).get(
+                                "libraryId"
+                            )
+                            if cur != discovered:
+                                absidekick.settings.setdefault("connection", {})[
+                                    "libraryId"
+                                ] = discovered
+                                if hasattr(absidekick, "_store"):
+                                    absidekick._store(
+                                        absidekick.settings, absidekick.token
+                                    )
                 except Exception as exc:
                     repository.log_activity(
                         "absidekick",
@@ -964,6 +981,21 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 settings,
                 token=token,
             )
+            discovered = settings.get("connection", {}).get("libraryId")
+            if (
+                discovered
+                and absidekick
+                and hasattr(absidekick, "settings")
+            ):
+                cur = absidekick.settings.get("connection", {}).get("libraryId")
+                if cur != discovered:
+                    absidekick.settings.setdefault("connection", {})[
+                        "libraryId"
+                    ] = discovered
+                    if hasattr(absidekick, "_store"):
+                        absidekick._store(
+                            absidekick.settings, absidekick.token
+                        )
             snapshot_cache["expires"] = 0.0
             params = {"view": "missing", "abs_synced": result["total_synced"]}
             return RedirectResponse(f"/library?{urlencode(params)}", status_code=303)

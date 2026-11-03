@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from mlm.config import Config
 from mlm.database import ensure_database
+from mlm.modules.absidekick.core import ABSAPIError
 from mlm.modules.heavymlm.abs_sync import (
     fetch_all_abs_library_books,
     sync_audiobookshelf_library,
@@ -129,3 +130,67 @@ library = "lib-uuid-1234"
     assert response.status_code == 200
     assert "Unified Books Catalog" in response.text
     assert "Sync with ABS" in response.text
+
+
+def test_sync_audiobookshelf_stale_library_id_auto_recovery(
+    tmp_path: Path, monkeypatch
+):
+    db_file = tmp_path / "test.db"
+    ensure_database(db_file)
+    repo = Repository(db_file)
+
+    fake_items = [
+        {
+            "id": "abs-real-1",
+            "media": {
+                "metadata": {
+                    "title": "Dungeon Crawler Carl",
+                    "authors": [{"name": "Matt Dinniman"}],
+                    "series": [{"name": "Dungeon Crawler Carl", "sequence": "1"}],
+                }
+            },
+            "path": "/audiobooks/Matt Dinniman/DCC 1",
+        }
+    ]
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def get(
+            self, path: str, params: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+            if path == "/api/libraries":
+                return {
+                    "libraries": [
+                        {
+                            "id": "real-active-lib-uuid",
+                            "name": "Audiobooks",
+                            "mediaType": "book",
+                        }
+                    ]
+                }
+            if "real-active-lib-uuid" in path:
+                if params and params.get("page", 0) == 0:
+                    return {"results": fake_items, "total": 1}
+                return {"results": [], "total": 1}
+            raise ABSAPIError(404, f"ABS API returned HTTP 404 for {path}")
+
+    monkeypatch.setattr(
+        "mlm.modules.heavymlm.abs_sync.create_client",
+        lambda *args, **kwargs: FakeClient(),
+    )
+
+    settings = {
+        "connection": {
+            "baseUrl": "http://abs.local:13378",
+            "token": "secret-token",
+            "libraryId": "6dd4e1b6-44d8-4bda-8733-52ace89b7c40",
+        }
+    }
+
+    result = sync_audiobookshelf_library(repo, settings)
+    assert result["ok"] is True
+    assert result["total_synced"] == 1
+    assert repo.abs_books_count() == 1
+    assert settings["connection"]["libraryId"] == "real-active-lib-uuid"

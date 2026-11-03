@@ -5,6 +5,7 @@ from typing import Any
 
 from ...repository import Repository
 from ..absidekick.core import (
+    ABSAPIError,
     create_client,
     first_present,
     item_metadata,
@@ -29,97 +30,124 @@ def fetch_all_abs_library_books(
         )
 
     client = create_client(settings, token=auth_token)
-    library_id = connection.get("libraryId")
-    if not library_id:
-        try:
-            libs_payload = client.get("/api/libraries")
-            libs = (
-                libs_payload.get("libraries", [])
-                if isinstance(libs_payload, dict)
-                else []
-            )
-            book_libs = [lib for lib in libs if lib.get("mediaType") == "book"]
-            target_lib = book_libs[0] if book_libs else (libs[0] if libs else None)
-            if target_lib:
-                library_id = str(target_lib.get("id"))
-                connection["libraryId"] = library_id
-        except Exception:
-            pass
 
-    if not library_id:
-        raise ValueError(
-            "Audiobookshelf library ID is not configured. "
-            "Please select a library in ABSidekick settings."
+    # 1. Discover all accessible libraries to validate or auto-detect IDs
+    configured_lib_id = connection.get("libraryId")
+    libraries_to_query: list[str] = []
+
+    try:
+        libs_payload = client.get("/api/libraries")
+        libs = (
+            libs_payload.get("libraries", [])
+            if isinstance(libs_payload, dict)
+            else []
         )
+        valid_lib_ids = {str(lib.get("id")): lib for lib in libs if lib.get("id")}
+        book_libs = [lib for lib in libs if lib.get("mediaType") == "book"]
+
+        if configured_lib_id and str(configured_lib_id) in valid_lib_ids:
+            libraries_to_query = [str(configured_lib_id)]
+        elif book_libs:
+            # Stale/invalid library ID or missing: auto-select all active book libraries
+            libraries_to_query = [str(lib["id"]) for lib in book_libs]
+            connection["libraryId"] = libraries_to_query[0]
+        elif libs:
+            libraries_to_query = [str(libs[0]["id"])]
+            connection["libraryId"] = libraries_to_query[0]
+        elif configured_lib_id:
+            libraries_to_query = [str(configured_lib_id)]
+    except Exception as err:
+        if configured_lib_id:
+            libraries_to_query = [str(configured_lib_id)]
+        else:
+            raise ValueError(
+                f"Failed to query Audiobookshelf libraries: {err}"
+            ) from err
+
+    if not libraries_to_query:
+        raise ValueError(
+            "No libraries found on Audiobookshelf for this API key. "
+            "Please check Audiobookshelf permissions for this user/key."
+        )
+
     page_size = 100
-    page = 0
     normalized_books: list[dict[str, Any]] = []
 
-    while True:
-        payload = client.get(
-            f"/api/libraries/{urllib.parse.quote(str(library_id))}/items",
-            params={
-                "limit": page_size,
-                "page": page,
-                "minified": 0,
-                "collapseseries": 0,
-            },
-        )
-        results = payload.get("results", []) if isinstance(payload, dict) else []
-        if not results:
-            break
+    for lib_id in libraries_to_query:
+        page = 0
+        while True:
+            try:
+                payload = client.get(
+                    f"/api/libraries/{urllib.parse.quote(str(lib_id))}/items",
+                    params={
+                        "limit": page_size,
+                        "page": page,
+                        "minified": 0,
+                        "collapseseries": 0,
+                    },
+                )
+            except ABSAPIError as api_err:
+                if "404" in str(api_err):
+                    break
+                raise
 
-        for item in results:
-            metadata = item_metadata(item)
-            title = item_title(item)
-            if not title:
-                continue
+            results = payload.get("results", []) if isinstance(payload, dict) else []
+            if not results:
+                break
 
-            authors = split_people(
-                first_present(metadata.get("authors"), metadata.get("authorName"), "")
-            )
+            for item in results:
+                metadata = item_metadata(item)
+                title = item_title(item)
+                if not title:
+                    continue
 
-            raw_series = item_series_entries(item)
-            series_list = [
-                {"name": s_name, "entries": [s_seq] if s_seq else []}
-                for s_name, s_seq in raw_series
-                if s_name
-            ]
+                authors = split_people(
+                    first_present(
+                        metadata.get("authors"), metadata.get("authorName"), ""
+                    )
+                )
 
-            library_path = str(
-                first_present(item.get("path"), item.get("relPath"), "")
-            ).strip()
+                raw_series = item_series_entries(item)
+                series_list = [
+                    {"name": s_name, "entries": [s_seq] if s_seq else []}
+                    for s_name, s_seq in raw_series
+                    if s_name
+                ]
 
-            asin = str(metadata.get("asin") or "").strip()
-            isbn = str(metadata.get("isbn") or "").strip()
+                library_path = str(
+                    first_present(item.get("path"), item.get("relPath"), "")
+                ).strip()
 
-            normalized_books.append(
-                {
-                    "id": str(item.get("id")),
-                    "abs_id": str(item.get("id")),
-                    "title": title,
-                    "authors": authors,
-                    "series": series_list,
-                    "library_path": library_path,
-                    "asin": asin,
-                    "isbn": isbn,
-                    "media_type": "audiobook",
-                    "meta": {
+                asin = str(metadata.get("asin") or "").strip()
+                isbn = str(metadata.get("isbn") or "").strip()
+
+                normalized_books.append(
+                    {
+                        "id": str(item.get("id")),
+                        "abs_id": str(item.get("id")),
                         "title": title,
                         "authors": authors,
                         "series": series_list,
-                        "media_type": "audiobook",
+                        "library_path": library_path,
                         "asin": asin,
                         "isbn": isbn,
-                    },
-                    "source": "audiobookshelf",
-                }
-            )
+                        "media_type": "audiobook",
+                        "meta": {
+                            "title": title,
+                            "authors": authors,
+                            "series": series_list,
+                            "media_type": "audiobook",
+                            "asin": asin,
+                            "isbn": isbn,
+                        },
+                        "source": "audiobookshelf",
+                    }
+                )
 
-        total = int(payload.get("total", 0) or 0)
-        page += 1
-        if page * page_size >= total:
-            break
+            total = int(payload.get("total", 0) or 0)
+            page += 1
+            if page * page_size >= total:
+                break
 
     return normalized_books
 
