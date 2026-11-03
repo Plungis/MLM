@@ -1,0 +1,438 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from typing import Any
+
+from ...autograbber import select_row
+from ...config import Config
+from ...mam import MamClient
+from ...repository import Repository
+from ..heavymlm.series import (
+    detect_library_series,
+    fetch_series_releases,
+    score_series_candidate,
+)
+from .clients import GeminiClient, GoogleBooksClient, OpenLibraryClient
+from .models import (
+    BookRecommendation,
+    MissingBook,
+    NextChapterSettings,
+    SeriesHubEntry,
+)
+
+
+class NextChapterService:
+    def __init__(
+        self,
+        config: Config,
+        repository: Repository,
+        mam: MamClient | None = None,
+    ) -> None:
+        self.config = config
+        self.repository = repository
+        self.mam = mam
+        self.settings = self._load_settings()
+        self._state_cache: dict[str, Any] | None = None
+        self._lock = asyncio.Lock()
+
+    def reconfigure(self, config: Config) -> None:
+        self.config = config
+        self.settings = self._load_settings()
+
+    def _load_settings(self) -> NextChapterSettings:
+        raw = getattr(self.config, "nextchapter", {}) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return NextChapterSettings(
+            gemini_api_key=str(raw.get("gemini_api_key", "")).strip(),
+            google_books_api_key=str(raw.get("google_books_api_key", "")).strip(),
+            openlibrary_enabled=bool(raw.get("openlibrary_enabled", True)),
+            preferred_media=str(raw.get("preferred_media", "both")),
+            auto_search_mam=bool(raw.get("auto_search_mam", True)),
+            min_series_books=int(raw.get("min_series_books", 1)),
+        )
+
+    def get_settings(self) -> dict[str, Any]:
+        data = self.settings.to_dict()
+        data["has_gemini"] = bool(self.settings.gemini_api_key)
+        data["has_google_books"] = bool(self.settings.google_books_api_key)
+        return data
+
+    def get_cached_state(self) -> dict[str, Any]:
+        if self._state_cache is not None:
+            return self._state_cache
+        saved = self.repository.config_value("nextchapter_state")
+        if saved:
+            try:
+                self._state_cache = json.loads(saved)
+                return self._state_cache
+            except json.JSONDecodeError:
+                pass
+        return {
+            "series": [],
+            "missing_count": 0,
+            "complete_count": 0,
+            "total_series": 0,
+            "recommendations": [],
+            "last_scan": 0,
+        }
+
+    async def scan_series(self, force: bool = False) -> dict[str, Any]:
+        async with self._lock:
+            cached = self.get_cached_state()
+            now = time.time()
+            if (
+                not force
+                and cached.get("series")
+                and (now - cached.get("last_scan", 0) < 300)
+            ):
+                return cached
+
+            # 1. Detect series across library & ABS
+            raw_series = await asyncio.to_thread(
+                detect_library_series, self.repository
+            )
+            series_entries: list[SeriesHubEntry] = []
+            total_missing = 0
+            complete_count = 0
+
+            google_client = GoogleBooksClient(self.settings.google_books_api_key)
+            openlibrary_client = OpenLibraryClient()
+
+            try:
+                for s in raw_series:
+                    series_name = s["series_name"]
+                    authors = s.get("authors", [])
+                    owned_books = s.get("books", [])
+                    gaps = s.get("gaps", [])
+
+                    missing_items: list[MissingBook] = []
+                    # Create MissingBook for detected volume gaps
+                    for gap in gaps:
+                        clean_vol = gap.lstrip("#").strip()
+                        missing_items.append(
+                            MissingBook(
+                                series_name=series_name,
+                                volume_number=clean_vol,
+                                author=authors[0] if authors else "",
+                                source="gap_detector",
+                            )
+                        )
+
+                    # External metadata lookup to discover titles/covers
+                    lookup_enabled = (
+                        bool(self.settings.google_books_api_key)
+                        or self.settings.openlibrary_enabled
+                    )
+                    if missing_items and lookup_enabled:
+                        author_name = authors[0] if authors else ""
+                        ext_books = await google_client.search_series_books(
+                            series_name, author_name
+                        )
+                        if not ext_books and self.settings.openlibrary_enabled:
+                            ext_books = await openlibrary_client.search_series(
+                                series_name, author_name
+                            )
+
+                        # Match discovered volumes
+                        for missing in missing_items:
+                            for eb in ext_books:
+                                eb_vol = eb.get("volume")
+                                eb_title = eb.get("title", "")
+                                if eb_vol == missing.volume_number or (
+                                    missing.volume_number in eb_title
+                                ):
+                                    missing.title = eb_title
+                                    missing.cover_url = eb.get("cover_url", "")
+                                    missing.summary = eb.get("description", "")
+                                    missing.published_date = eb.get(
+                                        "published_date", ""
+                                    )
+                                    break
+
+                    total_known = len(owned_books) + len(missing_items)
+                    pct = (
+                        int((len(owned_books) / total_known) * 100)
+                        if total_known
+                        else 100
+                    )
+                    status = "complete" if not missing_items else "incomplete"
+                    if status == "complete":
+                        complete_count += 1
+                    total_missing += len(missing_items)
+
+                    series_entries.append(
+                        SeriesHubEntry(
+                            series_name=series_name,
+                            authors=authors,
+                            owned_count=len(owned_books),
+                            total_known_count=total_known,
+                            owned_volumes=owned_books,
+                            missing_volumes=missing_items,
+                            percent_complete=pct,
+                            status=status,
+                        )
+                    )
+            finally:
+                await google_client.close()
+                await openlibrary_client.close()
+
+            # Rank series: incomplete series with missing books first
+            series_entries.sort(
+                key=lambda x: (
+                    0 if x.status == "incomplete" else 1,
+                    x.series_name.casefold(),
+                )
+            )
+
+            recs = cached.get("recommendations", [])
+            state = {
+                "series": [se.to_dict() for se in series_entries],
+                "missing_count": total_missing,
+                "complete_count": complete_count,
+                "total_series": len(series_entries),
+                "recommendations": recs,
+                "last_scan": int(now),
+            }
+            self._state_cache = state
+            self.repository.set_config_value(
+                "nextchapter_state", json.dumps(state)
+            )
+            return state
+
+    async def search_mam_for_missing(
+        self, series_name: str, volume: str, title: str | None = None
+    ) -> list[dict[str, Any]]:
+        if not self.mam:
+            return []
+
+        search_query = f"{series_name} {volume}"
+        if title:
+            search_query += f" {title}"
+
+        preferred_media = (
+            None
+            if self.settings.preferred_media == "both"
+            else self.settings.preferred_media
+        )
+
+        try:
+            releases = await fetch_series_releases(
+                self.mam, search_query, max_pages=2
+            )
+            if not releases and title:
+                releases = await fetch_series_releases(
+                    self.mam, f"{series_name} {title}", max_pages=2
+                )
+            if not releases:
+                releases = await fetch_series_releases(
+                    self.mam, series_name, max_pages=3
+                )
+        except Exception:
+            return []
+
+        # Filter & score candidates
+        scored_candidates: list[dict[str, Any]] = []
+        for r in releases:
+            score = score_series_candidate(
+                r, self.config, preferred_media=preferred_media
+            )
+            scored_candidates.append(
+                {
+                    "mam_id": r.get("id"),
+                    "title": r.get("title"),
+                    "authors": r.get("authors", []),
+                    "size": r.get("size", "0 B"),
+                    "filetypes": r.get("filetypes", []),
+                    "media_type": r.get("media_type", "audiobook"),
+                    "seeders": r.get("seeders", 0),
+                    "free": r.get("free", False),
+                    "vip": r.get("vip", False),
+                    "personal_freeleech": r.get("personal_freeleech", False),
+                    "score": score,
+                }
+            )
+
+        scored_candidates.sort(key=lambda c: c["score"], reverse=True)
+        return scored_candidates[:10]
+
+    async def queue_download(
+        self, mam_id: int, series_name: str, volume: str | None = None
+    ) -> dict[str, Any]:
+        if not self.mam:
+            return {"ok": False, "error": "MAM client not initialized"}
+
+        raw_row = await self.mam.get_torrent_info_by_id(mam_id)
+        if not raw_row:
+            return {"ok": False, "error": f"Torrent #{mam_id} not found on MAM"}
+
+        selected = await select_row(
+            self.config,
+            self.repository,
+            raw_row,
+            {
+                "cost": "ratio",
+                "name": f"nextchapter:{series_name}",
+                "allow_any_format": True,
+                "allow_duplicate": True,
+            },
+        )
+        _ = selected
+        log_msg = (
+            f"NextChapter queued #{mam_id} for series '{series_name}' "
+            f"({raw_row.get('title')})"
+        )
+        self.repository.log_activity(
+            "nextchapter",
+            log_msg,
+            level="success",
+            context={
+                "mam_id": mam_id,
+                "series": series_name,
+                "volume": volume,
+            },
+        )
+        return {"ok": True, "mam_id": mam_id, "title": raw_row.get("title")}
+
+    async def queue_all_missing(self, series_name: str) -> dict[str, Any]:
+        state = self.get_cached_state()
+        target_series = next(
+            (
+                s
+                for s in state.get("series", [])
+                if s["series_name"].casefold() == series_name.casefold()
+            ),
+            None,
+        )
+        if not target_series:
+            return {"ok": False, "error": f"Series '{series_name}' not found"}
+
+        missing_list = target_series.get("missing_volumes", [])
+        queued_count = 0
+        queued_items: list[dict[str, Any]] = []
+
+        for item in missing_list:
+            vol = item.get("volume_number", "")
+            title = item.get("title", "")
+            candidates = await self.search_mam_for_missing(
+                series_name, vol, title
+            )
+            if candidates:
+                best = candidates[0]
+                res = await self.queue_download(
+                    best["mam_id"], series_name, vol
+                )
+                if res.get("ok"):
+                    queued_count += 1
+                    queued_items.append(
+                        {
+                            "volume": vol,
+                            "mam_id": best["mam_id"],
+                            "title": best["title"],
+                        }
+                    )
+
+        return {
+            "ok": True,
+            "queued_count": queued_count,
+            "items": queued_items,
+            "series_name": series_name,
+        }
+
+    async def refresh_recommendations(
+        self, force: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            state = self.get_cached_state()
+            if not force and state.get("recommendations"):
+                return state["recommendations"]
+
+            series_list = state.get("series", [])
+            if not series_list:
+                state = await self.scan_series(force=True)
+                series_list = state.get("series", [])
+
+            all_authors: list[str] = []
+            for s in series_list:
+                all_authors.extend(s.get("authors", []))
+            top_authors = list(dict.fromkeys(all_authors))[:20]
+
+            recommendations: list[dict[str, Any]] = []
+
+            # 1. Try Gemini AI recommendations if key configured
+            if self.settings.gemini_api_key:
+                gemini_client = GeminiClient(self.settings.gemini_api_key)
+                try:
+                    ai_result = await gemini_client.analyze_and_recommend(
+                        series_list[:25], top_authors
+                    )
+                    raw_recs = ai_result.get("recommendations", [])
+                    for rec in raw_recs:
+                        rec_item = BookRecommendation(
+                            title=rec.get("title", ""),
+                            author=rec.get("author", ""),
+                            series_name=rec.get("series_name", ""),
+                            volume=rec.get("volume", ""),
+                            reason=rec.get(
+                                "reason",
+                                "Recommended based on your library series",
+                            ),
+                            summary=rec.get("summary", ""),
+                            source="gemini_ai",
+                        )
+                        recommendations.append(rec_item.to_dict())
+                finally:
+                    await gemini_client.close()
+
+            # 2. Fallback / supplementary author catalogue recommendations
+            if len(recommendations) < 5 and top_authors:
+                google_client = GoogleBooksClient(
+                    self.settings.google_books_api_key
+                )
+                try:
+                    for author in top_authors[:4]:
+                        books = await google_client.search_series_books(
+                            "", author=author
+                        )
+                        for b in books[:2]:
+                            if not any(
+                                r["title"].casefold() == b["title"].casefold()
+                                for r in recommendations
+                            ):
+                                recommendations.append(
+                                    BookRecommendation(
+                                        title=b["title"],
+                                        author=author,
+                                        volume=b.get("volume", ""),
+                                        summary=b.get("description", ""),
+                                        cover_url=b.get("cover_url", ""),
+                                        reason=(
+                                            f"Popular book by {author}, an "
+                                            "author in your collection"
+                                        ),
+                                        source="author_catalogue",
+                                    ).to_dict()
+                                )
+                finally:
+                    await google_client.close()
+
+            # For each recommendation, find if available on MAM
+            for rec in recommendations:
+                if self.mam:
+                    try:
+                        matches = await self.search_mam_for_missing(
+                            rec["title"], "", rec.get("author")
+                        )
+                        if matches:
+                            rec["best_candidate"] = matches[0]
+                    except Exception:
+                        pass
+
+            state["recommendations"] = recommendations
+            self._state_cache = state
+            self.repository.set_config_value(
+                "nextchapter_state", json.dumps(state)
+            )
+            return recommendations

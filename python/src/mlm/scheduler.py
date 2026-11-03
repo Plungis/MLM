@@ -16,6 +16,7 @@ from .library import organize_completed
 from .lists import run_goodreads_import, run_notion_import
 from .mam import MamClient
 from .modules.mam_spender import MamSpenderService
+from .modules.nextchapter import NextChapterService
 from .qbittorrent import QbitClient
 from .repository import Repository
 from .snatchlist import run_snatchlist_search
@@ -41,9 +42,11 @@ class ServiceState:
     tasks: list[asyncio.Task] = field(default_factory=list)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     mam_spender: MamSpenderService = field(init=False)
+    nextchapter: NextChapterService = field(init=False)
 
     def __post_init__(self) -> None:
         self.mam_spender = MamSpenderService(self.repository, self.mam)
+        self.nextchapter = NextChapterService(self.config, self.repository, self.mam)
 
     def _module_active(self, name: str) -> bool:
         normalized = name.strip().replace("-", "_").lower()
@@ -387,6 +390,7 @@ class ServiceState:
         if config.mam_id != self.config.mam_id:
             self.mam.set_mam_id(config.mam_id)
         self.config = config
+        self.nextchapter.reconfigure(config)
         self.repository.log_activity(
             "configuration",
             "Applied configuration without restarting MyAnonaSuite",

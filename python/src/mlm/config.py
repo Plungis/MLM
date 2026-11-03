@@ -56,7 +56,12 @@ class Config:
     ebook_types: tuple[str, ...] = ("cbz", "epub", "pdf", "mobi", "azw3", "azw", "cbr")
     music_types: tuple[str, ...] = ("pdf", "mp3")
     radio_types: tuple[str, ...] = ("mp3",)
-    enabled_modules: tuple[str, ...] = ("heavymlm", "absidekick", "mam_spender")
+    enabled_modules: tuple[str, ...] = (
+        "heavymlm",
+        "absidekick",
+        "mam_spender",
+        "nextchapter",
+    )
     absidekick_auto_sync: bool = True
     request_portal_enabled: bool = False
     request_portal_require_account_login: bool = True
@@ -70,6 +75,7 @@ class Config:
     qbittorrent: tuple[QbitConfig, ...] = ()
     search: dict[str, Any] = field(default_factory=dict)
     audiobookshelf: dict[str, Any] | None = None
+    nextchapter: dict[str, Any] = field(default_factory=dict)
     autograbs: tuple[dict[str, Any], ...] = ()
     snatchlist: tuple[dict[str, Any], ...] = ()
     goodreads_lists: tuple[dict[str, Any], ...] = ()

@@ -41,6 +41,8 @@ def extract_series_volume(row: dict[str, Any], series_name: str) -> str:
             entries = series.get("entries", [])
             if entries and str(entries[0]).strip():
                 return str(entries[0]).strip()
+            if series.get("sequence") and str(series["sequence"]).strip():
+                return str(series["sequence"]).strip()
 
     title = str(row.get("title", ""))
     match = TITLE_SERIES_PATTERN.search(title)
@@ -345,7 +347,9 @@ def detect_library_series(repository: Repository) -> list[dict[str, Any]]:
                 if author:
                     group["authors"].add(author)
 
-            entries = s.get("entries", [])
+            entries = s.get("entries") or (
+                [s["sequence"]] if s.get("sequence") else []
+            )
             volume = (
                 str(entries[0]).strip()
                 if entries

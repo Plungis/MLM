@@ -278,7 +278,12 @@ def test_enabled_modules_and_absidekick_auto_sync_defaults_and_save(
     path.write_text('mam_id = "secret"\n', encoding="utf-8")
 
     config = load_config(path)
-    assert config.enabled_modules == ("heavymlm", "absidekick", "mam_spender")
+    assert config.enabled_modules == (
+        "heavymlm",
+        "absidekick",
+        "mam_spender",
+        "nextchapter",
+    )
     assert config.absidekick_auto_sync is True
 
     updated = save_root_config_values(

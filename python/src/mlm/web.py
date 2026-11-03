@@ -53,6 +53,7 @@ from .modules.heavymlm.series import (
     resolve_series_selection,
 )
 from .modules.mam_spender import default_public_state
+from .modules.nextchapter import NextChapterService
 from .onboarding import (
     generate_onboarding_blurb,
     generate_suggested_password,
@@ -90,6 +91,15 @@ SUITE_MODULES = {
         "status": "Active",
         "summary": "Automated bonus-point spending, history, and account intelligence.",
     },
+    "nextchapter": {
+        "name": "NextChapter",
+        "icon": "NC",
+        "status": "Active",
+        "summary": (
+            "Series completion hub, volume gap detection, and discovery "
+            "recommendations."
+        ),
+    },
 }
 
 
@@ -108,6 +118,11 @@ def _redacted_config(config: Config) -> dict:
         value["request_portal_access_code"] = "***"
     if value.get("request_portal_password_hash"):
         value["request_portal_password_hash"] = "***"
+    if value.get("nextchapter"):
+        if value["nextchapter"].get("gemini_api_key"):
+            value["nextchapter"]["gemini_api_key"] = "***"
+        if value["nextchapter"].get("google_books_api_key"):
+            value["nextchapter"]["google_books_api_key"] = "***"
     for row in value.get("request_portal_users", []):
         if row.get("password_hash"):
             row["password_hash"] = "***"
@@ -466,6 +481,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         module_heavymlm: str | None = Form(None),
         module_absidekick: str | None = Form(None),
         module_mam_spender: str | None = Form(None),
+        module_nextchapter: str | None = Form(None),
         request_portal_enabled: str | None = Form(None),
     ) -> Response:
         modules = []
@@ -475,6 +491,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             modules.append("absidekick")
         if module_mam_spender is not None:
             modules.append("mam_spender")
+        if module_nextchapter is not None:
+            modules.append("nextchapter")
         if request_portal_enabled is not None:
             modules.append("request_portal")
         try:
@@ -1060,8 +1078,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
     async def suite_module_page(
         request: Request, module: str, view: str = "dashboard"
     ) -> HTMLResponse:
-        if module not in {"absidekick", "mam-spender"}:
+        if module not in {"absidekick", "mam-spender", "nextchapter"}:
             raise HTTPException(404, f"unknown suite module: {module}")
+        if module == "nextchapter":
+            return await render_nextchapter(request, "series")
         if module == "mam-spender":
             return await render_mam_spender(request, view)
         return await render_absidekick(request, view)
@@ -1271,6 +1291,165 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if action == "refresh-bonus-history":
             return await spender.refresh_bonus_history()
         raise HTTPException(404, "unknown MAM-Spender action")
+
+
+    nextchapter_views = {"series", "missing", "recommendations", "settings"}
+
+    def nextchapter_service() -> NextChapterService:
+        services = getattr(app.state, "services", None)
+        if services is None or getattr(services, "nextchapter", None) is None:
+            raise HTTPException(503, "NextChapter service is not available")
+        return services.nextchapter
+
+    async def render_nextchapter(request: Request, view: str) -> HTMLResponse:
+        normalized = view.casefold().strip()
+        if normalized not in nextchapter_views:
+            raise HTTPException(404, f"unknown NextChapter page: {view}")
+        nc = nextchapter_service()
+        state = nc.get_cached_state()
+        if not state.get("series") and not state.get("last_scan"):
+            state = await nc.scan_series(force=False)
+        settings_data = nc.get_settings()
+        labels = {
+            "series": "Series Hub",
+            "missing": "Missing Volumes",
+            "recommendations": "Recommendations",
+            "settings": "Settings",
+        }
+        saved = request.query_params.get("saved") == "1"
+        return templates.TemplateResponse(
+            request,
+            "nextchapter.html",
+            await context(
+                request,
+                title=f"NextChapter {labels[normalized]}",
+                suite_module="nextchapter",
+                nextchapter_view=normalized,
+                state=state,
+                settings=settings_data,
+                saved=saved,
+            ),
+        )
+
+    @app.get("/suite/nextchapter", response_class=HTMLResponse)
+    async def nextchapter_root_redirect() -> Response:
+        return RedirectResponse("/suite/nextchapter/series", status_code=303)
+
+    @app.get("/suite/nextchapter/{view}", response_class=HTMLResponse)
+    async def nextchapter_page(request: Request, view: str) -> HTMLResponse:
+        return await render_nextchapter(request, view)
+
+    @app.post("/api/nextchapter/scan")
+    async def nextchapter_api_scan(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        force = True
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and "force" in body:
+                force = bool(body["force"])
+        except Exception:
+            pass
+        return await nc.scan_series(force=force)
+
+    @app.get("/api/nextchapter/state")
+    async def nextchapter_api_state(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        return {"state": nc.get_cached_state(), "settings": nc.get_settings()}
+
+    @app.post("/api/nextchapter/recommendations/refresh")
+    async def nextchapter_api_refresh_recs(request: Request) -> list[dict]:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        return await nc.refresh_recommendations(force=True)
+
+    @app.get("/api/nextchapter/search-mam")
+    async def nextchapter_api_search_mam(
+        request: Request,
+        series_name: str = "",
+        volume: str = "",
+        title: str = "",
+    ) -> list[dict]:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        return await nc.search_mam_for_missing(series_name, volume, title)
+
+    @app.post("/api/nextchapter/download")
+    async def nextchapter_api_download(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        payload = await request.json()
+        mam_id = int(payload.get("mam_id", 0))
+        series_name = str(payload.get("series_name", ""))
+        volume = payload.get("volume")
+        nc = nextchapter_service()
+        return await nc.queue_download(mam_id, series_name, volume)
+
+    @app.post("/api/nextchapter/series/download-all")
+    async def nextchapter_api_download_all(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        payload = await request.json()
+        series_name = str(payload.get("series_name", ""))
+        nc = nextchapter_service()
+        return await nc.queue_all_missing(series_name)
+
+    @app.post("/api/nextchapter/settings")
+    async def nextchapter_api_settings(
+        request: Request,
+        gemini_api_key: str | None = Form(None),
+        google_books_api_key: str | None = Form(None),
+        openlibrary_enabled: str | None = Form(None),
+        preferred_media: str | None = Form(None),
+    ) -> Response:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        ct = request.headers.get("content-type", "")
+        if ct.startswith("application/x-www-form-urlencoded"):
+            current_settings = dict(active_config().nextchapter)
+            if gemini_api_key is not None:
+                current_settings["gemini_api_key"] = gemini_api_key.strip()
+            if google_books_api_key is not None:
+                current_settings["google_books_api_key"] = (
+                    google_books_api_key.strip()
+                )
+            current_settings["openlibrary_enabled"] = (
+                openlibrary_enabled is not None
+            )
+            if preferred_media is not None:
+                current_settings["preferred_media"] = preferred_media.strip()
+
+            save_root_config_values(
+                config_path, {"nextchapter": current_settings}
+            )
+            if hasattr(app.state, "services"):
+                await app.state.services.reconfigure(active_config())
+            return RedirectResponse(
+                "/suite/nextchapter/settings?saved=1", status_code=303
+            )
+        else:
+            payload = await request.json()
+            current_settings = dict(active_config().nextchapter)
+            for k in (
+                "gemini_api_key",
+                "google_books_api_key",
+                "openlibrary_enabled",
+                "preferred_media",
+                "auto_search_mam",
+            ):
+                if k in payload:
+                    current_settings[k] = payload[k]
+            save_root_config_values(
+                config_path, {"nextchapter": current_settings}
+            )
+            if hasattr(app.state, "services"):
+                await app.state.services.reconfigure(active_config())
+            return {"ok": True, "settings": current_settings}
 
     @app.get("/config", response_class=HTMLResponse)
     async def show_config(request: Request) -> HTMLResponse:
