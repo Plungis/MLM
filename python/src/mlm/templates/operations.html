@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / operations center</p>
+    <h1>Operations</h1>
+    <p class="subtitle">Live diagnostics, stored lifecycle events, and actionable failures in one place.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip">{{ counts.get("events", 0) }} events</span>
+    <span class="chip{% if counts.get('errored_torrents', 0) %} count-alert{% endif %}">{{ counts.get("errored_torrents", 0) }} errors</span>
+  </div>
+</header>
+
+<nav class="request-inbox-tabs" aria-label="Operations view">
+  {% for value,label in [("diagnostics","Diagnostics & activity"),("events","Events"),("errors","Errors")] %}
+  <a class="button{% if operations_view == value %} primary{% endif %}" href="/operations?view={{ value }}">{{ label }}{% if value == "events" %} · {{ counts.get("events", 0) }}{% elif value == "errors" %} · {{ counts.get("errored_torrents", 0) }}{% endif %}</a>
+  {% endfor %}
+</nav>
+
+{% if operations_view == "diagnostics" %}
+  {% include "diagnostics.html" %}
+{% elif operations_view == "errors" %}
+  {% include "errors.html" %}
+{% else %}
+<section class="panel">
+  <header class="panel-header">
+    <div><h2>Lifecycle events</h2><p>Stored organizer, tracker, library, and cleanup events in newest-first order.</p></div>
+    <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}</span>
+  </header>
+  {% if rows %}<div class="record-list">
+    {% for row in rows %}
+    {% set event_value = row.get("event") %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{% if event_value is string %}{{ event_value }}{% elif event_value %}{{ event_value.keys() | list | first }}{% else %}Event{% endif %}</span>
+          <span class="record-id">{% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }}{% endif %}{% if row.get("torrent_id") %} · {{ row.get("torrent_id") }}{% endif %}{% if row.get("created_at") %} · <time data-local-time="{{ row.get('created_at') }}">{{ row.get("created_at") }}</time>{% endif %}</span>
+        </div>
+        <span class="status ok">Recorded</span>
+      </div>
+      <details><summary>Event details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
+    </article>
+    {% endfor %}
+  </div>{% else %}<div class="empty-state"><div><strong>No events yet</strong><p>Organizer and cleanup lifecycle changes will appear here.</p></div></div>{% endif %}
+</section>
+{% if page_count > 1 %}<nav class="pagination" aria-label="Event pages">
+  {% if page > 1 %}<a class="button" href="/operations?view=events&page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="/operations?view=events&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+</nav>{% endif %}
+{% endif %}
+{% endblock %}

@@ -4,7 +4,7 @@
 
 - [Installation](./installation.md)
     - [Docker](./docker.md)
-    - [Windows](./windows.md)
+    - [Python](./python.md)
 - [Configuration](./configuration.md)
     - [Basic](./basic.md)
     - [qBittorrent](./qbittorrent.md)

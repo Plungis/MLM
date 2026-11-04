@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block content %}
+{% set error_count = counts.get("errored_torrents", 0) %}
+{% set request_count = request_tracking.get("pending", 0) %}
+{% set download_count = pipeline.downloading %}
+{% set duplicate_count = counts.get("duplicate_torrents", 0) %}
+{% set urgent_count = error_count + request_count %}
+{% set job_summary = namespace(running=0, issues=0) %}
+{% for name,status in jobs.items() %}
+  {% if status.running %}{% set job_summary.running = job_summary.running + 1 %}{% endif %}
+  {% if status.last_error or (status.last_result is mapping and status.last_result.get("failed", 0)) %}
+    {% set job_summary.issues = job_summary.issues + 1 %}
+  {% endif %}
+{% endfor %}
+
+<header class="page-header home-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / Home</p>
+    <h1>Your library, at a glance</h1>
+    <p class="subtitle">See what needs you while HeavyMLM searches, downloads, and organizes in the background.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip"><span class="status-dot"></span> MaM connected</span>
+    {% if job_summary.running %}<span class="status running">{{ job_summary.running }} running now</span>{% else %}<span class="chip">Automation ready</span>{% endif %}
+  </div>
+</header>
+
+{% for name,status in jobs.items() %}
+{% if name.startswith("organizer") and status.last_result is mapping and status.last_result.get("failed", 0) %}
+{% set failures = status.last_result.get("failures") or [] %}
+{% set failure = failures[-1] if failures else {} %}
+<section class="flash error-flash organizer-alert" role="alert">
+  <div>
+    <strong>Organizer could not publish {{ status.last_result.get("failed") }} library item(s)</strong>
+    <p>{{ failure.get("error") or "A file operation failed. Open Errors for the exact reason and paths." }}</p>
+    {% if failure.get("source") %}<code>Source: {{ failure.get("source") }}</code>{% endif %}
+    {% if failure.get("destination") %}<code>Destination: {{ failure.get("destination") }}</code>{% endif %}
+  </div>
+  <div class="record-actions">
+    <a class="button danger" href="/operations?view=errors">Open errors</a>
+    <a class="button" href="/operations?view=diagnostics&component=organizer">Organizer trace</a>
+  </div>
+</section>
+{% endif %}
+{% endfor %}
+
+<section
+  class="job-monitor"
+  data-job-monitor
+  data-focus-job="{{ triggered or '' }}"
+  {% if not triggered %}hidden{% endif %}
+  aria-live="polite"
+>
+  <header class="job-monitor-header">
+    <div>
+      <p class="eyebrow">Working now</p>
+      <h2 data-job-title>{% if triggered %}Starting {{ triggered }}{% else %}Background job{% endif %}</h2>
+      <p data-job-summary>Waiting for the first progress update.</p>
+    </div>
+    <span class="status running" data-job-state>Starting</span>
+  </header>
+  <div class="job-progress-track" aria-hidden="true"><span data-job-progress-bar></span></div>
+  <details class="job-trace">
+    <summary><span>View live details</span><span data-job-event-count>0 events</span></summary>
+    <ol data-job-events><li class="info"><span>Waiting for live job data...</span></li></ol>
+  </details>
+</section>
+
+<section class="home-overview" aria-label="HeavyMLM overview">
+  <article class="home-attention panel">
+    <header class="home-section-header">
+      <div>
+        <p class="eyebrow">Start here</p>
+        {% if urgent_count %}
+          <h2>{{ urgent_count }} item{% if urgent_count != 1 %}s{% endif %} need your attention</h2>
+          <p>Handle these first; routine downloads and organization can continue in the background.</p>
+        {% else %}
+          <h2>Everything important is under control</h2>
+          <p>No requests or errors need you right now. Search for a book or refresh your lists when you are ready.</p>
+        {% endif %}
+      </div>
+      <a class="button primary home-search-button" href="/search">Search MaM</a>
+    </header>
+
+    <div class="home-task-list">
+      <a class="home-task {% if request_count %}attention{% else %}clear{% endif %}" href="/requests">
+        <span class="home-task-icon" aria-hidden="true">R</span>
+        <span><strong>Book requests</strong><small>{% if request_count %}Approve or reject {{ request_count }} pending request{% if request_count != 1 %}s{% endif %}.{% else %}No requests are waiting for approval.{% endif %}</small></span>
+        <span class="home-task-count">{% if request_count %}{{ request_count }} waiting{% else %}Clear{% endif %}</span>
+      </a>
+      <a class="home-task {% if error_count %}danger{% else %}clear{% endif %}" href="/operations?view=errors">
+        <span class="home-task-icon" aria-hidden="true">!</span>
+        <span><strong>Errors</strong><small>{% if error_count %}Open the reason and the recommended recovery steps.{% else %}No failed downloads or organizer operations.{% endif %}</small></span>
+        <span class="home-task-count">{% if error_count %}{{ error_count }} open{% else %}Clear{% endif %}</span>
+      </a>
+      <a class="home-task {% if duplicate_count %}quiet{% else %}clear{% endif %}" href="/library?view=duplicates">
+        <span class="home-task-icon" aria-hidden="true">D</span>
+        <span><strong>Library cleanup</strong><small>{% if duplicate_count %}Review possible replacements when convenient.{% else %}No duplicate candidates are stored.{% endif %}</small></span>
+        <span class="home-task-count">{{ duplicate_count }} candidate{% if duplicate_count != 1 %}s{% endif %}</span>
+      </a>
+    </div>
+  </article>
+
+  <article class="home-guardrails panel">
+    <header class="home-section-header compact">
+      <div>
+        <p class="eyebrow">Download guardrails</p>
+        <h2>Your safety buffers</h2>
+        <p>HeavyMLM stops before crossing either limit.</p>
+      </div>
+      <a href="/config">Change limits</a>
+    </header>
+    {% if mam_stats %}
+      {% set slot_cap_percent = (mam_stats.slots_used * 100 / mam_stats.slot_cap) if mam_stats.slot_cap else 0 %}
+      {% set slot_remaining = [mam_stats.slot_cap - mam_stats.slots_used, 0] | max %}
+      {% set wedge_spendable = [mam_stats.wedges - mam_stats.wedge_buffer, 0] | max %}
+      <div class="guardrail-list">
+        <div class="guardrail-item">
+          <div class="guardrail-heading"><span>Usable download slots</span><strong>{{ slot_remaining }} left</strong></div>
+          <div class="capacity-track" aria-label="{{ mam_stats.slots_used }} of {{ mam_stats.slot_cap }} allowed slots used"><span style="width: {{ [slot_cap_percent, 100] | min }}%"></span></div>
+          <p>{{ mam_stats.slots_used }} currently used | stop at {{ mam_stats.slot_cap }} | account total {{ mam_stats.slots_total }}</p>
+        </div>
+        <div class="guardrail-item">
+          <div class="guardrail-heading"><span>Freeleech wedges</span><strong>{{ wedge_spendable }} spendable</strong></div>
+          <div class="wedge-balance"><span>{{ mam_stats.wedges }} available</span><span>{{ mam_stats.wedge_buffer }} protected</span></div>
+          <p>{% if wedge_spendable %}Wedge-first downloads can continue without touching your reserve.{% else %}Your reserve has been reached; HeavyMLM will not spend another wedge.{% endif %}</p>
+        </div>
+      </div>
+    {% else %}
+      <div class="home-sync-state"><span class="status running">Syncing</span><p>MaM account limits will appear after the next account refresh.</p></div>
+    {% endif %}
+  </article>
+</section>
+
+<section class="home-workflow" aria-labelledby="workflow-title">
+  <header class="home-workflow-header">
+    <div>
+      <p class="eyebrow">The big picture</p>
+      <h2 id="workflow-title">How HeavyMLM works</h2>
+      <p>Books move from left to right automatically. There is no download queue to manage.</p>
+    </div>
+    <span class="chip">Schedules remain active</span>
+  </header>
+
+  <div class="workflow-grid">
+    <article class="workflow-step">
+      <span class="workflow-number">01</span>
+      <div class="workflow-copy">
+        <h3>Find books</h3>
+        <strong>{{ counts.get("lists", 0) }} list source{% if counts.get("lists", 0) != 1 %}s{% endif %}</strong>
+        <p>Search manually, refresh Goodreads/Notion, or check configured bookmarks.</p>
+      </div>
+      <div class="workflow-actions">
+        <a class="button primary" href="/search">Search MaM</a>
+      </div>
+    </article>
+
+    <article class="workflow-step">
+      <span class="workflow-number">02</span>
+      <div class="workflow-copy">
+        <h3>Download &amp; organize</h3>
+        <strong>{{ download_count }} active in qBittorrent</strong>
+        <p>HeavyMLM sends selected releases automatically. qBittorrent downloads them, then HeavyMLM organizes completed books.</p>
+      </div>
+      <div class="workflow-actions">
+        <a class="button" href="/operations?view=diagnostics">View background activity</a>
+      </div>
+    </article>
+
+    <article class="workflow-step">
+      <span class="workflow-number">03</span>
+      <div class="workflow-copy">
+        <h3>Enjoy the library</h3>
+        <strong>{{ counts.get("torrents", 0) }} processed</strong>
+        <p>Completed books are linked into your configured audiobook and ebook libraries.</p>
+      </div>
+      <div class="workflow-actions">
+        <a class="button primary" href="/library">Open processed library</a>
+        {% if duplicate_count %}<a class="button" href="/library?view=duplicates">Review duplicates</a>{% endif %}
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="panel home-manual-controls" aria-labelledby="manual-controls-title">
+  <header class="panel-header">
+    <div>
+      <p class="eyebrow">Manual overrides</p>
+      <h2 id="manual-controls-title">Run HeavyMLM now</h2>
+      <p>Schedules remain enabled. These buttons simply start a worker immediately when you do not want to wait for its next interval.</p>
+    </div>
+    <span class="chip">Optional controls</span>
+  </header>
+  <div class="manual-run-grid">
+    <form action="/actions/lists" method="post"><span><strong>Refresh lists</strong><small>Pull Goodreads and Notion changes now.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/autograb" method="post"><span><strong>Check autograbs</strong><small>Search bookmarks and configured automatic rules.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/downloader" method="post"><span><strong>Download handoff</strong><small>Send eligible selected releases to qBittorrent now.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/organizer" method="post"><span><strong>Organize completed</strong><small>Check qBittorrent and publish completed books.</small></span><button type="submit">Run now</button></form>
+    <form action="/actions/cleaner" method="post"><span><strong>Clean duplicates</strong><small>Run the configured replacement and cleanup policy.</small></span><button type="submit">Run now</button></form>
+  </div>
+</section>
+
+<details class="home-scheduler panel" {% if job_summary.issues %}open{% endif %}>
+  <summary>
+    <span>
+      <span class="eyebrow">Automation details</span>
+      <strong>Background schedules</strong>
+      <small>Open this when you want the technical status of each worker.</small>
+    </span>
+    <span class="scheduler-summary-badges">
+      {% if job_summary.issues %}<span class="status error">{{ job_summary.issues }} issue{% if job_summary.issues != 1 %}s{% endif %}</span>{% endif %}
+      {% if job_summary.running %}<span class="status running">{{ job_summary.running }} running</span>{% endif %}
+      <span class="chip">{{ jobs | length }} total</span>
+    </span>
+  </summary>
+  {% if jobs %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Job</th><th>Status</th><th>Last result</th><th>Last run</th></tr></thead>
+      <tbody>
+      {% for name,status in jobs.items() %}
+      <tr>
+        <td><span class="job-name">{{ name }}</span>{% if status.last_error %}<div class="error-text">{{ status.last_error }}</div>{% endif %}</td>
+        <td>{% if status.running %}<span class="status running">Running</span>{% elif status.last_error %}<span class="status error">Error</span>{% else %}<span class="status ok">Idle</span>{% endif %}</td>
+        <td class="job-result">
+          {% if status.last_result is mapping and status.last_result.get("downloaded") is not none %}
+            <strong>{{ status.last_result.get("downloaded", 0) }} downloaded</strong><span class="muted"> | {{ status.last_result.get("failed", 0) }} failed | {{ status.last_result.get("skipped", 0) }} deferred</span>
+            {% set reasons = status.last_result.get("skip_reasons") or {} %}
+            {% if reasons.get("unsat_slots") %}<div class="result-reason">{{ reasons.get("unsat_slots") }} waiting for an available MaM slot</div>{% endif %}
+            {% if reasons.get("ratio_buffer") %}<div class="result-reason">{{ reasons.get("ratio_buffer") }} held by the configured ratio reserve</div>{% endif %}
+          {% elif status.last_result is mapping and status.last_result.get("linked") is not none %}
+            <strong>{{ status.last_result.get("linked", 0) }} organized</strong>{% if status.last_result.get("failed", 0) %}<strong class="error-text"> {{ status.last_result.get("failed") }} failed</strong>{% endif %}<span class="muted"> | {{ status.last_result.get("already_existing", 0) }} already existed | {{ status.last_result.get("incomplete", 0) }} still downloading | {{ status.last_result.get("skipped", (status.last_result.get("skip_reasons") or {}).values() | sum) }} skipped</span>
+            {% set failures = status.last_result.get("failures") or [] %}
+            {% if failures %}<div class="result-reason">{{ failures[-1].get("error") }}</div><a href="/operations?view=errors">Open recovery</a>{% endif %}
+            {% set reasons = status.last_result.get("skip_reasons") or {} %}
+            {% if reasons.get("no_matching_library") %}<div class="result-reason">{{ reasons.get("no_matching_library") }} had no matching library category or path</div>{% endif %}
+            {% if reasons.get("no_preferred_files") %}<div class="result-reason">{{ reasons.get("no_preferred_files") }} had no preferred audio or ebook file</div>{% endif %}
+          {% elif status.last_result is mapping and status.last_result.get("refreshed") is not none %}
+            <strong>{{ status.last_result.get("refreshed", 0) }} refreshed</strong><span class="muted"> | {{ status.last_result.get("selected", 0) }} selected{% if status.last_result.get("already_grabbed") is not none %} | {{ status.last_result.get("already_grabbed", 0) }} remembered{% endif %}{% if status.last_result.get("failed") is not none %} | {{ status.last_result.get("failed", 0) }} failed{% endif %}</span>
+          {% elif status.last_result is not none %}{{ status.last_result }}{% else %}<span class="muted">No run yet</span>{% endif %}
+        </td>
+        <td class="muted">{% if status.last_run %}<span data-local-time="{{ status.last_run }}">{{ status.last_run }}</span>{% else %}Never{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><div><strong>No jobs registered yet</strong><p>Scheduler status appears after application startup.</p></div></div>
+  {% endif %}
+</details>
+{% endblock %}

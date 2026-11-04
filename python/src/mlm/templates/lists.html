@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Source memory</p>
+    <h1>Lists</h1>
+    <p class="subtitle">Configured list sources and every tracked item, including what was grabbed, skipped, removed, or still needs a match.</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip">{{ sources | length }} sources</span>
+    <span class="chip">{{ counts.get("list_items", 0) }} tracked items</span>
+  </div>
+</header>
+
+<section class="list-source-grid" aria-label="Tracked list sources">
+  <a class="list-source-card{% if not selected_list_id %} active{% endif %}" href="/lists">
+    <span class="eyebrow">All sources</span><strong>{{ counts.get("list_items", 0) }} items</strong><small>Show combined source memory</small>
+  </a>
+  {% for source in sources %}
+  <a class="list-source-card{% if selected_list_id == source.id|string %} active{% endif %}" href="/lists?list_id={{ source.id | urlencode }}">
+    <span class="eyebrow">Tracked source</span><strong>{{ source.title or source.id }}</strong><small>{{ item_counts.get(source.id|string, 0) }} items{% if source.updated_at %} · refreshed <time data-local-time="{{ source.updated_at }}">{{ source.updated_at }}</time>{% endif %}</small>
+  </a>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div><h2>{% if selected_source %}{{ selected_source.title }}{% else %}Tracked list items{% endif %}</h2><p>Persistent memory prevents earlier grabs from being downloaded again on the next refresh.</p></div>
+    <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 items{% endif %}</span>
+  </header>
+  {% if rows %}<div class="record-list">
+    {% for row in rows %}
+    <article class="record list-item-record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ row.get("title") or "Untitled list item" }}</span>
+          <span class="record-id">{% if row.get("authors") %}{{ row.get("authors") | join(", ") }}{% endif %}{% if row.get("selected_mam_ids") %} · MaM {{ row.get("selected_mam_ids") | join(", ") }}{% endif %}{% if row.get("check_count") is not none %} · checked {{ row.get("check_count") }} times{% endif %}</span>
+          {% if row.get("last_result") %}<span class="record-note">{{ row.get("last_result") }}</span>{% endif %}
+        </div>
+        <div class="record-actions">
+          {% if row.get("source_status") == "removed" %}<span class="status error">Removed from source</span>
+          {% elif row.get("status") in ["selected", "already_grabbed"] %}<span class="status ok">{{ row.get("status") | replace("_", " ") }}</span>
+          {% elif row.get("status") == "partial" %}<span class="status running">Missing one format</span>
+          {% elif row.get("status") == "no_match" %}<span class="status waiting">No match</span>
+          {% else %}<span class="status ok">Tracked</span>{% endif %}
+        </div>
+      </div>
+      <details><summary>Item details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
+    </article>
+    {% endfor %}
+  </div>{% else %}<div class="empty-state"><div><strong>No tracked items in this view</strong><p>Refresh configured lists to populate their source memory.</p></div></div>{% endif %}
+</section>
+
+{% if page_count > 1 %}<nav class="pagination" aria-label="List item pages">
+  {% if page > 1 %}<a class="button" href="/lists?page={{ page - 1 }}{% if selected_list_id %}&list_id={{ selected_list_id | urlencode }}{% endif %}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="/lists?page={{ page + 1 }}{% if selected_list_id %}&list_id={{ selected_list_id | urlencode }}{% endif %}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+</nav>{% endif %}
+{% endblock %}

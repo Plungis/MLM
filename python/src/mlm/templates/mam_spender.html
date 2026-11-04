@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header spender-hero">
+  <div>
+    <p class="eyebrow">MyAnonaSuite / bonus control</p>
+    <h1>MAM-Spender</h1>
+    <p class="subtitle">Spend deliberately. Verify every purchase. Keep a permanent local audit trail.</p>
+  </div>
+  <div class="spender-run-controls">
+    <span class="status {% if spender.automation_running %}running{% elif spender.scheduler_enabled %}ok{% else %}waiting{% endif %}" data-spender-status>
+      {% if spender.automation_running %}Running{% elif spender.scheduler_enabled %}Scheduled{% else %}Paused{% endif %}
+    </span>
+    <button class="button primary" type="button" data-spender-action="run">Run now</button>
+    <button class="button" type="button" data-spender-action="start">Start schedule</button>
+    <button class="button" type="button" data-spender-action="pause">Pause</button>
+  </div>
+</header>
+
+<nav class="spender-view-tabs" aria-label="MAM-Spender pages">
+  <a class="{% if spender_view == 'dashboard' %}active{% endif %}" href="/suite/mam-spender/dashboard">Dashboard</a>
+  <a class="{% if spender_view == 'analytics' %}active{% endif %}" href="/suite/mam-spender/analytics">Graph</a>
+  <a class="{% if spender_view == 'history' %}active{% endif %}" href="/suite/mam-spender/history">History</a>
+  <a class="{% if spender_view == 'mam-data' %}active{% endif %}" href="/suite/mam-spender/mam-data">All MaM Data</a>
+  <a class="{% if spender_view == 'config' %}active{% endif %}" href="/suite/mam-spender/config">Config</a>
+</nav>
+
+<div class="spender-marquee" aria-label="MaM clocks and reset timers">
+  <div data-spender-marquee>Loading MaM clocks...</div>
+</div>
+
+<div class="spender-notice" data-spender-notice hidden></div>
+
+{% if spender_view == "dashboard" %}
+<section class="metric-grid spender-metrics">
+  <article class="metric"><span class="metric-label">Bonus balance</span><strong class="metric-value" data-spender-field="last_scan_points">{{ spender.last_scan_points or "N/A" }}</strong><span class="metric-help">last verified scan</span></article>
+  <article class="metric"><span class="metric-label">Points / hour</span><strong class="metric-value" data-spender-field="points_per_hour">{% if spender.points_per_min is not none %}{{ (spender.points_per_min * 60) | round | int }}{% else %}N/A{% endif %}</strong><span class="metric-help">observed earning rate</span></article>
+  <article class="metric"><span class="metric-label">Upload bought</span><strong class="metric-value" data-spender-field="cumulative_upload_gb">{{ spender.totals.cumulative_upload_gb }} GiB</strong><span class="metric-help">confirmed purchases</span></article>
+  <article class="metric"><span class="metric-label">Wedges bought</span><strong class="metric-value" data-spender-field="cumulative_freeleech_wedges">{{ spender.totals.cumulative_freeleech_wedges }}</strong><span class="metric-help">50,000 points each</span></article>
+  <article class="metric"><span class="metric-label">Points spent</span><strong class="metric-value" data-spender-field="cumulative_points_spent">{{ spender.totals.cumulative_points_spent }}</strong><span class="metric-help">all confirmed spending</span></article>
+  <article class="metric"><span class="metric-label">Next scan</span><strong class="metric-value compact" data-spender-field="next_run">{% if spender.scheduler_enabled %}Scheduled{% else %}Paused{% endif %}</strong><span class="metric-help">live countdown</span></article>
+</section>
+
+<section class="grid two spender-dashboard-grid">
+  <article class="debug-window spender-console">
+    <header><span>SPEND_AUDIT.log</span><span class="window-light"></span></header>
+    <div class="spender-log" data-spender-log>
+      {% for row in spender.logs %}<p class="{{ row.level }}"><time data-local-time="{{ row.created_at }}">{{ row.created_at }}</time> {{ row.message }}</p>{% else %}<p>No MAM-Spender activity yet.</p>{% endfor %}
+    </div>
+  </article>
+
+  <article class="panel panel-body spender-user-card">
+    <div class="panel-heading-row"><div><p class="eyebrow">Account snapshot</p><h2 data-spender-field="username">{{ spender.user.username }}</h2></div><button class="button" type="button" data-spender-action="refresh-account">Refresh</button></div>
+    <dl class="spender-facts">
+      <div><dt>VIP expires</dt><dd data-spender-field="vip_expires">{{ spender.user.vip_expires }}</dd></div>
+      <div><dt>Uploaded</dt><dd data-spender-field="uploaded">{{ spender.user.uploaded }}</dd></div>
+      <div><dt>Downloaded</dt><dd data-spender-field="downloaded">{{ spender.user.downloaded }}</dd></div>
+      <div><dt>Ratio</dt><dd data-spender-field="ratio">{{ spender.user.ratio }}</dd></div>
+      <div><dt>VIP renewals</dt><dd data-spender-field="cumulative_vip_purchases">{{ spender.totals.cumulative_vip_purchases }}</dd></div>
+      <div><dt>Wedge points</dt><dd data-spender-field="cumulative_freeleech_points_spent">{{ spender.totals.cumulative_freeleech_points_spent }}</dd></div>
+    </dl>
+    <div class="spender-mode-summary" data-spender-mode-summary></div>
+    <button class="button danger" type="button" data-spender-reset>Reset cumulative totals</button>
+  </article>
+</section>
+
+<section class="grid two spender-dashboard-settings">
+  {% include "modules/mam_spender/_purchase_settings.html" %}
+  <article class="panel panel-body spender-dashboard-config-help">
+    <p class="eyebrow">Live configuration</p>
+    <h2>Changes apply immediately</h2>
+    <p class="muted">These are the controls used most often in the original Web Edition. Save here without leaving the dashboard; authentication, migration, and runtime details remain on the dedicated Config page.</p>
+    <dl class="spender-facts">
+      <div><dt>Scheduler</dt><dd>{% if spender.scheduler_enabled %}Enabled{% else %}Paused{% endif %}</dd></div>
+      <div><dt>Next target</dt><dd>{{ spender.settings.alternate_next_purchase | replace('_', ' ') }}</dd></div>
+      <div><dt>Reserve</dt><dd data-spender-field="dashboard_reserve">{{ spender.settings.points_buffer }} points</dd></div>
+      <div><dt>Interval</dt><dd data-spender-field="dashboard_interval">{{ spender.settings.next_run_delay_minutes }} minutes</dd></div>
+    </dl>
+    <div class="spender-setting-actions"><a class="button" href="/suite/mam-spender/config">Authentication &amp; advanced config</a><a class="button" href="/suite/mam-spender/history">Review spending history</a></div>
+  </article>
+</section>
+
+<section class="panel panel-body spender-safety-panel">
+  <p class="eyebrow">Purchase guardrails</p>
+  <div class="spender-guardrail-grid">
+    <div><strong>50 GiB</strong><span>per 25,000 points</span></div>
+    <div><strong>150 GiB</strong><span>maximum per run</span></div>
+    <div><strong>50,000</strong><span>per freeleech wedge</span></div>
+    <div><strong data-spender-field="points_buffer">{{ spender.settings.points_buffer }}</strong><span>points kept in reserve</span></div>
+  </div>
+  <p class="muted">Purchases are irreversible. MAM-Spender records a purchase only after the bonus balance confirms the expected decrease.</p>
+</section>
+{% elif spender_view == "config" %}
+<header class="section-heading spender-config-heading">
+  <div><p class="eyebrow">Independent module settings</p><h2>MAM-Spender configuration</h2></div>
+  <span class="status ok">Saved locally</span>
+</header>
+<section class="grid two spender-settings-grid">
+  {% include "modules/mam_spender/_purchase_settings.html" %}
+
+  <div class="spender-settings-side">
+    <article class="panel panel-body">
+      <p class="eyebrow">Shared authentication</p>
+      <h2>MaM Session_ID</h2>
+      <p class="muted">MAM-Spender and HeavyMLM now use one API session. Paste a raw Session_ID, Cookie header, Netscape/curl cookie file contents, or browser JSON export.</p>
+      <label class="spender-file-field"><span>Choose a cookie or browser-export file</span><input type="file" data-spender-session-file accept=".cookies,.txt,.json,text/plain,application/json"><small>The browser reads it locally and places its contents below; the file path is not retained.</small></label>
+      <textarea rows="5" data-spender-session autocomplete="off" placeholder="mam_id=... or exported cookie data"></textarea>
+      <div class="spender-setting-actions"><button class="button" type="button" data-spender-save-session>Validate format and save</button><a class="button" href="https://www.myanonamouse.net/preferences/index.php?view=security" target="_blank" rel="noreferrer">Open MaM Security</a></div>
+      <p class="muted">The value is never returned to the browser after saving.</p>
+    </article>
+
+    <article class="panel panel-body">
+      <p class="eyebrow">Web Edition migration</p>
+      <h2>Import old config.json</h2>
+      <p class="muted">Paste the complete standalone <code>data/config.json</code> to migrate settings, totals, local history, spending events, cached MaM data, and saved Session_ID.</p>
+      <textarea rows="5" data-spender-import placeholder='{"settings": {...}, "totals": {...}}'></textarea>
+      <button class="button" type="button" data-spender-import-button>Import Web Edition data</button>
+    </article>
+  </div>
+</section>
+
+<section class="panel panel-body">
+  <div class="panel-heading-row"><div><p class="eyebrow">Runtime identity</p><h2>This is the integrated Web Edition module</h2></div><a class="button" href="/config">Open suite network config</a></div>
+  <div class="spender-runtime-grid">
+    <div><span>Suite build</span><strong>{{ spender_runtime.suite_version }}</strong></div>
+    <div><span>Ported feature baseline</span><strong>{{ spender_runtime.source_version }}</strong></div>
+    <div><span>Active listener</span><strong>{{ spender_runtime.host }}:{{ spender_runtime.port }}</strong></div>
+    <div><span>Module database</span><strong>SQLite schema v4</strong></div>
+  </div>
+  {% if spender_runtime.config_path %}<p class="muted">Suite config: <code>{{ spender_runtime.config_path }}</code></p>{% endif %}
+  <p class="muted">The module owns its purchase policy, scheduler, Session_ID import, history, graphs, and cached MaM data. Host and port remain suite-wide so you only run one server and maintain one reverse proxy.</p>
+  <details class="spender-instructions"><summary>Session instructions and purchase warnings</summary>
+    <div><p>Create the API session on the same internet connection as MyAnonaSuite. In MaM, open Preferences → Security, create an API session with the appropriate IP/ASN lock, then paste it above. Recreate it whenever the locked network identity changes.</p>
+    <ul><li>Minimum upload purchase: 50 GiB.</li><li>Upload credit: 25,000 points per 50 GiB.</li><li>Upload run cap: 150 GiB.</li><li>Freeleech Wedges: 50,000 points each.</li><li>Purchases cannot be reversed.</li></ul>
+    <p><a href="https://www.myanonamouse.net/f/t/91633" target="_blank" rel="noreferrer">MAM-Spender Web support thread</a></p></div>
+  </details>
+</section>
+{% elif spender_view == "history" %}
+<section class="panel">
+  <header class="panel-header"><div><h2>Automation history</h2><p>Every run, including no-op scans and failures.</p></div></header>
+  <div class="table-wrap"><table class="spender-table"><thead><tr><th>Time</th><th>Result</th><th>Points</th><th>Upload</th><th>Wedges</th><th>VIP</th></tr></thead><tbody data-spender-history></tbody></table></div>
+</section>
+<section class="panel">
+  <header class="panel-header"><div><h2>MaM bonus history</h2><p data-spender-bonus-status>Up to 500 returned point and wedge records.</p></div><div class="spender-setting-actions"><select data-spender-page-size><option>10</option><option>25</option><option>50</option><option>100</option></select><button class="button" type="button" data-spender-action="refresh-bonus-history">Refresh from MaM</button></div></header>
+  <div class="table-wrap"><table class="spender-table"><thead><tr><th>Time</th><th>Type</th><th>Amount</th><th>Title</th><th>Other user</th></tr></thead><tbody data-spender-bonus-history></tbody></table></div>
+  <div class="spender-pagination"><button class="button" type="button" data-spender-prev>Previous</button><span data-spender-page-status>Page 0 of 0</span><button class="button" type="button" data-spender-next>Next</button></div>
+</section>
+{% elif spender_view == "analytics" %}
+<section class="panel panel-body spender-chart-panel">
+  <div class="panel-heading-row"><div><p class="eyebrow">Local spending ledger</p><h2 data-spender-chart-title>Spending by category</h2></div><div class="spender-chart-controls"><button class="chip active" type="button" data-chart-mode="pie">Pie</button><button class="chip" type="button" data-chart-mode="bar">Bar</button><button class="chip" type="button" data-chart-mode="timeline">Timeline</button></div></div>
+  <canvas width="1100" height="420" data-spender-chart aria-label="MAM-Spender spending chart"></canvas>
+  <div class="spender-chart-legend" data-spender-chart-legend></div>
+</section>
+<section class="panel"><header class="panel-header"><div><h2>Confirmed spending events</h2><p>Only purchases verified against the post-purchase point balance.</p></div></header><div class="table-wrap"><table class="spender-table"><thead><tr><th>Time</th><th>Spent on</th><th>Points</th><th>Units</th><th>Balance after</th></tr></thead><tbody data-spender-events></tbody></table></div></section>
+{% elif spender_view == "mam-data" %}
+<section class="panel panel-body">
+  <div class="panel-heading-row"><div><p class="eyebrow">Live account intelligence</p><h2>All MaM data</h2></div><button class="button primary" type="button" data-spender-action="refresh-account">Refresh from MaM</button></div>
+  <div class="spender-account-grid">
+    {% for key,label in [("username","Username"),("class","Class"),("uploaded","Uploaded"),("downloaded","Downloaded"),("ratio","Ratio"),("bonus","Bonus"),("fl_wedges","FL Wedges"),("invites","Invites"),("unsats","Unsats")] %}
+    <div><span>{{ label }}</span><strong data-mam-field="{{ key }}">{{ spender.mam_user_data.get(key, "N/A") }}</strong></div>
+    {% endfor %}
+  </div>
+  <p class="muted" data-spender-account-status>{% if spender.mam_user_error %}{{ spender.mam_user_error }}{% elif spender.mam_user_fetched_at %}Last refreshed {{ spender.mam_user_fetched_at }}{% else %}Refresh to load the latest account snapshot.{% endif %}</p>
+  <div class="spender-notifications" data-spender-notifications></div>
+</section>
+<section class="grid two">
+  <article class="panel panel-body"><p class="eyebrow">Useful destinations</p><h2>MaM extras</h2><div class="spender-link-stack"><a class="button" href="https://www.myanonamouse.net/play_lotto.php" target="_blank" rel="noreferrer">MaM Lotto</a><a class="button" href="https://www.myanonamouse.net/millionaires/donate.php" target="_blank" rel="noreferrer">Millionaire's Vault</a><a class="button" href="https://www.myanonamouse.net/f/t/91633" target="_blank" rel="noreferrer">Support thread</a></div></article>
+  <article class="panel panel-body"><p class="eyebrow">Special thanks</p><h2>Web Edition credits</h2><p class="muted">The MaM staff; Knightguard; BareMetal / B4reMetal; Curiosgamez; Mr. Cookies; PsyckoRN; wokka; romey; and everyone who helped in the support thread.</p></article>
+</section>
+{% endif %}
+
+<script id="mam-spender-state" type="application/json">{{ spender | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="/static/mam-spender.js?v={{ version }}"></script>{% endblock %}

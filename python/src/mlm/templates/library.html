@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">HeavyMLM / Library &amp; Formats</p>
+    <h1>{% if library_view == "books" %}Unified Books Catalog{% elif library_view == "missing" %}Missing Series Books{% elif library_view == "abs" %}Audiobookshelf Library Catalog{% elif library_view == "duplicates" %}Duplicates &amp; Replacements{% else %}MLM Processed Torrents{% endif %}</h1>
+    <p class="subtitle">{% if library_view == "books" %}Your entire collection organized by book, showing active availability for Audiobooks, eBooks, or Both formats with live disk verification.{% elif library_view == "missing" %}Audit your entire library for missing books and grab installments directly from MyAnonamouse.{% elif library_view == "abs" %}All audiobooks synchronized directly from your Audiobookshelf server.{% elif library_view == "duplicates" %}Duplicate and replacement candidates retained for HeavyMLM cleanup and quality decisions.{% else %}Raw torrent records tracked by HeavyMLM's download pipeline.{% endif %}</p>
+  </div>
+  <div class="page-meta">
+    <span class="chip">📚 {{ catalog_stats.total }} Books</span>
+    <span class="chip" style="color: #38bdf8;">🎧 {{ catalog_stats.audio }} Audiobooks</span>
+    <span class="chip" style="color: #c084fc;">📖 {{ catalog_stats.ebook }} eBooks</span>
+    <span class="chip" style="color: #34d399;">✨ {{ catalog_stats.both }} Both Formats</span>
+    <form method="post" action="/library/reconcile" class="inline-form">
+      <button type="submit" class="button secondary small" title="Verify files on disk and prune deleted items">⟳ Rescan &amp; Verify Disk</button>
+    </form>
+    {% if abs_configured %}
+    <form method="post" action="/library/sync-abs" class="inline-form">
+      <button type="submit" class="button secondary small">🔄 Sync with ABS</button>
+    </form>
+    {% else %}
+    <a class="button ghost small" href="/suite/absidekick/config">⚙️ Connect ABS</a>
+    {% endif %}
+  </div>
+</header>
+
+{% if reconciled %}
+<div class="flash success" role="status">
+  <span>
+    Library verified against filesystem! Pruned <strong>{{ reconciled_pruned }}</strong> deleted item(s){% if reconciled_restored %}, restored <strong>{{ reconciled_restored }}</strong> item(s){% endif %}.
+  </span>
+  <span class="status ok">Disk Reconciled</span>
+</div>
+{% endif %}
+
+{% if abs_synced is not none %}
+<div class="flash success" role="status">
+  <span>
+    Successfully synced <strong>{{ abs_synced }}</strong> audiobook{% if abs_synced != 1 %}s{% endif %} and their series from your Audiobookshelf library!
+  </span>
+  <span class="status ok">ABS Catalog Synced</span>
+</div>
+{% endif %}
+
+{% if abs_sync_error %}
+<div class="flash alert" role="alert">
+  <span>Failed to sync with Audiobookshelf: {{ abs_sync_error }}</span>
+  <span class="status alert">Sync Failed</span>
+</div>
+{% endif %}
+
+{% if series_queued is not none %}
+<div class="flash success" role="status">
+  <span>
+    {% if series_queued > 0 %}
+      Queued {{ series_queued }} missing book{% if series_queued != 1 %}s{% endif %} for series "{{ series_name }}".
+      {% if series_existing > 0 %}({{ series_existing }} book{% if series_existing != 1 %}s{% endif %} already in your library or queue).{% endif %}
+    {% elif series_existing > 0 %}
+      All {{ series_existing }} book{% if series_existing != 1 %}s{% endif %} in series "{{ series_name }}" are already in your library or queue!
+    {% else %}
+      No releases found on MaM for series "{{ series_name }}".
+    {% endif %}
+  </span>
+  <span class="status ok">Missing Books Queued</span>
+</div>
+{% endif %}
+
+<nav class="request-inbox-tabs" aria-label="Organized library views">
+  <a class="button{% if library_view == 'books' %} primary{% endif %}" href="/library?view=books">Books Catalog · {{ catalog_stats.total }}</a>
+  <a class="button{% if library_view == 'missing' %} primary{% endif %}" href="/library?view=missing">Missing series books</a>
+  <a class="button{% if library_view == 'abs' %} primary{% endif %}" href="/library?view=abs">Audiobookshelf library · {{ abs_books_count }}</a>
+  <a class="button{% if library_view == 'processed' %} primary{% endif %}" href="/library?view=processed">Processed torrents · {{ counts.get("torrents", 0) }}</a>
+  <a class="button{% if library_view == 'duplicates' %} primary{% endif %}" href="/library?view=duplicates">Duplicates · {{ counts.get("duplicate_torrents", 0) }}</a>
+</nav>
+
+{% if library_view == "books" %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Library Books &amp; Formats</h2>
+      <p>Every active book in your collection with audio and ebook format status. Deleted files are automatically pruned to keep your library accurate.</p>
+    </div>
+    <span class="chip">Showing {{ first_record }}–{{ last_record }} of {{ total }} books</span>
+  </header>
+
+  <!-- Filter & Search Controls -->
+  <div style="padding: 1rem 1.25rem; border-bottom: 1px solid var(--border, #334155); display: flex; flex-direction: column; gap: 0.75rem;">
+    <form method="get" action="/library" class="series-search-form" style="margin-bottom: 0;">
+      <input type="hidden" name="view" value="books" />
+      <input type="hidden" name="format" value="{{ active_format }}" />
+      <input type="search" name="search" value="{{ search_query }}" placeholder="Filter books by title, author, or series name..." />
+      <button type="submit" class="button primary small">Search</button>
+      {% if search_query %}<a class="button ghost small" href="/library?view=books&format={{ active_format }}">Clear</a>{% endif %}
+    </form>
+
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+      <span style="font-size: 0.85rem; color: #94a3b8;">Format Filter:</span>
+      <a class="button small{% if active_format == 'all' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=all{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">All ({{ catalog_stats.total }})</a>
+      <a class="button small{% if active_format == 'both' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=both{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">Both Formats ({{ catalog_stats.both }})</a>
+      <a class="button small{% if active_format == 'audiobook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=audiobook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">Audiobooks ({{ catalog_stats.audio }})</a>
+      <a class="button small{% if active_format == 'ebook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=ebook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}">eBooks ({{ catalog_stats.ebook }})</a>
+      <a class="button small{% if active_format == 'missing_audio' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=missing_audio{% if search_query %}&search={{ search_query | urlencode }}{% endif %}" style="color: #fb7185;">Missing Audio ({{ catalog_stats.missing_audio }})</a>
+      <a class="button small{% if active_format == 'missing_ebook' %} primary{% else %} ghost{% endif %}" href="/library?view=books&format=missing_ebook{% if search_query %}&search={{ search_query | urlencode }}{% endif %}" style="color: #fb7185;">Missing eBook ({{ catalog_stats.missing_ebook }})</a>
+    </div>
+  </div>
+
+  {% if books %}
+  <div class="record-list">
+    {% for b in books %}
+    <article class="record">
+      <div class="record-summary" style="align-items: flex-start; padding: 1rem 1.25rem;">
+        <div style="flex-grow: 1;">
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+            <strong style="font-size: 1.05rem; color: #f8fafc;">{{ b.title }}</strong>
+            {% if b.series_name %}
+            <span class="chip" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600;">
+              {{ b.series_name }} {% if b.series_volume %}#{{ b.series_volume }}{% endif %}
+            </span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.75rem;">
+            by {{ b.authors | join(', ') if b.authors else 'Unknown Author' }}
+            {% if b.narrators %} · Narrated by {{ b.narrators | join(', ') }}{% endif %}
+          </div>
+
+          <!-- Format Availability Rows -->
+          <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+            <!-- Audiobook Format -->
+            <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
+              {% if b.audio.present %}
+              <span class="chip" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-weight: 600;">✓ 🎧 Audiobook</span>
+              <span style="color: #cbd5e1;">{{ b.audio.filetypes | join(', ') | upper if b.audio.filetypes else 'AUDIO' }} {% if b.audio.size %}· {{ b.audio.size }}{% endif %}</span>
+              {% if b.audio.source == 'audiobookshelf' %}<span class="chip small" style="background: rgba(56, 189, 248, 0.1); color: #38bdf8;">ABS</span>{% endif %}
+              {% else %}
+              <span class="chip" style="background: rgba(244, 63, 94, 0.12); color: #fb7185;">✗ 🎧 No Audiobook</span>
+              <a class="button ghost small" href="/search?title={{ b.title | urlencode }}&author={{ (b.authors[0] if b.authors else '') | urlencode }}&category=Audiobook">+ Find Audiobook on MAM</a>
+              {% endif %}
+            </div>
+
+            <!-- eBook Format -->
+            <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
+              {% if b.ebook.present %}
+              <span class="chip" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; font-weight: 600;">✓ 📖 eBook</span>
+              <span style="color: #cbd5e1;">{{ b.ebook.filetypes | join(', ') | upper if b.ebook.filetypes else 'EBOOK' }} {% if b.ebook.size %}· {{ b.ebook.size }}{% endif %}</span>
+              {% else %}
+              <span class="chip" style="background: rgba(244, 63, 94, 0.12); color: #fb7185;">✗ 📖 No eBook</span>
+              <a class="button ghost small" href="/search?title={{ b.title | urlencode }}&author={{ (b.authors[0] if b.authors else '') | urlencode }}&category=Ebook">+ Find eBook on MAM</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; flex-shrink: 0;">
+          {% if b.format_status == 'both' %}
+          <span class="status ok" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">🎧+📖 Both Formats</span>
+          {% elif b.format_status == 'audiobook' %}
+          <span class="status ok" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🎧 Audiobook Only</span>
+          {% elif b.format_status == 'ebook' %}
+          <span class="status ok" style="background: rgba(192, 132, 252, 0.15); color: #c084fc;">📖 eBook Only</span>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>No books found matching this filter</strong>
+      <p>Try clearing your search or switching format filters above. You can also click "Rescan &amp; Verify Disk" to verify all folders.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% if page_count > 1 %}
+<nav class="pagination" aria-label="Library pages">
+  {% if page > 1 %}
+  <a class="button" href="/library?view=books&format={{ active_format }}{% if search_query %}&search={{ search_query | urlencode }}{% endif %}&page={{ page - 1 }}">Previous</a>
+  {% else %}
+  <span class="button disabled">Previous</span>
+  {% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}
+  <a class="button" href="/library?view=books&format={{ active_format }}{% if search_query %}&search={{ search_query | urlencode }}{% endif %}&page={{ page + 1 }}">Next</a>
+  {% else %}
+  <span class="button disabled">Next</span>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% elif library_view == "missing" %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Find Missing Books on MaM</h2>
+      <p>Scan any series against MyAnonamouse to detect un-downloaded installments, or review the series already detected across your library and Audiobookshelf below.</p>
+    </div>
+  </header>
+
+  <form method="get" action="/library" class="series-search-form" role="search">
+    <input type="hidden" name="view" value="missing" />
+    <label for="seriesInput" class="visually-hidden">Series name</label>
+    <input
+      id="seriesInput"
+      type="search"
+      name="series"
+      value="{{ active_series }}"
+      placeholder="Type a series name (e.g. Dungeon Crawler Carl, Cradle, Stormlight Archive)..."
+      required
+    />
+    <button type="submit" class="button primary">Scan Series on MaM</button>
+    {% if active_series %}<a class="button ghost" href="/library?view=missing">Clear</a>{% endif %}
+  </form>
+</section>
+
+{% if series_resolution %}
+<section class="panel series-banner-panel" aria-label="Series Scan Results">
+  <header class="panel-header">
+    <div>
+      <p class="eyebrow">MaM Series Scanner</p>
+      <h2>Series: {{ series_resolution.series_name }}</h2>
+      <p>
+        Found <strong>{{ series_resolution.total_books }}</strong> book{% if series_resolution.total_books != 1 %}s{% endif %} on MaM.
+        <strong>{{ series_resolution.already_present | length }}</strong> already in your library or queue,
+        <strong>{{ series_resolution.missing_books | length }}</strong> missing.
+      </p>
+    </div>
+    {% if series_resolution.missing_books %}
+    <form method="post" action="/library/series/select" class="inline-form">
+      <input type="hidden" name="series_name" value="{{ series_resolution.series_name }}" />
+      <button type="submit" class="button primary">Download All Missing ({{ series_resolution.missing_books | length }})</button>
+    </form>
+    {% endif %}
+  </header>
+
+  {% if series_resolution.error %}
+  <div class="flash alert">
+    <span>Error scanning series: {{ series_resolution.error }}</span>
+  </div>
+  {% elif series_resolution.missing_books %}
+  <div class="record-list">
+    {% for book in series_resolution.missing_books %}
+    {% set rel = book.release %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">Book #{{ book.volume }}: {{ rel.title }}</span>
+          <span class="record-id">
+            {% if rel.authors %}{{ rel.authors | join(", ") }} · {% endif %}
+            {% if rel.filetypes %}{{ rel.filetypes | join(", ") | upper }} · {% endif %}
+            {{ rel.size }} ·
+            {% for badge in rel.availability %}
+              {% if badge.tone == "free" %}<span class="chip-success">{{ badge.label }}</span> · {% endif %}
+            {% endfor %}
+            {{ rel.seeders }} seeders
+          </span>
+        </div>
+        <div class="record-actions">
+          <form method="post" action="/select" class="inline-form">
+            <input type="hidden" name="id" value="{{ book.mam_id }}" />
+            <input type="hidden" name="query" value="{{ active_series }}" />
+            <button type="submit" class="button primary small">Add to queue</button>
+          </form>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>All books present!</strong>
+      <p>All {{ series_resolution.total_books }} known books for series "{{ series_resolution.series_name }}" are already in your library or download queue.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Library Series Audit</h2>
+      <p>Series detected across your organized downloads and Audiobookshelf library. Scan any series with 1 click to fetch missing books from MaM.</p>
+    </div>
+    <span class="chip">{{ library_series | length }} series tracked</span>
+  </header>
+
+  {% if library_series %}
+  <div class="record-list">
+    {% for s in library_series %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ s.series_name }}</span>
+          <span class="record-id">
+            {% if s.authors %}{{ s.authors | join(", ") }} · {% endif %}
+            {{ s.volumes_count }} book{% if s.volumes_count != 1 %}s{% endif %} in library
+            (Volumes: {{ s.volumes | join(", ") }})
+          </span>
+          {% if s.gaps %}
+          <span class="record-note status-gap-note">Detected gaps: Missing {{ s.gaps | join(", ") }}</span>
+          {% endif %}
+        </div>
+        <div class="hm-card-actions">
+          {% if s.gaps %}
+          <span class="status alert">Missing {{ s.gaps | join(", ") }}</span>
+          {% else %}
+          <span class="status ok">Sequence intact</span>
+          {% endif %}
+          <div class="button-row">
+            <a class="button secondary small" href="/library?view=missing&series={{ s.series_name | urlencode }}">Check on MaM</a>
+            <form method="post" action="/library/series/select" class="inline-form">
+              <input type="hidden" name="series_name" value="{{ s.series_name }}" />
+              <button type="submit" class="button primary small">Grab Missing</button>
+            </form>
+            <a class="button ghost small" href="/search?series={{ s.series_name | urlencode }}">Search</a>
+          </div>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div>
+      <strong>No series detected yet</strong>
+      <p>Sync with Audiobookshelf or let HeavyMLM organize your downloads into series folders, and detected series and volume gaps will appear here.</p>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+{% else %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>{% if library_view == "abs" %}Audiobookshelf Synchronized Books{% elif library_view == "duplicates" %}Duplicate and replacement candidates{% else %}Processed library records{% endif %}</h2>
+      <p>{% if library_view == "abs" %}Audiobooks indexed directly from your Audiobookshelf server to prevent duplicate downloads and detect missing series installments.{% elif library_view == "duplicates" %}Candidates retained for HeavyMLM cleanup and quality-replacement decisions.{% else %}Torrent records already inspected and tracked by HeavyMLM's library pipeline.{% endif %}</p>
+    </div>
+    <span class="chip">{% if rows %}{{ first_record }}–{{ last_record }} of {{ total }}{% else %}0 records{% endif %}</span>
+  </header>
+  {% if library_view == "processed" and rows %}
+  <div class="hardlink-summary-bar">
+    <div>
+      <strong>Storage Mode:</strong>
+      {% if config.force_hardlinks %}
+      <span class="status ok">🛡️ Force Hardlinks Active (Zero Duplication)</span>
+      {% else %}
+      <span class="status waiting">Standard Hardlink (Copies allowed on cross-drive)</span>
+      {% endif %}
+    </div>
+    <div>
+      <span>This page: <strong>{{ page_hardlinked_count }}</strong> of {{ rows | length }} books hardlinked (zero extra space)</span>
+    </div>
+  </div>
+  {% endif %}
+  {% if rows %}<div class="record-list">
+    {% for row in rows %}
+    {% set meta = row.get("meta") or {} %}
+    <article class="record">
+      <div class="record-summary">
+        <div>
+          <span class="record-title">{{ row.get("title") or meta.get("title") or row.get("title_search") or row.get("id") or "Untitled record" }}</span>
+          <span class="record-id">
+            {% if row.get("mam_id") %}MaM #{{ row.get("mam_id") }} · {% elif row.get("abs_id") %}ABS #{{ row.get("abs_id") }} · {% endif %}
+            {% if meta.get("authors") or row.get("authors") %}{{ (meta.get("authors") or row.get("authors")) | join(", ") }} · {% endif %}
+            {% if row.get("library_path") %}{{ row.get("library_path") }}{% endif %}
+            {% if library_view == "processed" and row.hardlink_info %} · <span class="chip small">{{ row.hardlink_info.label }}</span>{% endif %}
+          </span>
+          {% if library_view == "duplicates" and row.get("duplicate_of") %}<span class="record-note">Duplicate of {{ row.get("duplicate_of") }}</span>{% endif %}
+        </div>
+        <span class="status {% if library_view == 'duplicates' %}waiting{% elif library_view == 'processed' and row.hardlink_info %}{{ row.hardlink_info.status_class }}{% else %}ok{% endif %}">
+          {% if library_view == "abs" %}
+            Audiobookshelf
+          {% elif library_view == "duplicates" %}
+            Review candidate
+          {% elif library_view == "processed" and row.hardlink_info and row.hardlink_info.hardlinked is true %}
+            🔗 Hardlinked
+          {% elif library_view == "processed" and row.hardlink_info and row.hardlink_info.hardlinked is false %}
+            📄 Copied
+          {% else %}
+            Processed
+          {% endif %}
+        </span>
+      </div>
+      <details><summary>Record details</summary><pre>{{ row | tojson(indent=2) }}</pre></details>
+    </article>
+    {% endfor %}
+  </div>{% else %}<div class="empty-state"><div><strong>No records in this view</strong><p>{% if library_view == "abs" %}Click "Sync with Audiobookshelf" above to import your books from ABS.{% else %}HeavyMLM will populate it as the organizer and cleaner process your library.{% endif %}</p></div></div>{% endif %}
+</section>
+
+{% if page_count > 1 %}<nav class="pagination" aria-label="Library pages">
+  {% if page > 1 %}<a class="button" href="/library?view={{ library_view }}&page={{ page - 1 }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+  <span class="chip">Page {{ page }} / {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="/library?view={{ library_view }}&page={{ page + 1 }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+</nav>{% endif %}
+{% endif %}
+{% endblock %}

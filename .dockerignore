@@ -1,0 +1,11 @@
+.git
+.github
+config
+data
+library
+docs
+python/.pytest_cache
+python/dist
+python/tests
+**/__pycache__
+**/*.pyc
