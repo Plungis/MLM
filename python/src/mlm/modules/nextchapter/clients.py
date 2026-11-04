@@ -151,103 +151,175 @@ class GeminiClient:
     ) -> None:
         self.api_key = api_key.strip()
         self._owns_client = client is None
-        self.client = client or httpx.AsyncClient(timeout=30)
+        self.client = client or httpx.AsyncClient(timeout=35)
 
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
+
+    async def analyze_series(
+        self,
+        series_data: list[dict[str, Any]],
+        top_authors: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Analyze book series using Google Gemini AI.
+
+        Identifies canonical reading order, canonical total volume count,
+        all missing books/sequels with titles and summaries, and generates
+        personalized reading recommendations.
+        """
+        if not self.api_key:
+            return {"series": [], "missing_books": [], "recommendations": []}
+
+        summary_lines = []
+        for s in series_data[:30]:
+            name = s.get("series_name", "")
+            authors = ", ".join(s.get("authors", []))
+            owned_titles = []
+            for b in s.get("books", []):
+                title = b.get("title", "")
+                vol = b.get("volume", "")
+                if vol and vol not in title:
+                    owned_titles.append(f"#{vol} {title}")
+                else:
+                    owned_titles.append(title)
+            if not owned_titles and s.get("volumes"):
+                owned_titles = [f"Vol {v}" for v in s["volumes"]]
+
+            owned_str = "; ".join(owned_titles[:15]) if owned_titles else "None recorded"
+            summary_lines.append(
+                f"- Series: '{name}' by {authors or 'Unknown'}. Currently Owned: [{owned_str}]"
+            )
+
+        authors_context = ", ".join((top_authors or [])[:15])
+
+        prompt = (
+            "You are an expert literary bibliography authority and book series intelligence engine.\n"
+            "Below is a list of book series currently in the user's library along with the titles they currently own:\n\n"
+            + "\n".join(summary_lines)
+            + "\n\n"
+            + (f"Favorite/Top Authors: {authors_context}\n\n" if authors_context else "")
+            + "Tasks:\n"
+            "1. For EACH series provided, evaluate its official canonical publication order and total canonical books.\n"
+            "2. Identify all MISSING canonical books and released or announced sequels the user does not own yet. "
+            "Do NOT include books the user already owns (match intelligently by title meaning, subtitles, or volume number).\n"
+            "3. For each missing book, provide:\n"
+            "   - volume_number: canonical volume number (e.g. '1', '2', '2.5', '4', etc.)\n"
+            "   - title: official standalone title of the missing book\n"
+            "   - author: author name\n"
+            "   - summary: concise 1-2 sentence synopsis\n"
+            "4. Determine canonical_total_books and status ('complete' or 'ongoing').\n"
+            "5. Recommend 6 to 10 exciting new book series or standalone books matching their taste.\n\n"
+            "Return valid JSON matching this schema:\n"
+            "{\n"
+            '  "series": [\n'
+            "    {\n"
+            '      "series_name": "Series Name",\n'
+            '      "canonical_total_books": 7,\n'
+            '      "status": "ongoing",\n'
+            '      "missing_books": [\n'
+            "        {\n"
+            '          "volume_number": "4",\n'
+            '          "title": "Book Title",\n'
+            '          "author": "Author Name",\n'
+            '          "summary": "Concise 1-2 sentence synopsis"\n'
+            "        }\n"
+            "      ]\n"
+            "    }\n"
+            "  ],\n"
+            '  "recommendations": [\n'
+            "    {\n"
+            '      "title": "Recommended Title",\n'
+            '      "author": "Author Name",\n'
+            '      "series_name": "Series Name or empty",\n'
+            '      "volume": "1",\n'
+            '      "reason": "Why the user will enjoy this",\n'
+            '      "summary": "Concise synopsis"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        )
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2,
+            },
+        }
+
+        # Try gemini-2.5-flash with fallback to gemini-1.5-flash
+        models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+        last_error = ""
+
+        for model in models_to_try:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                f"?key={self.api_key}"
+            )
+            try:
+                res = await self.client.post(url, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        continue
+                    text = (
+                        candidates[0]
+                        .get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("text", "")
+                    )
+                    text = text.strip()
+                    if text.startswith("```json"):
+                        text = text[7:]
+                    elif text.startswith("```"):
+                        text = text[3:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    parsed = json.loads(text.strip())
+
+                    # If missing_books is at top-level, distribute or include
+                    top_missing = parsed.get("missing_books", [])
+                    parsed_series = parsed.get("series", [])
+
+                    # Ensure both formats work
+                    flat_missing: list[dict[str, Any]] = list(top_missing)
+                    for s_item in parsed_series:
+                        s_name = s_item.get("series_name", "")
+                        for m_item in s_item.get("missing_books", []):
+                            if not m_item.get("series_name"):
+                                m_item["series_name"] = s_name
+                            if not any(
+                                f.get("series_name", "").casefold() == s_name.casefold()
+                                and str(f.get("volume_number")) == str(m_item.get("volume_number"))
+                                for f in flat_missing
+                            ):
+                                flat_missing.append(m_item)
+
+                    return {
+                        "series": parsed_series,
+                        "missing_books": flat_missing,
+                        "recommendations": parsed.get("recommendations", []),
+                    }
+                else:
+                    last_error = (
+                        f"Gemini {model} returned HTTP {res.status_code}: {res.text[:180]}"
+                    )
+            except Exception as error:
+                last_error = f"Gemini error with {model}: {error}"
+
+        return {
+            "error": last_error,
+            "series": [],
+            "missing_books": [],
+            "recommendations": [],
+        }
 
     async def analyze_and_recommend(
         self,
         series_data: list[dict[str, Any]],
         top_authors: list[str],
     ) -> dict[str, Any]:
-        if not self.api_key:
-            return {"missing_books": [], "recommendations": []}
-
-        summary_lines = []
-        for s in series_data[:25]:
-            owned = ", ".join(f"#{v}" for v in s.get("volumes", []) if v)
-            gaps = ", ".join(s.get("gaps", []))
-            summary_lines.append(
-                f"- Series: '{s['series_name']}' by {', '.join(s.get('authors', []))}. "
-                f"Owned: [{owned}]. Detected gaps: [{gaps}]."
-            )
-
-        prompt = (
-            "You are an expert book and audiobook librarian.\n"
-            "Here is a list of book series currently in the user's library:\n"
-            + "\n".join(summary_lines)
-            + "\n\n"
-            f"Top Authors they enjoy: {', '.join(top_authors[:15])}\n\n"
-            "Tasks:\n"
-            "1. Identify any missing books or sequels for these series that the "
-            "user does not have yet (e.g. gaps between owned books or sequels).\n"
-            "2. Recommend 6 to 10 exciting new book series or standalone books "
-            "based on their taste, explaining why they will love each one.\n\n"
-            "Return ONLY valid JSON matching this schema:\n"
-            "{\n"
-            '  "missing_books": [\n'
-            "    {\n"
-            '      "series_name": "Series Name",\n'
-            '      "volume_number": "4",\n'
-            '      "title": "Title of Missing Book",\n'
-            '      "author": "Author Name",\n'
-            '      "summary": "Brief 1-sentence synopsis"\n'
-            "    }\n"
-            "  ],\n"
-            '  "recommendations": [\n'
-            "    {\n"
-            '      "title": "Book or First Book Title",\n'
-            '      "author": "Author Name",\n'
-            '      "series_name": "Series Name (or empty if standalone)",\n'
-            '      "volume": "1",\n'
-            '      "reason": "Why the user will love this based on their library",\n'
-            '      "summary": "Brief 1-sentence synopsis"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-        )
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash:generateContent?key={self.api_key}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.3,
-            },
-        }
-
-        try:
-            res = await self.client.post(url, json=payload)
-            if res.status_code != 200:
-                return {
-                    "error": (
-                        f"Gemini API returned status {res.status_code}: "
-                        f"{res.text[:200]}"
-                    ),
-                    "missing_books": [],
-                    "recommendations": [],
-                }
-            data = res.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return {"missing_books": [], "recommendations": []}
-
-            candidate_parts = (
-                candidates[0].get("content", {}).get("parts", [{}])
-            )
-            text = candidate_parts[0].get("text", "")
-            parsed = json.loads(text)
-            return {
-                "missing_books": parsed.get("missing_books", []),
-                "recommendations": parsed.get("recommendations", []),
-            }
-        except Exception as error:
-            return {
-                "error": str(error),
-                "missing_books": [],
-                "recommendations": [],
-            }
+        """Backward-compatible proxy to analyze_series."""
+        return await self.analyze_series(series_data, top_authors)

@@ -226,16 +226,39 @@ async def test_nextchapter_service(tmp_path):
     }
 
     service = NextChapterService(cfg, repo, mam_mock)
-    service.settings.google_books_api_key = ""
-    service.settings.openlibrary_enabled = False
+    service.settings.gemini_api_key = "dummy_gemini"
 
-    # Test scan_series
-    scan_result = await service.scan_series(force=True)
-    assert scan_result["total_series"] == 1
-    assert scan_result["missing_count"] == 1
-    assert scan_result["series"][0]["series_name"] == "Dune"
-    assert len(scan_result["series"][0]["missing_volumes"]) == 1
-    assert scan_result["series"][0]["missing_volumes"][0]["volume_number"] == "2"
+    # Test scan_series with Gemini AI series analysis
+    with patch(
+        "mlm.modules.nextchapter.service.GeminiClient.analyze_series",
+        new=AsyncMock(
+            return_value={
+                "series": [
+                    {
+                        "series_name": "Dune",
+                        "canonical_total_books": 3,
+                        "status": "incomplete",
+                        "missing_books": [
+                            {
+                                "volume_number": "2",
+                                "title": "Dune Messiah",
+                                "author": "Frank Herbert",
+                                "summary": "Paul Atreides faces galactic intrigue.",
+                            }
+                        ],
+                    }
+                ],
+                "recommendations": [],
+            }
+        ),
+    ):
+        scan_result = await service.scan_series(force=True)
+        assert scan_result["total_series"] == 1
+        assert scan_result["missing_count"] == 1
+        assert scan_result["series"][0]["series_name"] == "Dune"
+        assert len(scan_result["series"][0]["missing_volumes"]) == 1
+        assert scan_result["series"][0]["missing_volumes"][0]["volume_number"] == "2"
+        assert scan_result["series"][0]["missing_volumes"][0]["title"] == "Dune Messiah"
 
     # Mock fetch_series_releases
     with patch(

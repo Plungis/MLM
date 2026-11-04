@@ -98,86 +98,110 @@ class NextChapterService:
             total_missing = 0
             complete_count = 0
 
-            google_client = GoogleBooksClient(self.settings.google_books_api_key)
-            openlibrary_client = OpenLibraryClient()
+            # Collect top authors for context
+            all_authors: list[str] = []
+            for s in raw_series:
+                all_authors.extend(s.get("authors", []))
+            top_authors = list(dict.fromkeys(all_authors))[:20]
 
-            try:
-                for s in raw_series:
-                    series_name = s["series_name"]
-                    authors = s.get("authors", [])
-                    owned_books = s.get("books", [])
-                    gaps = s.get("gaps", [])
+            ai_series_map: dict[str, dict[str, Any]] = {}
+            ai_recommendations: list[dict[str, Any]] = []
+            has_gemini = bool(self.settings.gemini_api_key)
 
-                    missing_items: list[MissingBook] = []
-                    # Create MissingBook for detected volume gaps
-                    for gap in gaps:
-                        clean_vol = gap.lstrip("#").strip()
+            if has_gemini:
+                gemini_client = GeminiClient(self.settings.gemini_api_key)
+                try:
+                    ai_result = await gemini_client.analyze_series(
+                        raw_series, top_authors
+                    )
+                    for s_item in ai_result.get("series", []):
+                        name_key = s_item.get("series_name", "").strip().casefold()
+                        if name_key:
+                            ai_series_map[name_key] = s_item
+                    raw_recs = ai_result.get("recommendations", [])
+                    for rec in raw_recs:
+                        ai_recommendations.append(
+                            BookRecommendation(
+                                title=rec.get("title", ""),
+                                author=rec.get("author", ""),
+                                series_name=rec.get("series_name", ""),
+                                volume=rec.get("volume", ""),
+                                reason=rec.get(
+                                    "reason",
+                                    "Recommended based on your library series",
+                                ),
+                                summary=rec.get("summary", ""),
+                                source="gemini_ai",
+                            ).to_dict()
+                        )
+                finally:
+                    await gemini_client.close()
+
+            for s in raw_series:
+                series_name = s["series_name"]
+                authors = s.get("authors", [])
+                owned_books = s.get("books", [])
+                s_key = series_name.strip().casefold()
+                ai_data = ai_series_map.get(s_key)
+
+                missing_items: list[MissingBook] = []
+
+                if ai_data:
+                    canonical_total = int(ai_data.get("canonical_total_books") or 0)
+                    for m in ai_data.get("missing_books", []):
+                        vol_num = str(m.get("volume_number", "")).strip()
+                        m_title = str(m.get("title", "")).strip()
+                        m_author = (
+                            str(m.get("author", "")).strip()
+                            or (authors[0] if authors else "")
+                        )
+                        m_summary = str(m.get("summary", "")).strip()
                         missing_items.append(
                             MissingBook(
                                 series_name=series_name,
-                                volume_number=clean_vol,
-                                author=authors[0] if authors else "",
-                                source="gap_detector",
+                                volume_number=vol_num,
+                                title=m_title,
+                                author=m_author,
+                                summary=m_summary,
+                                source="gemini_ai",
                             )
                         )
+                elif not has_gemini:
+                    canonical_total = len(owned_books)
+                else:
+                    canonical_total = len(owned_books)
 
-                    # External metadata lookup to discover titles/covers
-                    lookup_enabled = (
-                        bool(self.settings.google_books_api_key)
-                        or self.settings.openlibrary_enabled
+                total_known = max(
+                    len(owned_books) + len(missing_items), canonical_total
+                )
+                pct = (
+                    int((len(owned_books) / total_known) * 100)
+                    if total_known
+                    else 100
+                )
+                if not has_gemini:
+                    status = "unconfigured"
+                elif missing_items:
+                    status = "incomplete"
+                else:
+                    status = "complete"
+
+                if status == "complete":
+                    complete_count += 1
+                total_missing += len(missing_items)
+
+                series_entries.append(
+                    SeriesHubEntry(
+                        series_name=series_name,
+                        authors=authors,
+                        owned_count=len(owned_books),
+                        total_known_count=total_known,
+                        owned_volumes=owned_books,
+                        missing_volumes=missing_items,
+                        percent_complete=pct,
+                        status=status,
                     )
-                    if missing_items and lookup_enabled:
-                        author_name = authors[0] if authors else ""
-                        ext_books = await google_client.search_series_books(
-                            series_name, author_name
-                        )
-                        if not ext_books and self.settings.openlibrary_enabled:
-                            ext_books = await openlibrary_client.search_series(
-                                series_name, author_name
-                            )
-
-                        # Match discovered volumes
-                        for missing in missing_items:
-                            for eb in ext_books:
-                                eb_vol = eb.get("volume")
-                                eb_title = eb.get("title", "")
-                                if eb_vol == missing.volume_number or (
-                                    missing.volume_number in eb_title
-                                ):
-                                    missing.title = eb_title
-                                    missing.cover_url = eb.get("cover_url", "")
-                                    missing.summary = eb.get("description", "")
-                                    missing.published_date = eb.get(
-                                        "published_date", ""
-                                    )
-                                    break
-
-                    total_known = len(owned_books) + len(missing_items)
-                    pct = (
-                        int((len(owned_books) / total_known) * 100)
-                        if total_known
-                        else 100
-                    )
-                    status = "complete" if not missing_items else "incomplete"
-                    if status == "complete":
-                        complete_count += 1
-                    total_missing += len(missing_items)
-
-                    series_entries.append(
-                        SeriesHubEntry(
-                            series_name=series_name,
-                            authors=authors,
-                            owned_count=len(owned_books),
-                            total_known_count=total_known,
-                            owned_volumes=owned_books,
-                            missing_volumes=missing_items,
-                            percent_complete=pct,
-                            status=status,
-                        )
-                    )
-            finally:
-                await google_client.close()
-                await openlibrary_client.close()
+                )
 
             # Rank series: incomplete series with missing books first
             series_entries.sort(
@@ -187,13 +211,14 @@ class NextChapterService:
                 )
             )
 
-            recs = cached.get("recommendations", [])
+            recs = ai_recommendations or cached.get("recommendations", [])
             state = {
                 "series": [se.to_dict() for se in series_entries],
                 "missing_count": total_missing,
                 "complete_count": complete_count,
                 "total_series": len(series_entries),
                 "recommendations": recs,
+                "gemini_configured": has_gemini,
                 "last_scan": int(now),
             }
             self._state_cache = state
