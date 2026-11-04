@@ -9,6 +9,13 @@ from ...autograbber import select_row
 from ...config import Config
 from ...mam import MamClient
 from ...repository import Repository
+from ...search import (
+    as_bool,
+    as_int,
+    decode_name_mapping,
+    parse_size,
+    torrent_meta,
+)
 from ..heavymlm.series import (
     detect_library_series,
     fetch_series_releases,
@@ -231,7 +238,11 @@ class NextChapterService:
             return state
 
     async def search_mam_for_missing(
-        self, series_name: str, volume: str, title: str | None = None
+        self,
+        series_name: str,
+        volume: str,
+        title: str | None = None,
+        author: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.mam:
             return []
@@ -258,27 +269,59 @@ class NextChapterService:
                 releases = await fetch_series_releases(
                     self.mam, series_name, max_pages=3
                 )
+            if not releases and author and title:
+                releases = await fetch_series_releases(
+                    self.mam, f"{author} {title}", max_pages=2
+                )
         except Exception:
             return []
 
         # Filter & score candidates
         scored_candidates: list[dict[str, Any]] = []
         for r in releases:
+            meta = r if "media_type" in r and "authors" in r else torrent_meta(r)
             score = score_series_candidate(
                 r, self.config, preferred_media=preferred_media
             )
+
+            authors = meta.get("authors") or r.get("authors") or []
+            if not authors and "author_info" in r:
+                authors = decode_name_mapping(r.get("author_info"))
+
+            narrators = meta.get("narrators") or r.get("narrators") or []
+            if not narrators and "narrator_info" in r:
+                narrators = decode_name_mapping(r.get("narrator_info"))
+
+            filetypes = meta.get("filetypes") or r.get("filetypes") or []
+            if not filetypes and "filetype" in r:
+                filetypes = [
+                    part.lower()
+                    for part in str(r.get("filetype", "")).split()
+                    if part
+                ]
+
+            size_val = meta.get("size") or r.get("size", "0 B")
+            if isinstance(size_val, (int, float)):
+                size_str = parse_size(size_val)
+            else:
+                size_str = str(size_val)
+
             scored_candidates.append(
                 {
-                    "mam_id": r.get("id"),
-                    "title": r.get("title"),
-                    "authors": r.get("authors", []),
-                    "size": r.get("size", "0 B"),
-                    "filetypes": r.get("filetypes", []),
-                    "media_type": r.get("media_type", "audiobook"),
-                    "seeders": r.get("seeders", 0),
-                    "free": r.get("free", False),
-                    "vip": r.get("vip", False),
-                    "personal_freeleech": r.get("personal_freeleech", False),
+                    "mam_id": r.get("id") or meta.get("mam_id"),
+                    "title": meta.get("title") or r.get("title", "Untitled"),
+                    "authors": authors,
+                    "narrators": narrators,
+                    "size": size_str,
+                    "filetypes": [ft.upper() for ft in filetypes],
+                    "media_type": meta.get("media_type") or r.get("media_type", "audiobook"),
+                    "language": meta.get("language") or "English",
+                    "num_files": as_int(meta.get("num_files") or r.get("numfiles", 0)),
+                    "seeders": as_int(r.get("seeders", 0)),
+                    "leechers": as_int(r.get("leechers", 0)),
+                    "free": as_bool(r.get("free")),
+                    "vip": as_bool(r.get("vip")),
+                    "personal_freeleech": as_bool(r.get("personal_freeleech")),
                     "score": score,
                 }
             )

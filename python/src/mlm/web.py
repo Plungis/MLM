@@ -1543,11 +1543,14 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         series_name: str = "",
         volume: str = "",
         title: str = "",
+        author: str = "",
     ) -> list[dict]:
         if not local_request(request):
             raise HTTPException(403, "NextChapter controls are local-only")
         nc = nextchapter_service()
-        return await nc.search_mam_for_missing(series_name, volume, title)
+        return await nc.search_mam_for_missing(
+            series_name, volume, title, author
+        )
 
     @app.post("/api/nextchapter/download")
     async def nextchapter_api_download(request: Request) -> dict:

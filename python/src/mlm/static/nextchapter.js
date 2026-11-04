@@ -87,7 +87,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!mamId) {
         // Search MAM first
         const title = btn.getAttribute("data-title") || "";
-        openCandidateModal(series, volume, title);
+        const author = btn.getAttribute("data-author") || "";
+        openCandidateModal(series, volume, title, author);
         return;
       }
 
@@ -155,33 +156,25 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Modal helper for candidates
-  async function openCandidateModal(seriesName, volume, title) {
+  async function openCandidateModal(seriesName, volume, title, author) {
     const query = new URLSearchParams({
-      series_name: seriesName,
-      volume: volume,
-      title: title
+      series_name: seriesName || "",
+      volume: volume || "",
+      title: title || "",
+      author: author || ""
     });
     let modal = document.getElementById("nc-candidate-modal");
     if (!modal) {
       modal = document.createElement("div");
       modal.id = "nc-candidate-modal";
-      modal.style.position = "fixed";
-      modal.style.top = "0";
-      modal.style.left = "0";
-      modal.style.width = "100%";
-      modal.style.height = "100%";
-      modal.style.backgroundColor = "rgba(0,0,0,0.75)";
-      modal.style.display = "flex";
-      modal.style.alignItems = "center";
-      modal.style.justifyContent = "center";
-      modal.style.zIndex = "9999";
+      modal.className = "nc-modal-overlay";
       modal.innerHTML = `
-        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; width: 90%; max-width: 650px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; padding: 1.5rem;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 0.75rem; margin-bottom: 1rem;">
-            <h3 style="margin: 0; color: #f8fafc;" id="nc-modal-title">Search Results</h3>
-            <button id="nc-modal-close" style="background: transparent; border: none; color: #94a3b8; font-size: 1.25rem; cursor: pointer;">&times;</button>
+        <div class="nc-modal-container">
+          <div class="nc-modal-header">
+            <h3 class="nc-modal-title" id="nc-modal-title"><span>📚</span> Available MAM Releases</h3>
+            <button id="nc-modal-close" class="nc-modal-close" title="Close">&times;</button>
           </div>
-          <div id="nc-modal-body" style="overflow-y: auto; flex-grow: 1;">
+          <div id="nc-modal-body" class="nc-modal-body">
             <p style="color: #94a3b8;">Searching MyAnonamouse for matching releases...</p>
           </div>
         </div>
@@ -190,48 +183,120 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("nc-modal-close").addEventListener("click", () => {
         modal.style.display = "none";
       });
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) modal.style.display = "none";
+      });
     }
 
     modal.style.display = "flex";
-    document.getElementById("nc-modal-title").innerText = `MAM Releases: ${seriesName} #${volume}`;
+    const headerTitle = title ? `${seriesName} #${volume} - ${title}` : `${seriesName} #${volume}`;
+    document.getElementById("nc-modal-title").innerHTML = `<span>📚</span> MAM Releases: <span style="color: #818cf8; margin-left: 4px;">${escapeHtml(headerTitle)}</span>`;
     const body = document.getElementById("nc-modal-body");
-    body.innerHTML = '<p style="color: #94a3b8;"><span class="spin">⟳</span> Searching MyAnonamouse...</p>';
+    body.innerHTML = `
+      <div style="text-align: center; padding: 2.5rem 1rem;">
+        <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 0.5rem;"><span class="spin">⟳</span> Searching MyAnonamouse for matching releases...</p>
+        <small style="color: #64748b;">Matching against series, volume, author, and canonical book title</small>
+      </div>
+    `;
 
     try {
       const res = await fetch(`/api/nextchapter/search-mam?${query.toString()}`);
       const candidates = await res.json();
       if (!candidates || candidates.length === 0) {
-        body.innerHTML = `<p style="color: #94a3b8;">No matching releases found on MAM for "${seriesName} ${volume}".</p>`;
+        body.innerHTML = `
+          <div style="text-align: center; padding: 2.5rem 1rem;">
+            <p style="color: #f8fafc; font-weight: 600; font-size: 1rem; margin-bottom: 0.5rem;">No matching releases found on MAM</p>
+            <p style="color: #94a3b8; font-size: 0.85rem; max-width: 480px; margin: 0 auto 1.25rem;">We searched for "${escapeHtml(seriesName)} ${escapeHtml(volume)}" and "${escapeHtml(title)}". You can search manually on MyAnonamouse or check back later.</p>
+            <a href="https://www.myanonamouse.net/tor/browse.php?tor[text]=${encodeURIComponent(title || seriesName)}" target="_blank" rel="noreferrer" class="button btn-outline-nc" style="display: inline-flex;">Search Directly on MAM ↗</a>
+          </div>
+        `;
         return;
       }
 
-      let html = '<div style="display: flex; flex-direction: column; gap: 0.75rem;">';
+      let html = `<div style="display: flex; flex-direction: column; gap: 0.9rem;">`;
       candidates.forEach(c => {
-        const badges = [];
-        if (c.vip) badges.push('<span class="chip" style="background: #8b5cf6; color: white;">VIP</span>');
-        if (c.free || c.personal_freeleech) badges.push('<span class="chip" style="background: #10b981; color: white;">Free</span>');
-        badges.push(`<span class="chip">${c.media_type}</span>`);
-        badges.push(`<span class="chip">${c.size}</span>`);
-        badges.push(`<span class="chip" style="color: #38bdf8;">▲ ${c.seeders}</span>`);
+        const authorsList = (c.authors && c.authors.length) ? c.authors : (author ? [author] : []);
+        const authorText = authorsList.length ? authorsList.join(", ") : "Unknown Author";
+        const narratorsList = c.narrators || [];
+        const narratorText = narratorsList.length ? narratorsList.join(", ") : "";
+
+        const filetypesList = c.filetypes || [];
+        const formatBadges = filetypesList.length
+          ? filetypesList.map(ft => `<span class="format-badge ${escapeHtml(ft.toLowerCase())}">${escapeHtml(ft)}</span>`).join(" ")
+          : `<span class="format-badge unknown">${escapeHtml((c.media_type || "UNKNOWN").toUpperCase())}</span>`;
+
+        const isAudio = (c.media_type || "").toLowerCase().includes("audio");
+        const mediaLabel = isAudio ? "🎧 Audiobook" : "📖 eBook";
+
+        const costPills = [];
+        if (c.free || c.personal_freeleech) {
+          costPills.push('<span class="status-pill free">FREELEECH</span>');
+        } else if (c.vip) {
+          costPills.push('<span class="status-pill vip">VIP</span>');
+        } else {
+          costPills.push('<span class="status-pill ratio">RATIO</span>');
+        }
+
+        const seedersNum = parseInt(c.seeders, 10) || 0;
+        const leechersNum = parseInt(c.leechers, 10) || 0;
+        const seedColor = seedersNum > 5 ? "#34d399" : (seedersNum > 0 ? "#38bdf8" : "#fb7185");
 
         html += `
-          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 0.75rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
-            <div style="flex-grow: 1;">
-              <strong style="color: #f1f5f9; display: block; margin-bottom: 0.35rem; font-size: 0.9rem;">${c.title}</strong>
-              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">${badges.join("")}</div>
+          <div class="candidate-card">
+            <div class="candidate-header-row">
+              <a href="https://www.myanonamouse.net/t/${c.mam_id}" target="_blank" rel="noreferrer" class="candidate-title" title="Open release #${c.mam_id} on MyAnonamouse">
+                ${escapeHtml(c.title)} <span style="font-size: 0.8rem; opacity: 0.7;">↗</span>
+              </a>
             </div>
-            <button class="btn btn-sm btn-primary-nc" data-modal-queue="${c.mam_id}" data-series="${seriesName}" data-vol="${volume}" style="white-space: nowrap;">Queue</button>
+
+            <div class="candidate-meta-grid">
+              <div class="candidate-meta-item">
+                <span class="candidate-meta-label">Author:</span>
+                <span class="candidate-meta-value" style="color: #38bdf8;">${escapeHtml(authorText)}</span>
+              </div>
+              <div class="candidate-meta-item">
+                <span class="candidate-meta-label">Format:</span>
+                <div>${formatBadges}</div>
+              </div>
+              <div class="candidate-meta-item">
+                <span class="candidate-meta-label">Size:</span>
+                <span class="candidate-meta-value">${escapeHtml(c.size || "Unknown")}</span>
+                ${c.num_files ? `<span style="color: #64748b; font-size: 0.75rem;">(${c.num_files} files)</span>` : ""}
+              </div>
+              <div class="candidate-meta-item">
+                <span class="candidate-meta-label">Language:</span>
+                <span class="candidate-meta-value">${escapeHtml(c.language || "English")}</span>
+              </div>
+              ${narratorText ? `
+              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                <span class="candidate-meta-label">Narrator:</span>
+                <span class="candidate-meta-value" style="color: #c084fc;">${escapeHtml(narratorText)}</span>
+              </div>
+              ` : ""}
+            </div>
+
+            <div class="candidate-pills-row">
+              <div class="candidate-badges">
+                <span class="chip" style="font-weight: 600;">${mediaLabel}</span>
+                ${costPills.join(" ")}
+                <span class="chip" style="color: ${seedColor}; font-weight: 600;">▲ ${seedersNum} seeders</span>
+                <span class="chip" style="color: #94a3b8;">▼ ${leechersNum} leechers</span>
+              </div>
+              <button class="btn btn-sm btn-primary-nc" data-modal-queue="${c.mam_id}" data-series="${escapeHtml(seriesName)}" data-vol="${escapeHtml(volume)}" style="padding: 0.45rem 1rem; font-weight: 600;">
+                1-Click Queue
+              </button>
+            </div>
           </div>
         `;
       });
-      html += '</div>';
+      html += `</div>`;
       body.innerHTML = html;
 
       body.querySelectorAll("[data-modal-queue]").forEach(qBtn => {
         qBtn.addEventListener("click", async () => {
           const id = qBtn.getAttribute("data-modal-queue");
           qBtn.disabled = true;
-          qBtn.innerText = "Queuing...";
+          qBtn.innerHTML = '<span class="spin">⟳</span> Queuing...';
           const qRes = await fetch("/api/nextchapter/download", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -239,19 +304,31 @@ document.addEventListener("DOMContentLoaded", () => {
           });
           const qData = await qRes.json();
           if (qData.ok) {
-            qBtn.innerText = "✓ Queued";
+            qBtn.innerHTML = "✓ Queued";
+            qBtn.classList.remove("btn-primary-nc");
+            qBtn.classList.add("btn-outline-nc");
             showToast(`Queued #${id} successfully!`);
-            setTimeout(() => { modal.style.display = "none"; }, 800);
+            setTimeout(() => { modal.style.display = "none"; }, 1000);
           } else {
             alert("Error: " + (qData.error || "Failed to queue"));
             qBtn.disabled = false;
-            qBtn.innerText = "Queue";
+            qBtn.innerHTML = "1-Click Queue";
           }
         });
       });
     } catch (err) {
       body.innerHTML = `<p style="color: #fb7185;">Search error: ${err.message}</p>`;
     }
+  }
+
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   function showToast(message) {

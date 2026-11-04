@@ -153,7 +153,7 @@
             </div>
           </div>
           <div class="missing-vol-actions">
-            <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" style="width: 100%;">
+            <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" style="width: 100%;">
               Search &amp; Queue on MAM
             </button>
           </div>
@@ -199,7 +199,7 @@
           </div>
         </div>
         <div class="missing-vol-actions">
-          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" style="width: 100%;">
+          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" style="width: 100%;">
             Find on MAM &amp; 1-Click Queue
           </button>
         </div>
@@ -256,11 +256,19 @@
         <strong style="color: #f1f5f9; font-size: 0.85rem;">MAM Release Found:</strong>
         <span class="chip" style="color: #38bdf8; font-size: 0.75rem;">▲ {{ r.best_candidate.seeders }} seeders</span>
       </div>
-      <div style="margin-bottom: 0.5rem; color: #cbd5e1; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ r.best_candidate.title }}">
+      <div style="margin-bottom: 0.4rem; color: #cbd5e1; font-size: 0.82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ r.best_candidate.title }}">
         {{ r.best_candidate.title }}
       </div>
+      <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.5rem; align-items: center;">
+        {% for ft in r.best_candidate.filetypes %}
+        <span class="format-badge {{ ft | lower }}">{{ ft }}</span>
+        {% endfor %}
+        {% if r.best_candidate.authors %}
+        <span style="font-size: 0.78rem; color: #38bdf8;">by {{ r.best_candidate.authors | join(', ') }}</span>
+        {% endif %}
+      </div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="color: #94a3b8; font-size: 0.75rem;">{{ r.best_candidate.media_type }} &bull; {{ r.best_candidate.size }}</span>
+        <span style="color: #94a3b8; font-size: 0.75rem;">{{ r.best_candidate.media_type | capitalize }} &bull; {{ r.best_candidate.size }}</span>
         <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ r.best_candidate.mam_id }}" data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}">
           1-Click Queue
         </button>
@@ -268,7 +276,7 @@
     </div>
     {% else %}
     <div style="margin-top: auto; padding-top: 0.75rem;">
-      <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ r.series_name or r.title }}" data-title="{{ r.title }}" style="width: 100%;">
+      <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ r.series_name or r.title }}" data-title="{{ r.title }}" data-author="{{ r.author }}" style="width: 100%;">
         Search on MAM &amp; Queue
       </button>
     </div>
