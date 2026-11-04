@@ -259,6 +259,11 @@
       <div style="margin-bottom: 0.4rem; color: #cbd5e1; font-size: 0.82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ r.best_candidate.title }}">
         {{ r.best_candidate.title }}
       </div>
+      {% if r.best_candidate.series_display %}
+      <div style="font-size: 0.78rem; color: #a5b4fc; margin-bottom: 0.35rem; font-weight: 500;">
+        📚 MAM Series: <strong>{{ r.best_candidate.series_display }}</strong>
+      </div>
+      {% endif %}
       <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.5rem; align-items: center;">
         {% for ft in r.best_candidate.filetypes %}
         <span class="format-badge {{ ft | lower }}">{{ ft }}</span>

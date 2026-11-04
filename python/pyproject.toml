@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlm-python"
-version = "0.5.0b79"
+version = "0.5.0b80"
 description = "MyAnonaSuite with HeavyMLM, ABSidekick, and MAM-Spender modules"
 readme = "README.md"
 requires-python = ">=3.11"

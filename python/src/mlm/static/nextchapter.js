@@ -267,6 +267,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 <span class="candidate-meta-label">Language:</span>
                 <span class="candidate-meta-value">${escapeHtml(c.language || "English")}</span>
               </div>
+              ${c.series_display ? `
+              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                <span class="candidate-meta-label">MAM Series:</span>
+                <span class="candidate-meta-value" style="color: #a5b4fc; font-weight: 600;">📚 ${escapeHtml(c.series_display)}</span>
+              </div>
+              ` : `
+              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                <span class="candidate-meta-label">MAM Series:</span>
+                <span class="candidate-meta-value" style="color: #64748b; font-style: italic;">None tagged on MAM</span>
+              </div>
+              `}
               ${narratorText ? `
               <div class="candidate-meta-item" style="grid-column: 1 / -1;">
                 <span class="candidate-meta-label">Narrator:</span>
@@ -281,6 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${costPills.join(" ")}
                 <span class="chip" style="color: ${seedColor}; font-weight: 600;">▲ ${seedersNum} seeders</span>
                 <span class="chip" style="color: #94a3b8;">▼ ${leechersNum} leechers</span>
+                ${c.series_display ? `<span class="chip" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); font-weight: 600;" title="Series registered on MyAnonamouse">📚 ${escapeHtml(c.series_display)}</span>` : ""}
               </div>
               <button class="btn btn-sm btn-primary-nc" data-modal-queue="${c.mam_id}" data-series="${escapeHtml(seriesName)}" data-vol="${escapeHtml(volume)}" style="padding: 0.45rem 1rem; font-weight: 600;">
                 1-Click Queue

@@ -20,6 +20,28 @@ ENTRY_NUMBER_PATTERN = re.compile(r"^#?\s*([\d.]+)", re.IGNORECASE)
 TITLE_SERIES_PATTERN = re.compile(r"(?:book|vol(?:ume)?|#)\s*([\d.]+)", re.IGNORECASE)
 
 
+def normalize_series_name(name: str) -> str:
+    """Normalize series name to prevent fragmented groupings from messy metadata."""
+    cleaned = name.strip()
+    if not cleaned:
+        return ""
+    # Strip trailing noisy suffixes first like " (Audiobook)", " [Box Set]", " Series"
+    cleaned = re.sub(
+        r"\s*[\(\[]?\s*(?:Series|Audiobooks?|Trilogy|Saga|Box\s*Set)\s*[\)\]]?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Normalize inverted articles
+    if cleaned.endswith(", The"):
+        cleaned = "The " + cleaned[:-5].strip()
+    elif cleaned.endswith(", A"):
+        cleaned = "A " + cleaned[:-3].strip()
+    elif cleaned.endswith(", An"):
+        cleaned = "An " + cleaned[:-4].strip()
+    return cleaned
+
+
 def parse_entry_number(value: str) -> tuple[int, float, str]:
     """Return a sortable tuple for series volume numbers (e.g. '1', '2.5', 'Book 1')."""
     cleaned = value.strip().casefold()
@@ -338,9 +360,10 @@ def detect_library_series(repository: Repository) -> list[dict[str, Any]]:
                     ]
 
         for s in series_list:
-            s_name = str(s.get("name", "")).strip()
-            if not s_name:
+            raw_s_name = str(s.get("name", "")).strip()
+            if not raw_s_name:
                 continue
+            s_name = normalize_series_name(raw_s_name) or raw_s_name
             key = s_name.casefold()
             group = grouped_series[key]
             if not group["name"]:

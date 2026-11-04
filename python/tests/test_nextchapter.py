@@ -269,6 +269,7 @@ async def test_nextchapter_service(tmp_path):
                     "id": 202,
                     "title": "Dune Messiah [Audiobook]",
                     "authors": ["Frank Herbert"],
+                    "series": [{"name": "Dune Chronicles", "entries": ["2"]}],
                     "size": "500 MB",
                     "filetypes": ["m4b"],
                     "media_type": "audiobook",
@@ -285,6 +286,7 @@ async def test_nextchapter_service(tmp_path):
         )
         assert len(candidates) == 1
         assert candidates[0]["mam_id"] == 202
+        assert candidates[0]["series_display"] == "Dune Chronicles #2"
 
         # Test queue download
         res = await service.queue_download(202, "Dune", "2")
@@ -295,6 +297,32 @@ async def test_nextchapter_service(tmp_path):
         qall = await service.queue_all_missing("Dune")
         assert qall["ok"] is True
         assert qall["queued_count"] == 1
+
+
+def test_series_normalization_and_mam_display():
+    from mlm.modules.heavymlm.series import normalize_series_name
+    from mlm.modules.nextchapter.service import format_mam_series
+
+    assert (
+        normalize_series_name("Stormlight Archive, The (Audiobook)")
+        == "The Stormlight Archive"
+    )
+    assert (
+        normalize_series_name("Dungeon Crawler Carl Series")
+        == "Dungeon Crawler Carl"
+    )
+    assert (
+        normalize_series_name("Wheel of Time, The [Box Set]")
+        == "The Wheel of Time"
+    )
+
+    display = format_mam_series(
+        [
+            {"name": "Dungeon Crawler Carl", "entries": ["4"]},
+            {"name": "LitRPG Favorites", "entries": []},
+        ]
+    )
+    assert display == "Dungeon Crawler Carl #4; LitRPG Favorites"
 
 
 def test_nextchapter_web_routes(tmp_path):

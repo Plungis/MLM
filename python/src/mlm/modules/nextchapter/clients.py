@@ -186,30 +186,57 @@ class GeminiClient:
             if not owned_titles and s.get("volumes"):
                 owned_titles = [f"Vol {v}" for v in s["volumes"]]
 
-            owned_str = "; ".join(owned_titles[:15]) if owned_titles else "None recorded"
+            owned_str = (
+                "; ".join(owned_titles[:15]) if owned_titles else "None recorded"
+            )
             summary_lines.append(
-                f"- Series: '{name}' by {authors or 'Unknown'}. Currently Owned: [{owned_str}]"
+                f"- Series: '{name}' by {authors or 'Unknown'}. "
+                f"Currently Owned: [{owned_str}]"
             )
 
         authors_context = ", ".join((top_authors or [])[:15])
 
         prompt = (
-            "You are an expert literary bibliography authority and book series intelligence engine.\n"
-            "Below is a list of book series currently in the user's library along with the titles they currently own:\n\n"
+            "You are an expert literary bibliography authority and intelligent "
+            "library curator.\n"
+            "Below is a list of book series currently in the user's library along with "
+            "raw titles and filenames they currently own:\n\n"
             + "\n".join(summary_lines)
             + "\n\n"
-            + (f"Favorite/Top Authors: {authors_context}\n\n" if authors_context else "")
-            + "Tasks:\n"
-            "1. For EACH series provided, evaluate its official canonical publication order and total canonical books.\n"
-            "2. Identify all MISSING canonical books and released or announced sequels the user does not own yet. "
-            "Do NOT include books the user already owns (match intelligently by title meaning, subtitles, or volume number).\n"
-            "3. For each missing book, provide:\n"
-            "   - volume_number: canonical volume number (e.g. '1', '2', '2.5', '4', etc.)\n"
-            "   - title: official standalone title of the missing book\n"
-            "   - author: author name\n"
+            + (
+                f"Favorite/Top Authors: {authors_context}\n\n"
+                if authors_context
+                else ""
+            )
+            + "CRITICAL INSTRUCTIONS FOR MISLEADING OR MESSY LIBRARY METADATA:\n"
+            "1. NOISY TITLES & ARTIFACTS: Raw titles/filenames frequently contain "
+            "rip noise, format tags ('Unabridged', 'Dramatized Adaptation'), publisher/"
+            "studio names ('GraphicAudio', 'Soundbooth Theater'), disc/CD numbers "
+            "('Disc 01', 'CD 02'), or narrator names. Mentally strip these out to "
+            "identify the true canonical book.\n"
+            "2. MULTI-PART / SPLIT RELEASES: If the user owns multiple parts or files "
+            "of the same book (e.g. 'The Way of Kings Part 1' and 'Part 2'), "
+            "recognize that these are parts of the SAME single book. The book "
+            "is OWNED. Do NOT consider other parts of the same book as missing books!\n"
+            "3. OMNIBUSES, BUNDLES & BOX SETS: If an entry represents an omnibus or "
+            "collection (e.g. 'Dungeon Crawler Carl: Books 1-3 Omnibus'), recognize "
+            "that ALL volumes contained in that omnibus (Books 1, 2, and 3) are "
+            "ALREADY OWNED by the user. Do NOT report any of them as missing!\n"
+            "4. SUBTITLES & UNNUMBERED TITLES: Many books do not have volume numbers "
+            "in their metadata. Use your deep knowledge of author bibliographies to "
+            "map each owned title to its canonical volume number and series order.\n"
+            "5. ACCURATE SEQUELS & GAPS: Identify ONLY canonical books in the series "
+            "(mainline numbered entries or canonical novellas) that the user does "
+            "NOT own yet.\n"
+            "6. For each missing book, provide:\n"
+            "   - volume_number: canonical volume number (e.g. '1', '2', '2.5', '4')\n"
+            "   - title: clean, official standalone book title "
+            "(e.g. 'The Gate of the Feral Gods', NOT 'DCC Book 4 GraphicAudio')\n"
+            "   - author: primary author name\n"
             "   - summary: concise 1-2 sentence synopsis\n"
-            "4. Determine canonical_total_books and status ('complete' or 'ongoing').\n"
-            "5. Recommend 6 to 10 exciting new book series or standalone books matching their taste.\n\n"
+            "7. Determine canonical_total_books and status ('complete' or 'ongoing').\n"
+            "8. Recommend 6 to 10 exciting new book series or standalone books "
+            "matching their taste.\n\n"
             "Return valid JSON matching this schema:\n"
             "{\n"
             '  "series": [\n'
@@ -280,8 +307,7 @@ class GeminiClient:
                         text = text[7:]
                     elif text.startswith("```"):
                         text = text[3:]
-                    if text.endswith("```"):
-                        text = text[:-3]
+                    text = text.removesuffix("```")
                     parsed = json.loads(text.strip())
 
                     # If missing_books is at top-level, distribute or include
@@ -296,8 +322,10 @@ class GeminiClient:
                             if not m_item.get("series_name"):
                                 m_item["series_name"] = s_name
                             if not any(
-                                f.get("series_name", "").casefold() == s_name.casefold()
-                                and str(f.get("volume_number")) == str(m_item.get("volume_number"))
+                                f.get("series_name", "").casefold()
+                                == s_name.casefold()
+                                and str(f.get("volume_number"))
+                                == str(m_item.get("volume_number"))
                                 for f in flat_missing
                             ):
                                 flat_missing.append(m_item)
@@ -309,7 +337,8 @@ class GeminiClient:
                     }
                 else:
                     last_error = (
-                        f"Gemini {model} returned HTTP {res.status_code}: {res.text[:180]}"
+                        f"Gemini {model} returned HTTP {res.status_code}: "
+                        f"{res.text[:180]}"
                     )
             except Exception as error:
                 last_error = f"Gemini error with {model}: {error}"

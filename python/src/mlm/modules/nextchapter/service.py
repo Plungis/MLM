@@ -13,6 +13,7 @@ from ...search import (
     as_bool,
     as_int,
     decode_name_mapping,
+    decode_series_info,
     parse_size,
     torrent_meta,
 )
@@ -21,13 +22,35 @@ from ..heavymlm.series import (
     fetch_series_releases,
     score_series_candidate,
 )
-from .clients import GeminiClient, GoogleBooksClient, OpenLibraryClient
+from .clients import GeminiClient, GoogleBooksClient
 from .models import (
     BookRecommendation,
     MissingBook,
     NextChapterSettings,
     SeriesHubEntry,
 )
+
+
+def format_mam_series(series_list: list[dict[str, Any]]) -> str:
+    """Format MAM series list into a clean display string (e.g. 'Series Name #4')."""
+    parts: list[str] = []
+    for s in series_list:
+        if not isinstance(s, dict):
+            continue
+        name = str(s.get("name") or "").strip()
+        if not name:
+            continue
+        entries = s.get("entries") or (
+            [s["sequence"]] if s.get("sequence") else []
+        )
+        clean_entries = [
+            str(e).strip() for e in entries if str(e).strip()
+        ]
+        if clean_entries:
+            parts.append(f"{name} #{', '.join(clean_entries)}")
+        else:
+            parts.append(name)
+    return "; ".join(parts)
 
 
 class NextChapterService:
@@ -306,15 +329,25 @@ class NextChapterService:
             else:
                 size_str = str(size_val)
 
+            series_info = meta.get("series") or []
+            if not series_info and "series_info" in r:
+                series_info = decode_series_info(r.get("series_info"))
+            series_display = format_mam_series(series_info)
+
             scored_candidates.append(
                 {
                     "mam_id": r.get("id") or meta.get("mam_id"),
                     "title": meta.get("title") or r.get("title", "Untitled"),
                     "authors": authors,
                     "narrators": narrators,
+                    "series": series_info,
+                    "series_display": series_display,
                     "size": size_str,
                     "filetypes": [ft.upper() for ft in filetypes],
-                    "media_type": meta.get("media_type") or r.get("media_type", "audiobook"),
+                    "media_type": (
+                        meta.get("media_type")
+                        or r.get("media_type", "audiobook")
+                    ),
                     "language": meta.get("language") or "English",
                     "num_files": as_int(meta.get("num_files") or r.get("numfiles", 0)),
                     "seeders": as_int(r.get("seeders", 0)),
@@ -387,8 +420,9 @@ class NextChapterService:
         for item in missing_list:
             vol = item.get("volume_number", "")
             title = item.get("title", "")
+            author = item.get("author", "")
             candidates = await self.search_mam_for_missing(
-                series_name, vol, title
+                series_name, vol, title, author=author
             )
             if candidates:
                 best = candidates[0]
@@ -494,7 +528,10 @@ class NextChapterService:
                 if self.mam:
                     try:
                         matches = await self.search_mam_for_missing(
-                            rec["title"], "", rec.get("author")
+                            rec.get("series_name") or rec["title"],
+                            rec.get("volume", ""),
+                            title=rec["title"],
+                            author=rec.get("author"),
                         )
                         if matches:
                             rec["best_candidate"] = matches[0]
