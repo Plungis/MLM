@@ -354,4 +354,4 @@ def test_nextchapter_web_routes(tmp_path):
         follow_redirects=False,
     )
     assert res_save.status_code == 303
-    assert "/suite/nextchapter/settings?saved=1" in res_save.headers["location"]
+    assert "/suite/nextchapter/series?saved=1" in res_save.headers["location"]

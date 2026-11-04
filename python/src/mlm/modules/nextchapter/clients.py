@@ -248,8 +248,13 @@ class GeminiClient:
             },
         }
 
-        # Try gemini-2.5-flash with fallback to gemini-1.5-flash
-        models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+        # Modern active Gemini Flash models
+        models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
+            "gemini-flash-latest",
+        ]
         last_error = ""
 
         for model in models_to_try:

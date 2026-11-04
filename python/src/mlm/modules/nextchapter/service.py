@@ -108,12 +108,14 @@ class NextChapterService:
             ai_recommendations: list[dict[str, Any]] = []
             has_gemini = bool(self.settings.gemini_api_key)
 
+            last_error = ""
             if has_gemini:
                 gemini_client = GeminiClient(self.settings.gemini_api_key)
                 try:
                     ai_result = await gemini_client.analyze_series(
                         raw_series, top_authors
                     )
+                    last_error = ai_result.get("error", "")
                     for s_item in ai_result.get("series", []):
                         name_key = s_item.get("series_name", "").strip().casefold()
                         if name_key:
@@ -219,6 +221,7 @@ class NextChapterService:
                 "total_series": len(series_entries),
                 "recommendations": recs,
                 "gemini_configured": has_gemini,
+                "last_error": last_error,
                 "last_scan": int(now),
             }
             self._state_cache = state

@@ -76,7 +76,13 @@
 {% endif %}
 
 {% if saved %}
-<div class="flash" role="status"><span>NextChapter settings saved successfully!</span><span class="status ok">Saved</span></div>
+<div class="flash" role="status"><span>NextChapter settings saved and library series analyzed!</span><span class="status ok">Saved</span></div>
+{% endif %}
+
+{% if state.last_error %}
+<div class="flash error" role="alert" style="background: rgba(244, 63, 94, 0.15); border: 1px solid rgba(244, 63, 94, 0.4); color: #fb7185; margin-bottom: 1.5rem; padding: 0.85rem 1.25rem; border-radius: 8px;">
+  <strong>Gemini API Notice:</strong> {{ state.last_error }}
+</div>
 {% endif %}
 
 {% if nextchapter_view == "series" %}

@@ -1599,8 +1599,15 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             )
             if hasattr(app.state, "services"):
                 await app.state.services.reconfigure(active_config())
+                if current_settings.get("gemini_api_key"):
+                    try:
+                        await app.state.services.nextchapter.scan_series(
+                            force=True
+                        )
+                    except Exception:
+                        pass
             return RedirectResponse(
-                "/suite/nextchapter/settings?saved=1", status_code=303
+                "/suite/nextchapter/series?saved=1", status_code=303
             )
         else:
             payload = await request.json()
