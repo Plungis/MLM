@@ -383,3 +383,56 @@ def test_nextchapter_web_routes(tmp_path):
     )
     assert res_save.status_code == 303
     assert "/suite/nextchapter/series?saved=1" in res_save.headers["location"]
+
+
+
+@pytest.mark.asyncio
+async def test_search_mam_for_missing_prioritizes_author_and_title(tmp_path):
+    db_path = tmp_path / "data.sqlite3"
+    ensure_database(db_path)
+    repo = Repository(db_path)
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('mam_id = "test_mam_id"\n', encoding="utf-8")
+    cfg = load_config(cfg_file)
+
+    mam_mock = AsyncMock()
+    mam_mock.search.return_value = {
+        "found": 2,
+        "data": [
+            {
+                "id": 901,
+                "title": "End of Watch [Audiobook]",
+                "authors": ["Stephen King"],
+                "size": "600 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 100,
+                "free": True,
+            },
+            {
+                "id": 902,
+                "title": "End of Story",
+                "authors": ["A. J. Finn"],
+                "size": "500 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 10,
+                "free": True,
+            },
+        ],
+    }
+
+    service = NextChapterService(cfg, repo, mam_mock)
+    candidates = await service.search_mam_for_missing(
+        series_name="",
+        volume="2",
+        title="End of Story",
+        author="aJ finn",
+    )
+
+    # Exactly the A. J. Finn release should be top candidate, Stephen King filtered out
+    assert len(candidates) == 1
+    assert candidates[0]["mam_id"] == 902
+    assert candidates[0]["title"] == "End of Story"
+    assert candidates[0]["authors"] == ["A. J. Finn"]

@@ -7,6 +7,7 @@ import hmac
 import ipaddress
 import json
 import math
+import re
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
@@ -1544,12 +1545,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         volume: str = "",
         title: str = "",
         author: str = "",
+        q: str = "",
     ) -> list[dict]:
         if not local_request(request):
             raise HTTPException(403, "NextChapter controls are local-only")
         nc = nextchapter_service()
         return await nc.search_mam_for_missing(
-            series_name, volume, title, author
+            series_name, volume, title, author, q=q
         )
 
     @app.post("/api/nextchapter/download")
@@ -1603,12 +1605,10 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
             if hasattr(app.state, "services"):
                 await app.state.services.reconfigure(active_config())
                 if current_settings.get("gemini_api_key"):
-                    try:
+                    with suppress(Exception):
                         await app.state.services.nextchapter.scan_series(
                             force=True
                         )
-                    except Exception:
-                        pass
             return RedirectResponse(
                 "/suite/nextchapter/series?saved=1", status_code=303
             )
@@ -2236,6 +2236,45 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                     if torrent_id
                 ]
                 rows = filter_search_results(presented, filters)
+
+                # If composite query (e.g. author #2 title) yielded zero results,
+                # retry MAM search with isolated segments (title/author)
+                if not rows and filters.get("q"):
+                    raw_q = str(filters["q"]).strip()
+                    parts = [
+                        p.strip()
+                        for p in re.split(r"#\s*[\d.]+|\s+-\s+", raw_q)
+                        if len(p.strip()) >= 3
+                    ]
+                    for sub_query in parts:
+                        if sub_query.casefold() == seed.casefold():
+                            continue
+                        sub_res = await app.state.services.mam.search(
+                            {
+                                "dlLink": True,
+                                "mediaInfo": True,
+                                "isbn": True,
+                                "perpage": 100,
+                                "tor": {
+                                    "text": sub_query,
+                                    "startNumber": 0,
+                                },
+                            }
+                        )
+                        for row in sub_res.get("data", []):
+                            if isinstance(row, dict):
+                                tid = as_int(row.get("id"))
+                                if tid and tid not in raw_by_id:
+                                    raw_by_id[tid] = row
+                    if raw_by_id:
+                        presented = [
+                            present_search_result(row)
+                            for torrent_id, row in raw_by_id.items()
+                            if torrent_id
+                        ]
+                        rows = filter_search_results(presented, filters)
+
+                scanned = len(raw_by_id)
                 found = max(found, scanned)
             except Exception as caught:  # noqa: BLE001 - display API failure in UI
                 error = str(caught)

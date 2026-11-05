@@ -155,14 +155,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Modal helper for candidates
-  async function openCandidateModal(seriesName, volume, title, author) {
-    const query = new URLSearchParams({
-      series_name: seriesName || "",
-      volume: volume || "",
-      title: title || "",
-      author: author || ""
-    });
+  // Modal helper for candidates with in-modal search refinement
+  async function openCandidateModal(seriesName, volume, title, author, customQ) {
     let modal = document.getElementById("nc-candidate-modal");
     if (!modal) {
       modal = document.createElement("div");
@@ -173,6 +167,12 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="nc-modal-header">
             <h3 class="nc-modal-title" id="nc-modal-title"><span>📚</span> Available MAM Releases</h3>
             <button id="nc-modal-close" class="nc-modal-close" title="Close">&times;</button>
+          </div>
+          <div id="nc-modal-search-box" style="padding: 0.85rem 1.25rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(15, 23, 42, 0.5);">
+            <form id="nc-modal-search-form" style="display: flex; gap: 0.5rem; margin: 0;">
+              <input type="text" id="nc-modal-search-input" placeholder="Search MAM by title, author, or keywords..." style="flex: 1; padding: 0.5rem 0.85rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-size: 0.9rem;" />
+              <button type="submit" class="button btn-primary-nc" style="padding: 0.5rem 1.1rem; white-space: nowrap; font-size: 0.875rem;">Search MAM</button>
+            </form>
           </div>
           <div id="nc-modal-body" class="nc-modal-body">
             <p style="color: #94a3b8;">Searching MyAnonamouse for matching releases...</p>
@@ -191,145 +191,168 @@ document.addEventListener("DOMContentLoaded", () => {
     modal.style.display = "flex";
     const headerTitle = title ? `${seriesName} #${volume} - ${title}` : `${seriesName} #${volume}`;
     document.getElementById("nc-modal-title").innerHTML = `<span>📚</span> MAM Releases: <span style="color: #818cf8; margin-left: 4px;">${escapeHtml(headerTitle)}</span>`;
-    const body = document.getElementById("nc-modal-body");
-    body.innerHTML = `
-      <div style="text-align: center; padding: 2.5rem 1rem;">
-        <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 0.5rem;"><span class="spin">⟳</span> Searching MyAnonamouse for matching releases...</p>
-        <small style="color: #64748b;">Matching against series, volume, author, and canonical book title</small>
-      </div>
-    `;
 
-    try {
-      const res = await fetch(`/api/nextchapter/search-mam?${query.toString()}`);
-      const candidates = await res.json();
-      if (!candidates || candidates.length === 0) {
-        body.innerHTML = `
-          <div style="text-align: center; padding: 2.5rem 1rem;">
-            <p style="color: #f8fafc; font-weight: 600; font-size: 1rem; margin-bottom: 0.5rem;">No matching releases found on MAM</p>
-            <p style="color: #94a3b8; font-size: 0.85rem; max-width: 480px; margin: 0 auto 1.25rem;">We searched for "${escapeHtml(seriesName)} ${escapeHtml(volume)}" and "${escapeHtml(title)}". You can search manually on MyAnonamouse or check back later.</p>
-            <a href="https://www.myanonamouse.net/tor/browse.php?tor[text]=${encodeURIComponent(title || seriesName)}" target="_blank" rel="noreferrer" class="button btn-outline-nc" style="display: inline-flex;">Search Directly on MAM ↗</a>
-          </div>
-        `;
-        return;
-      }
+    const initialQ = customQ || (title ? (author ? `${author} ${title}` : title) : `${seriesName} ${volume}`);
+    const searchInput = document.getElementById("nc-modal-search-input");
+    searchInput.value = initialQ;
 
-      let html = `<div style="display: flex; flex-direction: column; gap: 0.9rem;">`;
-      candidates.forEach(c => {
-        const authorsList = (c.authors && c.authors.length) ? c.authors : (author ? [author] : []);
-        const authorText = authorsList.length ? authorsList.join(", ") : "Unknown Author";
-        const narratorsList = c.narrators || [];
-        const narratorText = narratorsList.length ? narratorsList.join(", ") : "";
+    const searchForm = document.getElementById("nc-modal-search-form");
+    searchForm.onsubmit = (e) => {
+      e.preventDefault();
+      runSearch(searchInput.value.trim());
+    };
 
-        const filetypesList = c.filetypes || [];
-        const formatBadges = filetypesList.length
-          ? filetypesList.map(ft => `<span class="format-badge ${escapeHtml(ft.toLowerCase())}">${escapeHtml(ft)}</span>`).join(" ")
-          : `<span class="format-badge unknown">${escapeHtml((c.media_type || "UNKNOWN").toUpperCase())}</span>`;
+    await runSearch(initialQ);
 
-        const isAudio = (c.media_type || "").toLowerCase().includes("audio");
-        const mediaLabel = isAudio ? "🎧 Audiobook" : "📖 eBook";
+    async function runSearch(qText) {
+      const body = document.getElementById("nc-modal-body");
+      body.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem;">
+          <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 0.5rem;"><span class="spin">⟳</span> Searching MyAnonamouse for "${escapeHtml(qText || initialQ)}"...</p>
+          <small style="color: #64748b;">Matching against author bibliographies, canonical book titles, and audio/ebook formats</small>
+        </div>
+      `;
 
-        const costPills = [];
-        if (c.free || c.personal_freeleech) {
-          costPills.push('<span class="status-pill free">FREELEECH</span>');
-        } else if (c.vip) {
-          costPills.push('<span class="status-pill vip">VIP</span>');
-        } else {
-          costPills.push('<span class="status-pill ratio">RATIO</span>');
+      const params = new URLSearchParams({
+        series_name: seriesName || "",
+        volume: volume || "",
+        title: title || "",
+        author: author || "",
+        q: qText || ""
+      });
+
+      try {
+        const res = await fetch(`/api/nextchapter/search-mam?${params.toString()}`);
+        const candidates = await res.json();
+        if (!candidates || candidates.length === 0) {
+          body.innerHTML = `
+            <div style="text-align: center; padding: 2.5rem 1rem;">
+              <p style="color: #f8fafc; font-weight: 600; font-size: 1rem; margin-bottom: 0.5rem;">No matching releases found on MAM</p>
+              <p style="color: #94a3b8; font-size: 0.85rem; max-width: 480px; margin: 0 auto 1.25rem;">We searched for "${escapeHtml(qText || initialQ)}". You can refine your search in the box above or search directly on MAM.</p>
+              <a href="https://www.myanonamouse.net/tor/browse.php?tor[text]=${encodeURIComponent(qText || initialQ)}" target="_blank" rel="noreferrer" class="button btn-outline-nc" style="display: inline-flex;">Search Directly on MAM ↗</a>
+            </div>
+          `;
+          return;
         }
 
-        const seedersNum = parseInt(c.seeders, 10) || 0;
-        const leechersNum = parseInt(c.leechers, 10) || 0;
-        const seedColor = seedersNum > 5 ? "#34d399" : (seedersNum > 0 ? "#38bdf8" : "#fb7185");
+        let html = `<div style="display: flex; flex-direction: column; gap: 0.9rem;">`;
+        candidates.forEach(c => {
+          const authorsList = (c.authors && c.authors.length) ? c.authors : (author ? [author] : []);
+          const authorText = authorsList.length ? authorsList.join(", ") : "Unknown Author";
+          const narratorsList = c.narrators || [];
+          const narratorText = narratorsList.length ? narratorsList.join(", ") : "";
 
-        html += `
-          <div class="candidate-card">
-            <div class="candidate-header-row">
-              <a href="https://www.myanonamouse.net/t/${c.mam_id}" target="_blank" rel="noreferrer" class="candidate-title" title="Open release #${c.mam_id} on MyAnonamouse">
-                ${escapeHtml(c.title)} <span style="font-size: 0.8rem; opacity: 0.7;">↗</span>
-              </a>
-            </div>
+          const filetypesList = c.filetypes || [];
+          const formatBadges = filetypesList.length
+            ? filetypesList.map(ft => `<span class="format-badge ${escapeHtml(ft.toLowerCase())}">${escapeHtml(ft)}</span>`).join(" ")
+            : `<span class="format-badge unknown">${escapeHtml((c.media_type || "UNKNOWN").toUpperCase())}</span>`;
 
-            <div class="candidate-meta-grid">
-              <div class="candidate-meta-item">
-                <span class="candidate-meta-label">Author:</span>
-                <span class="candidate-meta-value" style="color: #38bdf8;">${escapeHtml(authorText)}</span>
-              </div>
-              <div class="candidate-meta-item">
-                <span class="candidate-meta-label">Format:</span>
-                <div>${formatBadges}</div>
-              </div>
-              <div class="candidate-meta-item">
-                <span class="candidate-meta-label">Size:</span>
-                <span class="candidate-meta-value">${escapeHtml(c.size || "Unknown")}</span>
-                ${c.num_files ? `<span style="color: #64748b; font-size: 0.75rem;">(${c.num_files} files)</span>` : ""}
-              </div>
-              <div class="candidate-meta-item">
-                <span class="candidate-meta-label">Language:</span>
-                <span class="candidate-meta-value">${escapeHtml(c.language || "English")}</span>
-              </div>
-              ${c.series_display ? `
-              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
-                <span class="candidate-meta-label">MAM Series:</span>
-                <span class="candidate-meta-value" style="color: #a5b4fc; font-weight: 600;">📚 ${escapeHtml(c.series_display)}</span>
-              </div>
-              ` : `
-              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
-                <span class="candidate-meta-label">MAM Series:</span>
-                <span class="candidate-meta-value" style="color: #64748b; font-style: italic;">None tagged on MAM</span>
-              </div>
-              `}
-              ${narratorText ? `
-              <div class="candidate-meta-item" style="grid-column: 1 / -1;">
-                <span class="candidate-meta-label">Narrator:</span>
-                <span class="candidate-meta-value" style="color: #c084fc;">${escapeHtml(narratorText)}</span>
-              </div>
-              ` : ""}
-            </div>
+          const isAudio = (c.media_type || "").toLowerCase().includes("audio");
+          const mediaLabel = isAudio ? "🎧 Audiobook" : "📖 eBook";
 
-            <div class="candidate-pills-row">
-              <div class="candidate-badges">
-                <span class="chip" style="font-weight: 600;">${mediaLabel}</span>
-                ${costPills.join(" ")}
-                <span class="chip" style="color: ${seedColor}; font-weight: 600;">▲ ${seedersNum} seeders</span>
-                <span class="chip" style="color: #94a3b8;">▼ ${leechersNum} leechers</span>
-                ${c.series_display ? `<span class="chip" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); font-weight: 600;" title="Series registered on MyAnonamouse">📚 ${escapeHtml(c.series_display)}</span>` : ""}
-              </div>
-              <button class="btn btn-sm btn-primary-nc" data-modal-queue="${c.mam_id}" data-series="${escapeHtml(seriesName)}" data-vol="${escapeHtml(volume)}" style="padding: 0.45rem 1rem; font-weight: 600;">
-                1-Click Queue
-              </button>
-            </div>
-          </div>
-        `;
-      });
-      html += `</div>`;
-      body.innerHTML = html;
-
-      body.querySelectorAll("[data-modal-queue]").forEach(qBtn => {
-        qBtn.addEventListener("click", async () => {
-          const id = qBtn.getAttribute("data-modal-queue");
-          qBtn.disabled = true;
-          qBtn.innerHTML = '<span class="spin">⟳</span> Queuing...';
-          const qRes = await fetch("/api/nextchapter/download", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mam_id: parseInt(id, 10), series_name: seriesName, volume: volume })
-          });
-          const qData = await qRes.json();
-          if (qData.ok) {
-            qBtn.innerHTML = "✓ Queued";
-            qBtn.classList.remove("btn-primary-nc");
-            qBtn.classList.add("btn-outline-nc");
-            showToast(`Queued #${id} successfully!`);
-            setTimeout(() => { modal.style.display = "none"; }, 1000);
+          const costPills = [];
+          if (c.free || c.personal_freeleech) {
+            costPills.push('<span class="status-pill free">FREELEECH</span>');
+          } else if (c.vip) {
+            costPills.push('<span class="status-pill vip">VIP</span>');
           } else {
-            alert("Error: " + (qData.error || "Failed to queue"));
-            qBtn.disabled = false;
-            qBtn.innerHTML = "1-Click Queue";
+            costPills.push('<span class="status-pill ratio">RATIO</span>');
           }
+
+          const seedersNum = parseInt(c.seeders, 10) || 0;
+          const leechersNum = parseInt(c.leechers, 10) || 0;
+          const seedColor = seedersNum > 5 ? "#34d399" : (seedersNum > 0 ? "#38bdf8" : "#fb7185");
+
+          html += `
+            <div class="candidate-card">
+              <div class="candidate-header-row">
+                <a href="https://www.myanonamouse.net/t/${c.mam_id}" target="_blank" rel="noreferrer" class="candidate-title" title="Open release #${c.mam_id} on MyAnonamouse">
+                  ${escapeHtml(c.title)} <span style="font-size: 0.8rem; opacity: 0.7;">↗</span>
+                </a>
+              </div>
+
+              <div class="candidate-meta-grid">
+                <div class="candidate-meta-item">
+                  <span class="candidate-meta-label">Author:</span>
+                  <span class="candidate-meta-value" style="color: #38bdf8;">${escapeHtml(authorText)}</span>
+                </div>
+                <div class="candidate-meta-item">
+                  <span class="candidate-meta-label">Format:</span>
+                  <div>${formatBadges}</div>
+                </div>
+                <div class="candidate-meta-item">
+                  <span class="candidate-meta-label">Size:</span>
+                  <span class="candidate-meta-value">${escapeHtml(c.size || "Unknown")}</span>
+                  ${c.num_files ? `<span style="color: #64748b; font-size: 0.75rem;">(${c.num_files} files)</span>` : ""}
+                </div>
+                <div class="candidate-meta-item">
+                  <span class="candidate-meta-label">Language:</span>
+                  <span class="candidate-meta-value">${escapeHtml(c.language || "English")}</span>
+                </div>
+                ${c.series_display ? `
+                <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                  <span class="candidate-meta-label">MAM Series:</span>
+                  <span class="candidate-meta-value" style="color: #a5b4fc; font-weight: 600;">📚 ${escapeHtml(c.series_display)}</span>
+                </div>
+                ` : `
+                <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                  <span class="candidate-meta-label">MAM Series:</span>
+                  <span class="candidate-meta-value" style="color: #64748b; font-style: italic;">None tagged on MAM</span>
+                </div>
+                `}
+                ${narratorText ? `
+                <div class="candidate-meta-item" style="grid-column: 1 / -1;">
+                  <span class="candidate-meta-label">Narrator:</span>
+                  <span class="candidate-meta-value" style="color: #c084fc;">${escapeHtml(narratorText)}</span>
+                </div>
+                ` : ""}
+              </div>
+
+              <div class="candidate-pills-row">
+                <div class="candidate-badges">
+                  <span class="chip" style="font-weight: 600;">${mediaLabel}</span>
+                  ${costPills.join(" ")}
+                  <span class="chip" style="color: ${seedColor}; font-weight: 600;">▲ ${seedersNum} seeders</span>
+                  <span class="chip" style="color: #94a3b8;">▼ ${leechersNum} leechers</span>
+                  ${c.series_display ? `<span class="chip" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); font-weight: 600;" title="Series registered on MyAnonamouse">📚 ${escapeHtml(c.series_display)}</span>` : ""}
+                </div>
+                <button class="btn btn-sm btn-primary-nc" data-modal-queue="${c.mam_id}" data-series="${escapeHtml(seriesName)}" data-vol="${escapeHtml(volume)}" style="padding: 0.45rem 1rem; font-weight: 600;">
+                  1-Click Queue
+                </button>
+              </div>
+            </div>
+          `;
         });
-      });
-    } catch (err) {
-      body.innerHTML = `<p style="color: #fb7185;">Search error: ${err.message}</p>`;
+        html += `</div>`;
+        body.innerHTML = html;
+
+        body.querySelectorAll("[data-modal-queue]").forEach(qBtn => {
+          qBtn.addEventListener("click", async () => {
+            const id = qBtn.getAttribute("data-modal-queue");
+            qBtn.disabled = true;
+            qBtn.innerHTML = '<span class="spin">⟳</span> Queuing...';
+            const qRes = await fetch("/api/nextchapter/download", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mam_id: parseInt(id, 10), series_name: seriesName, volume: volume })
+            });
+            const qData = await qRes.json();
+            if (qData.ok) {
+              qBtn.innerHTML = "✓ Queued";
+              qBtn.classList.remove("btn-primary-nc");
+              qBtn.classList.add("btn-outline-nc");
+              showToast(`Queued #${id} successfully!`);
+              setTimeout(() => { modal.style.display = "none"; }, 1000);
+            } else {
+              alert("Error: " + (qData.error || "Failed to queue"));
+              qBtn.disabled = false;
+              qBtn.innerHTML = "1-Click Queue";
+            }
+          });
+        });
+      } catch (err) {
+        body.innerHTML = `<p style="color: #fb7185;">Search error: ${err.message}</p>`;
+      }
     }
   }
 

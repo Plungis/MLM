@@ -230,3 +230,54 @@ def test_heavymlm_manual_filters_use_and_policy() -> None:
     assert seed == "Matt Dinniman"
     assert fields == ["author"]
     assert [row["id"] for row in results] == [1]
+
+
+
+def test_heavymlm_search_handles_initials_volume_and_author_relevance() -> None:
+    raw_rows = [
+        {
+            "id": 101,
+            "title": "End of Story",
+            "author_info": {"1": "A. J. Finn"},
+            "series_info": {},
+            "filetype": "m4b",
+            "catname": "Audiobook",
+            "language": 1,
+            "size": "450 MiB",
+            "seeders": 15,
+        },
+        {
+            "id": 102,
+            "title": "End of Watch",
+            "author_info": {"2": "Stephen King"},
+            "series_info": {},
+            "filetype": "m4b",
+            "catname": "Audiobook",
+            "language": 1,
+            "size": "500 MiB",
+            "seeders": 40,
+        },
+        {
+            "id": 103,
+            "title": "The Neverending Story",
+            "author_info": {"3": "Michael Ende"},
+            "series_info": {},
+            "filetype": "mp3",
+            "catname": "Audiobook",
+            "language": 1,
+            "size": "300 MiB",
+            "seeders": 25,
+        },
+    ]
+
+    filters = {"q": "aJ finn #2 end of story", "sort": "relevance"}
+    seed, fields = search_seed(filters)
+    assert seed == "aJ finn end of story"
+
+    presented = [present_search_result(row) for row in raw_rows]
+    results = filter_search_results(presented, filters)
+
+    assert len(results) == 1
+    assert results[0]["id"] == 101
+    assert results[0]["title"] == "End of Story"
+    assert results[0]["authors"] == ["A. J. Finn"]

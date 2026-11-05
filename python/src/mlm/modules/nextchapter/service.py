@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -17,6 +18,7 @@ from ...search import (
     parse_size,
     torrent_meta,
 )
+from ..heavymlm.search import _normalize_tokens
 from ..heavymlm.series import (
     detect_library_series,
     fetch_series_releases,
@@ -266,13 +268,28 @@ class NextChapterService:
         volume: str,
         title: str | None = None,
         author: str | None = None,
+        q: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.mam:
             return []
 
-        search_query = f"{series_name} {volume}"
-        if title:
-            search_query += f" {title}"
+        if q and q.strip():
+            raw_q = q.strip()
+            vol_m = re.search(r"#\s*([\d.]+)", raw_q)
+            if vol_m:
+                volume = volume or vol_m.group(1)
+            parts = [
+                p.strip()
+                for p in re.split(r"#\s*[\d.]+|\s+-\s+", raw_q)
+                if p.strip()
+            ]
+            if len(parts) >= 2:
+                if not author:
+                    author = parts[0]
+                if not title:
+                    title = parts[1]
+            elif not title and not series_name:
+                title = raw_q
 
         preferred_media = (
             None
@@ -280,30 +297,83 @@ class NextChapterService:
             else self.settings.preferred_media
         )
 
-        try:
-            releases = await fetch_series_releases(
-                self.mam, search_query, max_pages=2
-            )
-            if not releases and title:
-                releases = await fetch_series_releases(
-                    self.mam, f"{series_name} {title}", max_pages=2
+        seen_ids: set[int] = set()
+        releases: list[dict[str, Any]] = []
+
+        async def _query_mam(
+            text: str, srch_in: list[str] | None = None
+        ) -> None:
+            if not text or not text.strip():
+                return
+            clean_text = re.sub(r"#\s*[\d.]+", " ", text)
+            clean_text = " ".join(clean_text.split())
+            if not clean_text:
+                return
+            tor: dict[str, Any] = {"text": clean_text, "startNumber": 0}
+            if srch_in:
+                tor["srchIn"] = srch_in
+            try:
+                res = await self.mam.search(
+                    {
+                        "dlLink": True,
+                        "mediaInfo": True,
+                        "isbn": True,
+                        "perpage": 100,
+                        "tor": tor,
+                    }
                 )
-            if not releases:
-                releases = await fetch_series_releases(
-                    self.mam, series_name, max_pages=3
+                if hasattr(res, "__await__"):
+                    res = await res
+                if not isinstance(res, dict):
+                    return
+                for row in res.get("data", []):
+                    if isinstance(row, dict):
+                        tid = as_int(row.get("id"))
+                        if tid and tid not in seen_ids:
+                            seen_ids.add(tid)
+                            releases.append(row)
+            except Exception:
+                pass
+
+        # 1. Author + Title search
+        if author and title:
+            await _query_mam(f"{author} {title}")
+        if title:
+            await _query_mam(title)
+        if q and q.strip():
+            await _query_mam(q)
+        if series_name:
+            await _query_mam(series_name, srch_in=["series"])
+            if volume:
+                await _query_mam(f"{series_name} {volume}")
+
+        # Fallback to fetch_series_releases
+        if not releases:
+            search_query = f"{series_name} {volume}"
+            if title:
+                search_query += f" {title}"
+            try:
+                fallback_rows = await fetch_series_releases(
+                    self.mam, search_query, max_pages=2
                 )
-            if not releases and author and title:
-                releases = await fetch_series_releases(
-                    self.mam, f"{author} {title}", max_pages=2
-                )
-        except Exception:
-            return []
+                for r in fallback_rows:
+                    if isinstance(r, dict):
+                        tid = as_int(r.get("id"))
+                        if tid and tid not in seen_ids:
+                            seen_ids.add(tid)
+                            releases.append(r)
+            except Exception:
+                pass
 
         # Filter & score candidates
         scored_candidates: list[dict[str, Any]] = []
+        author_matched_found = False
+
         for r in releases:
-            meta = r if "media_type" in r and "authors" in r else torrent_meta(r)
-            score = score_series_candidate(
+            meta = (
+                r if "media_type" in r and "authors" in r else torrent_meta(r)
+            )
+            base_score = score_series_candidate(
                 r, self.config, preferred_media=preferred_media
             )
 
@@ -334,6 +404,67 @@ class NextChapterService:
                 series_info = decode_series_info(r.get("series_info"))
             series_display = format_mam_series(series_info)
 
+            # Match relevance scoring
+            match_score = 0.0
+            target_author = (author or "").strip().casefold()
+            has_author_penalty = False
+
+            if target_author and authors:
+                target_tokens = _normalize_tokens(target_author)
+                authors_clean = " ".join(
+                    _normalize_tokens(" ".join(authors))
+                )
+                authors_collapsed = authors_clean.replace(" ", "")
+                if all(
+                    t in authors_clean.split()
+                    or (len(t) <= 3 and t in authors_collapsed)
+                    for t in target_tokens
+                ):
+                    author_matched_found = True
+                    match_score += 10000.0
+                elif any(
+                    t in authors_clean.split()
+                    for t in target_tokens
+                    if len(t) > 2
+                ):
+                    author_matched_found = True
+                    match_score += 4000.0
+                else:
+                    has_author_penalty = True
+                    match_score -= 8000.0
+
+            cand_title = str(meta.get("title") or r.get("title", ""))
+            target_title = (title or "").strip().casefold()
+            if target_title:
+                if target_title in cand_title.casefold():
+                    match_score += 5000.0
+                else:
+                    cand_tokens = set(_normalize_tokens(cand_title))
+                    for t in _normalize_tokens(target_title):
+                        if (
+                            t
+                            not in {
+                                "of",
+                                "the",
+                                "in",
+                                "and",
+                                "a",
+                                "an",
+                                "on",
+                                "to",
+                            }
+                            and t in cand_tokens
+                        ):
+                            match_score += 800.0
+
+            total_score = (
+                match_score
+                + (base_score[0] * 500)
+                + base_score[1]
+                + (base_score[2] * 50)
+                + min(base_score[3], 50)
+            )
+
             scored_candidates.append(
                 {
                     "mam_id": r.get("id") or meta.get("mam_id"),
@@ -349,15 +480,23 @@ class NextChapterService:
                         or r.get("media_type", "audiobook")
                     ),
                     "language": meta.get("language") or "English",
-                    "num_files": as_int(meta.get("num_files") or r.get("numfiles", 0)),
+                    "num_files": as_int(
+                        meta.get("num_files") or r.get("numfiles", 0)
+                    ),
                     "seeders": as_int(r.get("seeders", 0)),
                     "leechers": as_int(r.get("leechers", 0)),
                     "free": as_bool(r.get("free")),
                     "vip": as_bool(r.get("vip")),
                     "personal_freeleech": as_bool(r.get("personal_freeleech")),
-                    "score": score,
+                    "score": total_score,
+                    "author_penalized": has_author_penalty,
                 }
             )
+
+        if author_matched_found:
+            scored_candidates = [
+                c for c in scored_candidates if not c.get("author_penalized")
+            ]
 
         scored_candidates.sort(key=lambda c: c["score"], reverse=True)
         return scored_candidates[:10]
