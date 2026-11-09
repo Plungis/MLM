@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from mlm.modules.heavymlm.search import (
+    extract_related_entities,
     filter_search_results,
+    parse_composite_query,
     present_search_result,
     search_seed,
 )
@@ -272,7 +274,13 @@ def test_heavymlm_search_handles_initials_volume_and_author_relevance() -> None:
 
     filters = {"q": "aJ finn #2 end of story", "sort": "relevance"}
     seed, fields = search_seed(filters)
-    assert seed == "aJ finn end of story"
+    assert seed == "finn end of story"
+    assert fields == ["title", "author", "series", "narrator"]
+
+    parsed = parse_composite_query("aJ finn #2 end of story")
+    assert parsed["volume"] == "2"
+    assert parsed["author_hint"] == "aJ finn"
+    assert parsed["title_hint"] == "end of story"
 
     presented = [present_search_result(row) for row in raw_rows]
     results = filter_search_results(presented, filters)
@@ -281,3 +289,6 @@ def test_heavymlm_search_handles_initials_volume_and_author_relevance() -> None:
     assert results[0]["id"] == 101
     assert results[0]["title"] == "End of Story"
     assert results[0]["authors"] == ["A. J. Finn"]
+
+    related = extract_related_entities(results, filters)
+    assert "A. J. Finn" in related["authors"]

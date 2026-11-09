@@ -15,13 +15,26 @@ from ...search import (
     as_int,
     decode_name_mapping,
     decode_series_info,
+    normalize_title,
     parse_size,
     torrent_meta,
 )
-from ..heavymlm.search import _normalize_tokens
+from ..heavymlm.search import (
+    STOP_WORDS,
+    _field_matches,
+    _normalize_tokens,
+    _volume_matches_row,
+    clean_query_for_mam,
+    extract_author_mam_terms,
+    extract_title_mam_terms,
+    parse_composite_query,
+)
 from ..heavymlm.series import (
     detect_library_series,
+    extract_series_volume,
     fetch_series_releases,
+    normalize_series_name,
+    parse_entry_number,
     score_series_candidate,
 )
 from .clients import GeminiClient, GoogleBooksClient
@@ -264,44 +277,85 @@ class NextChapterService:
 
     async def search_mam_for_missing(
         self,
-        series_name: str,
-        volume: str,
+        series_name: str = "",
+        volume: str = "",
         title: str | None = None,
         author: str | None = None,
         q: str | None = None,
+        mode: str = "smart",
+        media_filter: str | None = None,
+        limit: int = 40,
     ) -> list[dict[str, Any]]:
         if not self.mam:
             return []
 
-        if q and q.strip():
-            raw_q = q.strip()
-            vol_m = re.search(r"#\s*([\d.]+)", raw_q)
-            if vol_m:
-                volume = volume or vol_m.group(1)
-            parts = [
-                p.strip()
-                for p in re.split(r"#\s*[\d.]+|\s+-\s+", raw_q)
-                if p.strip()
-            ]
-            if len(parts) >= 2:
-                if not author:
-                    author = parts[0]
-                if not title:
-                    title = parts[1]
-            elif not title and not series_name:
-                title = raw_q
+        search_mode = (mode or "smart").strip().casefold()
+        if search_mode not in {"smart", "custom", "series", "author"}:
+            search_mode = "smart"
+
+        # Detect if user typed a custom query in the modal search box
+        default_q1 = f"{author} {title}".strip() if (author and title) else ""
+        default_q2 = (title or "").strip()
+        default_q3 = f"{series_name} {volume}".strip()
+        raw_q = (q or "").strip()
+
+        if raw_q and (
+            search_mode == "custom"
+            or raw_q.casefold()
+            not in {
+                default_q1.casefold(),
+                default_q2.casefold(),
+                default_q3.casefold(),
+            }
+        ):
+            parsed = parse_composite_query(raw_q)
+            if parsed["volume"]:
+                volume = parsed["volume"]
+            if parsed["author_hint"] and parsed["title_hint"]:
+                author = parsed["author_hint"]
+                title = parsed["title_hint"]
+            elif search_mode == "custom":
+                # User typed a completely custom search string
+                title = parsed["clean_q"] or raw_q
+                if (
+                    not parsed["author_hint"]
+                    and author
+                    and not _field_matches([raw_q], author)
+                ):
+                    author = ""
+
+        # Check if series_name is actually the author's name (common in folder metadata)
+        series_is_author = False
+        if series_name and author:
+            if _field_matches([author], series_name) or _field_matches(
+                [series_name], author
+            ):
+                series_is_author = True
+        elif series_name and not author and not title:
+            series_is_author = False
+
+        effective_author = (
+            author or (series_name if series_is_author else "")
+        ).strip()
 
         preferred_media = (
             None
             if self.settings.preferred_media == "both"
             else self.settings.preferred_media
         )
+        if media_filter and media_filter.strip().casefold() in {
+            "audiobook",
+            "ebook",
+        }:
+            preferred_media = media_filter.strip().casefold()
 
         seen_ids: set[int] = set()
         releases: list[dict[str, Any]] = []
 
         async def _query_mam(
-            text: str, srch_in: list[str] | None = None
+            text: str,
+            srch_in: list[str] | None = None,
+            max_pages: int = 1,
         ) -> None:
             if not text or not text.strip():
                 return
@@ -309,70 +363,168 @@ class NextChapterService:
             clean_text = " ".join(clean_text.split())
             if not clean_text:
                 return
-            tor: dict[str, Any] = {"text": clean_text, "startNumber": 0}
-            if srch_in:
-                tor["srchIn"] = srch_in
-            try:
-                res = await self.mam.search(
-                    {
-                        "dlLink": True,
-                        "mediaInfo": True,
-                        "isbn": True,
-                        "perpage": 100,
-                        "tor": tor,
-                    }
+            fields = (
+                srch_in
+                if srch_in is not None
+                else ["title", "author", "series", "narrator"]
+            )
+            start = 0
+            for _ in range(max_pages):
+                tor: dict[str, Any] = {
+                    "text": clean_text,
+                    "startNumber": start,
+                }
+                if fields:
+                    tor["srchIn"] = fields
+                try:
+                    res = await self.mam.search(
+                        {
+                            "dlLink": True,
+                            "mediaInfo": True,
+                            "isbn": True,
+                            "perpage": 100,
+                            "tor": tor,
+                        }
+                    )
+                    if hasattr(res, "__await__"):
+                        res = await res
+                    if not isinstance(res, dict):
+                        break
+                    rows = res.get("data", [])
+                    if not rows or not isinstance(rows, list):
+                        break
+                    added = 0
+                    for row in rows:
+                        if isinstance(row, dict):
+                            tid = as_int(row.get("id"))
+                            if tid and tid not in seen_ids:
+                                seen_ids.add(tid)
+                                releases.append(row)
+                                added += 1
+                    start += len(rows)
+                    found = as_int(res.get("found"), len(rows))
+                    if added == 0 or start >= found:
+                        break
+                except Exception:
+                    break
+
+        title_terms = extract_title_mam_terms(title or "", series_name)
+        author_terms = extract_author_mam_terms(effective_author)
+        clean_series = (
+            normalize_series_name(series_name) if series_name else ""
+        )
+
+        if search_mode == "author":
+            target_a = effective_author or series_name or raw_q
+            for a_term in extract_author_mam_terms(target_a):
+                await _query_mam(a_term, srch_in=["author"], max_pages=2)
+                if len(releases) >= 20:
+                    break
+            if not releases and target_a:
+                await _query_mam(
+                    clean_query_for_mam(target_a) or target_a,
+                    srch_in=["author", "title"],
+                    max_pages=1,
                 )
-                if hasattr(res, "__await__"):
-                    res = await res
-                if not isinstance(res, dict):
-                    return
-                for row in res.get("data", []):
-                    if isinstance(row, dict):
-                        tid = as_int(row.get("id"))
-                        if tid and tid not in seen_ids:
-                            seen_ids.add(tid)
-                            releases.append(row)
-            except Exception:
-                pass
 
-        # 1. Author + Title search
-        if author and title:
-            await _query_mam(f"{author} {title}")
-        if title:
-            await _query_mam(title)
-        if q and q.strip():
-            await _query_mam(q)
-        if series_name:
-            await _query_mam(series_name, srch_in=["series"])
-            if volume:
-                await _query_mam(f"{series_name} {volume}")
+        elif search_mode == "series":
+            target_s = clean_series or clean_query_for_mam(raw_q) or title or ""
+            if target_s and not series_is_author:
+                await _query_mam(target_s, srch_in=["series"], max_pages=2)
+                await _query_mam(
+                    f'"{target_s}"', srch_in=["title", "series"], max_pages=1
+                )
+            if (series_is_author or not releases) and author_terms:
+                for a_term in author_terms[:2]:
+                    await _query_mam(a_term, srch_in=["author"], max_pages=2)
+                    if releases:
+                        break
 
-        # Fallback to fetch_series_releases
+        else:
+            # Smart & Custom multi-strategy search
+            # 1. Clean Title + Clean Author in ["title", "author"]
+            if title_terms and author_terms:
+                for t_term in title_terms[:2]:
+                    for a_term in author_terms[:2]:
+                        await _query_mam(
+                            f'"{t_term}" {a_term}',
+                            srch_in=["title", "author"],
+                        )
+                        if not releases:
+                            await _query_mam(
+                                f"{t_term} {a_term}",
+                                srch_in=["title", "author", "series"],
+                            )
+
+            # 2. Clean Title in ["title"] and ["title", "series"]
+            for t_term in title_terms[:2]:
+                await _query_mam(f'"{t_term}"', srch_in=["title"])
+                if len(releases) < 5:
+                    await _query_mam(t_term, srch_in=["title", "series"])
+
+            # 3. Freeform query q if provided
+            if raw_q:
+                cleaned_q = clean_query_for_mam(raw_q)
+                if cleaned_q:
+                    await _query_mam(
+                        cleaned_q,
+                        srch_in=["title", "author", "series", "narrator"],
+                    )
+
+            # 4. Series + Volume in ["series"] and ["title", "series"]
+            if clean_series and not series_is_author:
+                await _query_mam(clean_series, srch_in=["series"])
+                if volume:
+                    await _query_mam(
+                        f"{clean_series} {volume}",
+                        srch_in=["title", "series"],
+                    )
+
+            # 5. Author catalog in ["author"] for related books & alternate titles
+            if author_terms:
+                await _query_mam(author_terms[0], srch_in=["author"])
+                if len(releases) < 3 and len(author_terms) > 1:
+                    await _query_mam(author_terms[1], srch_in=["author"])
+
+        # Fallback to fetch_series_releases if still empty
         if not releases:
-            search_query = f"{series_name} {volume}"
+            search_query = f"{series_name} {volume}".strip()
             if title:
-                search_query += f" {title}"
-            try:
-                fallback_rows = await fetch_series_releases(
-                    self.mam, search_query, max_pages=2
-                )
-                for r in fallback_rows:
-                    if isinstance(r, dict):
-                        tid = as_int(r.get("id"))
-                        if tid and tid not in seen_ids:
-                            seen_ids.add(tid)
-                            releases.append(r)
-            except Exception:
-                pass
+                search_query = f"{search_query} {title}".strip()
+            if search_query:
+                try:
+                    fallback_rows = await fetch_series_releases(
+                        self.mam, search_query, max_pages=2
+                    )
+                    for r in fallback_rows:
+                        if isinstance(r, dict):
+                            tid = as_int(r.get("id"))
+                            if tid and tid not in seen_ids:
+                                seen_ids.add(tid)
+                                releases.append(r)
+                except Exception:
+                    pass
 
-        # Filter & score candidates
+        # Score and enrich candidates
         scored_candidates: list[dict[str, Any]] = []
         author_matched_found = False
+        strict_media_filter = (
+            media_filter.strip().casefold()
+            if media_filter
+            and media_filter.strip().casefold() in {"audiobook", "ebook"}
+            else None
+        )
 
         for r in releases:
             meta = (
                 r if "media_type" in r and "authors" in r else torrent_meta(r)
             )
+            cand_media = str(
+                meta.get("media_type") or r.get("media_type", "audiobook")
+            ).casefold()
+            if strict_media_filter and strict_media_filter not in cand_media:
+                continue
+
             base_score = score_series_candidate(
                 r, self.config, preferred_media=preferred_media
             )
@@ -403,59 +555,109 @@ class NextChapterService:
             if not series_info and "series_info" in r:
                 series_info = decode_series_info(r.get("series_info"))
             series_display = format_mam_series(series_info)
+            series_name_primary = (
+                str(series_info[0].get("name") or "").strip()
+                if series_info and isinstance(series_info[0], dict)
+                else ""
+            )
+            cand_vol = extract_series_volume(
+                {
+                    "series": series_info,
+                    "title": meta.get("title") or r.get("title", ""),
+                },
+                clean_series or series_name_primary,
+            )
 
-            # Match relevance scoring
             match_score = 0.0
-            target_author = (author or "").strip().casefold()
+            match_reasons: list[str] = []
             has_author_penalty = False
+            author_is_match = False
 
-            if target_author and authors:
-                target_tokens = _normalize_tokens(target_author)
-                authors_clean = " ".join(
-                    _normalize_tokens(" ".join(authors))
-                )
-                authors_collapsed = authors_clean.replace(" ", "")
-                if all(
-                    t in authors_clean.split()
-                    or (len(t) <= 3 and t in authors_collapsed)
-                    for t in target_tokens
-                ):
+            if effective_author and authors:
+                if _field_matches(authors, effective_author):
                     author_matched_found = True
+                    author_is_match = True
                     match_score += 10000.0
-                elif any(
-                    t in authors_clean.split()
-                    for t in target_tokens
-                    if len(t) > 2
-                ):
-                    author_matched_found = True
-                    match_score += 4000.0
+                    match_reasons.append("✓ Author Match")
                 else:
-                    has_author_penalty = True
-                    match_score -= 8000.0
+                    target_tokens = [
+                        t
+                        for t in _normalize_tokens(effective_author)
+                        if len(t) >= 3
+                    ]
+                    authors_words = set(
+                        _normalize_tokens(" ".join(authors))
+                    )
+                    if target_tokens and any(
+                        t in authors_words for t in target_tokens
+                    ):
+                        author_matched_found = True
+                        author_is_match = True
+                        match_score += 5000.0
+                        match_reasons.append("✓ Author Match")
+                    else:
+                        has_author_penalty = True
+                        match_score -= 12000.0
 
             cand_title = str(meta.get("title") or r.get("title", ""))
-            target_title = (title or "").strip().casefold()
-            if target_title:
-                if target_title in cand_title.casefold():
-                    match_score += 5000.0
-                else:
-                    cand_tokens = set(_normalize_tokens(cand_title))
-                    for t in _normalize_tokens(target_title):
-                        if (
-                            t
-                            not in {
-                                "of",
-                                "the",
-                                "in",
-                                "and",
-                                "a",
-                                "an",
-                                "on",
-                                "to",
-                            }
-                            and t in cand_tokens
-                        ):
-                            match_score += 800.0
+            cand_title_norm = " ".join(_normalize_tokens(cand_title))
+            cand_title_words = set(cand_title_norm.split())
+            title_is_match = False
+
+            if title_terms:
+                for t_variant in title_terms:
+                    t_norm = " ".join(_normalize_tokens(t_variant))
+                    if not t_norm:
+                        continue
+                    if t_norm in cand_title_norm or (
+                        len(cand_title_norm) >= 4 and cand_title_norm in t_norm
+                    ):
+                        title_is_match = True
+                        match_score += 8000.0
+                        match_reasons.append("✓ Exact Title")
+                        break
+                if not title_is_match:
+                    sig_tokens = [
+                        t
+                        for t in _normalize_tokens(title_terms[0])
+                        if t not in STOP_WORDS and len(t) >= 3
+                    ]
+                    if sig_tokens:
+                        hits = sum(
+                            1 for t in sig_tokens if t in cand_title_words
+                        )
+                        if hits == len(sig_tokens):
+                            title_is_match = True
+                            match_score += 6500.0
+                            match_reasons.append("✓ Title Match")
+                        elif hits >= max(1, (len(sig_tokens) + 1) // 2):
+                            match_score += 800.0 * hits
+
+            # Series match scoring
+            series_is_match = False
+            if clean_series and not series_is_author:
+                mam_series_names = [
+                    str(s.get("name", ""))
+                    for s in series_info
+                    if isinstance(s, dict)
+                ]
+                if _field_matches(mam_series_names, clean_series) or (
+                    " ".join(_normalize_tokens(clean_series)) in cand_title_norm
+                ):
+                    series_is_match = True
+                    match_score += 3500.0
+                    match_reasons.append("✓ Series Match")
+
+            # Volume match scoring
+            if volume and search_mode in {"smart", "custom"}:
+                vol_matched, vol_different = _volume_matches_row(
+                    {"title": cand_title, "series": series_info}, volume
+                )
+                if vol_matched:
+                    match_score += 6000.0
+                    match_reasons.append(f"✓ Book #{volume}")
+                elif vol_different and not title_is_match:
+                    match_score -= 5000.0
 
             total_score = (
                 match_score
@@ -465,6 +667,25 @@ class NextChapterService:
                 + min(base_score[3], 50)
             )
 
+            tid = as_int(r.get("id") or meta.get("mam_id"))
+            cand_title_str = str(
+                meta.get("title") or r.get("title", "Untitled")
+            )
+            try:
+                in_library = bool(
+                    tid and self.repository.is_book_present(tid, meta)
+                )
+                if not in_library and cand_title_str:
+                    norm_t = normalize_title(cand_title_str)
+                    if norm_t:
+                        existing_recs = self.repository.records_with_title(
+                            norm_t
+                        )
+                        if existing_recs:
+                            in_library = True
+            except Exception:
+                in_library = False
+
             scored_candidates.append(
                 {
                     "mam_id": r.get("id") or meta.get("mam_id"),
@@ -473,6 +694,8 @@ class NextChapterService:
                     "narrators": narrators,
                     "series": series_info,
                     "series_display": series_display,
+                    "series_name_primary": series_name_primary,
+                    "series_volume": cand_vol,
                     "size": size_str,
                     "filetypes": [ft.upper() for ft in filetypes],
                     "media_type": (
@@ -490,16 +713,67 @@ class NextChapterService:
                     "personal_freeleech": as_bool(r.get("personal_freeleech")),
                     "score": total_score,
                     "author_penalized": has_author_penalty,
+                    "author_matched": author_is_match,
+                    "title_matched": title_is_match,
+                    "series_matched": series_is_match,
+                    "match_reasons": match_reasons,
+                    "in_library": in_library,
                 }
             )
 
+        if search_mode == "author":
+            if author_matched_found:
+                scored_candidates = [
+                    c for c in scored_candidates if not c.get("author_penalized")
+                ]
+            scored_candidates.sort(
+                key=lambda c: (
+                    0 if c.get("author_matched") else 1,
+                    0 if c.get("series_name_primary") else 1,
+                    str(c.get("series_name_primary") or "").casefold(),
+                    parse_entry_number(str(c.get("series_volume") or "")),
+                    str(c.get("title") or "").casefold(),
+                    -float(c.get("score") or 0),
+                )
+            )
+            return scored_candidates[: max(limit, 50)]
+
+        if search_mode == "series":
+            series_filtered = [
+                c
+                for c in scored_candidates
+                if c.get("series_matched") or not c.get("author_penalized")
+            ]
+            if series_filtered:
+                scored_candidates = series_filtered
+            scored_candidates.sort(
+                key=lambda c: (
+                    0 if c.get("series_matched") else 1,
+                    parse_entry_number(str(c.get("series_volume") or "")),
+                    -float(c.get("score") or 0),
+                )
+            )
+            return scored_candidates[: max(limit, 50)]
+
+        # Default: smart / custom mode
         if author_matched_found:
             scored_candidates = [
                 c for c in scored_candidates if not c.get("author_penalized")
             ]
+        elif effective_author and search_mode == "smart":
+            # Keep candidates matching title/series if author didn't match
+            relevant = [
+                c
+                for c in scored_candidates
+                if c.get("title_matched")
+                or c.get("series_matched")
+                or not c.get("author_penalized")
+            ]
+            if relevant:
+                scored_candidates = relevant
 
         scored_candidates.sort(key=lambda c: c["score"], reverse=True)
-        return scored_candidates[:10]
+        return scored_candidates[:limit]
 
     async def queue_download(
         self, mam_id: int, series_name: str, volume: str | None = None

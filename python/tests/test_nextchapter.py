@@ -436,3 +436,89 @@ async def test_search_mam_for_missing_prioritizes_author_and_title(tmp_path):
     assert candidates[0]["mam_id"] == 902
     assert candidates[0]["title"] == "End of Story"
     assert candidates[0]["authors"] == ["A. J. Finn"]
+    assert "✓ Author Match" in candidates[0]["match_reasons"]
+
+    # Verify MAM was queried with explicit srchIn fields and stripped initial 'aJ'
+    queried_calls = [c.args[0]["tor"] for c in mam_mock.search.call_args_list]
+    assert any("srchIn" in tor and tor["srchIn"] for tor in queried_calls)
+    assert all("aJ" not in tor.get("text", "") for tor in queried_calls)
+
+
+@pytest.mark.asyncio
+async def test_search_mam_series_and_author_modes(tmp_path):
+    db_path = tmp_path / "data.sqlite3"
+    ensure_database(db_path)
+    repo = Repository(db_path)
+    repo.upsert_abs_books(
+        [
+            {
+                "id": "abs-dcc-1",
+                "title": "Dungeon Crawler Carl",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "sequence": "1"}],
+            }
+        ]
+    )
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('mam_id = "test_mam_id"\n', encoding="utf-8")
+    cfg = load_config(cfg_file)
+
+    mam_mock = AsyncMock()
+    mam_mock.search.return_value = {
+        "found": 3,
+        "data": [
+            {
+                "id": 503,
+                "title": "The Dungeon Anarchist's Cookbook",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["3"]}],
+                "size": "700 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 30,
+                "free": True,
+            },
+            {
+                "id": 501,
+                "title": "Dungeon Crawler Carl",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["1"]}],
+                "size": "600 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 50,
+                "free": True,
+            },
+            {
+                "id": 502,
+                "title": "Carl's Doomsday Scenario",
+                "authors": ["Matt Dinniman"],
+                "series": [{"name": "Dungeon Crawler Carl", "entries": ["2"]}],
+                "size": "650 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 40,
+                "free": True,
+            },
+        ],
+    }
+
+    service = NextChapterService(cfg, repo, mam_mock)
+    series_cands = await service.search_mam_for_missing(
+        series_name="Dungeon Crawler Carl",
+        author="Matt Dinniman",
+        mode="series",
+    )
+    assert [c["mam_id"] for c in series_cands] == [501, 502, 503]
+    assert series_cands[0]["in_library"] is True
+    assert series_cands[1]["in_library"] is False
+
+    author_cands = await service.search_mam_for_missing(
+        series_name="Dungeon Crawler Carl",
+        author="Matt Dinniman",
+        mode="author",
+    )
+    assert len(author_cands) == 3
+    assert [c["mam_id"] for c in author_cands] == [501, 502, 503]
+

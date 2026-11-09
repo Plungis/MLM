@@ -101,7 +101,7 @@
         <h3>{{ s.series_name }}</h3>
         <span class="series-authors">{{ s.authors | join(', ') if s.authors else 'Unknown Author' }}</span>
       </div>
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
+      <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span class="chip" style="background: {% if s.status == 'complete' %}rgba(16, 185, 129, 0.2); color: #34d399;{% elif s.status == 'unconfigured' %}rgba(99, 102, 241, 0.2); color: #818cf8;{% else %}rgba(244, 63, 94, 0.2); color: #fb7185;{% endif %}">
           {% if s.status == 'unconfigured' %}
             Needs Gemini Scan ({{ s.owned_count }} Owned)
@@ -109,6 +109,14 @@
             {{ s.percent_complete }}% Complete ({{ s.owned_count }}/{{ s.total_known_count }})
           {% endif %}
         </span>
+        <button class="btn btn-sm btn-outline-nc" type="button" data-nc-browse-mam data-mode="series" data-series="{{ s.series_name }}" data-author="{{ s.authors | join(', ') if s.authors else '' }}" title="Browse all torrents in this series on MAM">
+          📚 Series on MAM
+        </button>
+        {% if s.authors %}
+        <button class="btn btn-sm btn-outline-nc" type="button" data-nc-browse-mam data-mode="author" data-series="{{ s.series_name }}" data-author="{{ s.authors | join(', ') }}" title="Browse all torrents by this author on MAM">
+          ✍️ Author on MAM
+        </button>
+        {% endif %}
         {% if s.missing_volumes %}
         <button class="btn btn-sm btn-primary-nc" type="button" data-nc-queue-all data-series="{{ s.series_name }}">
           Queue All Missing ({{ s.missing_volumes | length }})
@@ -272,11 +280,16 @@
         <span style="font-size: 0.78rem; color: #38bdf8;">by {{ r.best_candidate.authors | join(', ') }}</span>
         {% endif %}
       </div>
-      <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
         <span style="color: #94a3b8; font-size: 0.75rem;">{{ r.best_candidate.media_type | capitalize }} &bull; {{ r.best_candidate.size }}</span>
-        <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ r.best_candidate.mam_id }}" data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}">
-          1-Click Queue
-        </button>
+        <div style="display: flex; gap: 0.4rem;">
+          <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}" data-title="{{ r.title }}" data-author="{{ r.author }}">
+            Browse Releases
+          </button>
+          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ r.best_candidate.mam_id }}" data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}">
+            1-Click Queue
+          </button>
+        </div>
       </div>
     </div>
     {% else %}

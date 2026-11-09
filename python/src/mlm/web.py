@@ -7,7 +7,6 @@ import hmac
 import ipaddress
 import json
 import math
-import re
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
@@ -50,7 +49,11 @@ from .modules.absidekick.core import ABSAPIError
 from .modules.heavymlm.abs_sync import sync_audiobookshelf_library
 from .modules.heavymlm.catalog import get_unified_book_catalog
 from .modules.heavymlm.search import (
+    clean_query_for_mam,
+    extract_author_mam_terms,
+    extract_related_entities,
     filter_search_results,
+    parse_composite_query,
     present_search_result,
     search_seed,
 )
@@ -1546,12 +1549,22 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         title: str = "",
         author: str = "",
         q: str = "",
+        mode: str = "smart",
+        media_filter: str = "",
+        limit: int = 40,
     ) -> list[dict]:
         if not local_request(request):
             raise HTTPException(403, "NextChapter controls are local-only")
         nc = nextchapter_service()
         return await nc.search_mam_for_missing(
-            series_name, volume, title, author, q=q
+            series_name,
+            volume,
+            title,
+            author,
+            q=q,
+            mode=mode,
+            media_filter=media_filter,
+            limit=limit,
         )
 
     @app.post("/api/nextchapter/download")
@@ -2196,6 +2209,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
 
     async def run_manual_search(filters: dict[str, object]) -> dict[str, object]:
         rows: list[dict] = []
+        related_authors: list[str] = []
+        related_series: list[str] = []
         found = 0
         scanned = 0
         error = None
@@ -2237,49 +2252,83 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 ]
                 rows = filter_search_results(presented, filters)
 
-                # If composite query (e.g. author #2 title) yielded zero results,
-                # retry MAM search with isolated segments (title/author)
-                if not rows and filters.get("q"):
-                    raw_q = str(filters["q"]).strip()
-                    parts = [
-                        p.strip()
-                        for p in re.split(r"#\s*[\d.]+|\s+-\s+", raw_q)
-                        if len(p.strip()) >= 3
-                    ]
-                    for sub_query in parts:
-                        if sub_query.casefold() == seed.casefold():
-                            continue
-                        sub_res = await app.state.services.mam.search(
-                            {
-                                "dlLink": True,
-                                "mediaInfo": True,
-                                "isbn": True,
-                                "perpage": 100,
-                                "tor": {
-                                    "text": sub_query,
-                                    "startNumber": 0,
-                                },
-                            }
-                        )
-                        for row in sub_res.get("data", []):
-                            if isinstance(row, dict):
-                                tid = as_int(row.get("id"))
-                                if tid and tid not in raw_by_id:
-                                    raw_by_id[tid] = row
-                    if raw_by_id:
-                        presented = [
-                            present_search_result(row)
-                            for torrent_id, row in raw_by_id.items()
-                            if torrent_id
-                        ]
-                        rows = filter_search_results(presented, filters)
+                async def _extra_mam_query(
+                    text_val: str, srch_fields: list[str]
+                ) -> None:
+                    q_str = text_val.strip()
+                    if not q_str:
+                        return
+                    sub_res = await app.state.services.mam.search(
+                        {
+                            "dlLink": True,
+                            "mediaInfo": True,
+                            "isbn": True,
+                            "perpage": 100,
+                            "tor": {
+                                "text": q_str,
+                                "srchIn": srch_fields,
+                                "startNumber": 0,
+                            },
+                        }
+                    )
+                    for r_item in sub_res.get("data", []):
+                        if isinstance(r_item, dict):
+                            tid = as_int(r_item.get("id"))
+                            if tid and tid not in raw_by_id:
+                                raw_by_id[tid] = r_item
 
+                # If composite query (e.g. author #2 title) yielded few/zero results,
+                # retry MAM search with parsed segments and targeted author/title fields
+                if len(rows) < 3 and filters.get("q"):
+                    raw_q = str(filters["q"]).strip()
+                    parsed = parse_composite_query(raw_q)
+                    if parsed["title_hint"]:
+                        t_clean = clean_query_for_mam(parsed["title_hint"])
+                        if t_clean and t_clean.casefold() != seed.casefold():
+                            await _extra_mam_query(t_clean, ["title", "series"])
+                    if parsed["author_hint"]:
+                        a_terms = extract_author_mam_terms(parsed["author_hint"])
+                        if a_terms:
+                            await _extra_mam_query(a_terms[0], ["author"])
+                    for sub_query in parsed["segments"]:
+                        if sub_query.casefold() != seed.casefold():
+                            await _extra_mam_query(
+                                sub_query,
+                                ["title", "author", "series", "narrator"],
+                            )
+
+                # If both author and title filters were set and yielded 0 rows,
+                # also query title directly in ["title", "author"]
+                if not rows and filters.get("author") and filters.get("title"):
+                    t_clean = clean_query_for_mam(str(filters["title"]))
+                    if t_clean:
+                        await _extra_mam_query(t_clean, ["title", "author"])
+
+                # If series filter yielded 0 rows, also search title + series
+                if not rows and filters.get("series"):
+                    s_clean = clean_query_for_mam(str(filters["series"]))
+                    if s_clean:
+                        await _extra_mam_query(s_clean, ["title", "series"])
+
+                if len(raw_by_id) > scanned:
+                    presented = [
+                        present_search_result(row)
+                        for torrent_id, row in raw_by_id.items()
+                        if torrent_id
+                    ]
+                    rows = filter_search_results(presented, filters)
+
+                related = extract_related_entities(rows or presented, filters)
+                related_authors = related["authors"]
+                related_series = related["series"]
                 scanned = len(raw_by_id)
                 found = max(found, scanned)
             except Exception as caught:  # noqa: BLE001 - display API failure in UI
                 error = str(caught)
         return {
             "rows": rows,
+            "related_authors": related_authors,
+            "related_series": related_series,
             "found": found,
             "scanned": scanned,
             "error": error,
@@ -3008,6 +3057,8 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 filters=filters,
                 searched=searched,
                 rows=result["rows"],
+                related_authors=result["related_authors"],
+                related_series=result["related_series"],
                 found=result["found"],
                 scanned=result["scanned"],
                 error=result["error"],

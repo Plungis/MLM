@@ -108,6 +108,29 @@
 <div class="flash error-text" role="alert"><span>{{ error }}</span><span class="status error">Failed</span></div>
 {% endif %}
 
+{% if searched and (related_series or related_authors) %}
+<section class="panel" style="margin-bottom: 18px;">
+  <div class="panel-body" style="display: flex; flex-direction: column; gap: 10px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+      <strong style="font-size: 0.9rem;">Related on MaM — Browse All Torrents by Series or Author</strong>
+      <span class="muted" style="font-size: 0.8rem;">Click any pill to view the full series or author catalog</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+      {% for s_name in related_series %}
+      <a class="chip" href="/search?series={{ s_name | urlencode }}" style="text-decoration: none; font-weight: 600;" title="View all torrents in series {{ s_name }}">
+        📚 Series: {{ s_name }}
+      </a>
+      {% endfor %}
+      {% for a_name in related_authors %}
+      <a class="chip" href="/search?author={{ a_name | urlencode }}" style="text-decoration: none; font-weight: 600;" title="View all torrents by author {{ a_name }}">
+        ✍️ Author: {{ a_name }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
 {% if rows %}
 <section class="hm-search-results" aria-label="MaM search results">
   {% for row in rows %}
@@ -123,7 +146,11 @@
       <div class="hm-release-copy">
         <h2>{{ row.title }}</h2>
         {% if row.authors %}
-        <p class="hm-authors"><span>by</span> {{ row.authors | join(", ") }}</p>
+        <p class="hm-authors"><span>by</span>
+          {% for author in row.authors %}
+            <a href="/search?author={{ author | urlencode }}" class="series-link" title="Search all books by {{ author }}">{{ author }}</a>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </p>
         {% else %}
         <p class="hm-authors muted">Author information unavailable</p>
         {% endif %}
@@ -135,7 +162,13 @@
           {% endfor %}
         </p>
         {% endif %}
-        {% if row.narrators %}<p class="hm-secondary"><strong>Narrated by</strong> {{ row.narrators | join(", ") }}</p>{% endif %}
+        {% if row.narrators %}
+        <p class="hm-secondary"><strong>Narrated by</strong>
+          {% for narrator in row.narrators %}
+            <a href="/search?narrator={{ narrator | urlencode }}" class="series-link" title="Search all books narrated by {{ narrator }}">{{ narrator }}</a>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+        {% endif %}
       </div>
 
       <div class="hm-card-actions">
@@ -144,12 +177,16 @@
           <button class="primary" type="submit">Add to queue</button>
         </form>
         {% if row.series %}
+        <a class="button" href="/search?series={{ row.series[0].name | urlencode }}" title="Browse all releases in {{ row.series[0].name }}">All in Series</a>
         <form class="hm-add-form" action="/search/series/select" method="post">
           <input type="hidden" name="series_name" value="{{ row.series[0].name }}">
           <input type="hidden" name="media_type" value="{{ filters.category }}">
           <input type="hidden" name="filetype" value="{{ filters.filetype }}">
           <button class="button secondary" type="submit" title="Download all books in {{ row.series[0].name }}">Grab Series</button>
         </form>
+        {% endif %}
+        {% if row.authors %}
+        <a class="button" href="/search?author={{ row.authors[0] | urlencode }}" title="Browse all releases by {{ row.authors[0] }}">All by Author</a>
         {% endif %}
       </div>
     </div>
