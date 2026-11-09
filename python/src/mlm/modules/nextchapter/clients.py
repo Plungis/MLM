@@ -145,13 +145,37 @@ class OpenLibraryClient:
         return books
 
 
+def _extract_json_dict(raw_text: str) -> dict[str, Any]:
+    """Extract and parse a JSON object from raw model text or fenced blocks."""
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    cleaned = cleaned.removesuffix("```").strip()
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        parsed = json.loads(cleaned[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("No valid JSON object found in model output")
+
+
 class GeminiClient:
     def __init__(
         self, api_key: str = "", client: httpx.AsyncClient | None = None
     ) -> None:
         self.api_key = api_key.strip()
         self._owns_client = client is None
-        self.client = client or httpx.AsyncClient(timeout=35)
+        self.client = client or httpx.AsyncClient(timeout=45)
 
     async def close(self) -> None:
         if self._owns_client:
@@ -162,10 +186,10 @@ class GeminiClient:
         series_data: list[dict[str, Any]],
         top_authors: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Analyze book series using Google Gemini AI.
+        """Analyze book series using Gemini AI with Search Grounding & MAM Catalog.
 
         Identifies canonical reading order, canonical total volume count,
-        all missing books/sequels with titles and summaries, and generates
+        all missing books/sequels with verified titles and summaries, and generates
         personalized reading recommendations.
         """
         if not self.api_key:
@@ -189,10 +213,24 @@ class GeminiClient:
             owned_str = (
                 "; ".join(owned_titles[:15]) if owned_titles else "None recorded"
             )
-            summary_lines.append(
+            line = (
                 f"- Series: '{name}' by {authors or 'Unknown'}. "
-                f"Currently Owned: [{owned_str}]"
+                f"Currently Owned in Library: [{owned_str}]"
             )
+            mam_cat = s.get("mam_catalog") or []
+            if mam_cat:
+                cat_items = [
+                    f"#{c.get('volume_number')}: {c.get('title')}"
+                    for c in mam_cat[:25]
+                    if c.get("volume_number") and c.get("title")
+                ]
+                if cat_items:
+                    cat_str = "; ".join(cat_items)
+                    line += (
+                        " | Verified Real Releases on MyAnonamouse "
+                        f"(GROUND TRUTH — USE THESE EXACT TITLES): [{cat_str}]"
+                    )
+            summary_lines.append(line)
 
         authors_context = ", ".join((top_authors or [])[:15])
 
@@ -200,7 +238,8 @@ class GeminiClient:
             "You are an expert literary bibliography authority and intelligent "
             "library curator.\n"
             "Below is a list of book series currently in the user's library along with "
-            "raw titles and filenames they currently own:\n\n"
+            "raw titles/filenames they own, plus Verified Real Releases discovered on "
+            "MyAnonamouse where available:\n\n"
             + "\n".join(summary_lines)
             + "\n\n"
             + (
@@ -208,36 +247,45 @@ class GeminiClient:
                 if authors_context
                 else ""
             )
-            + "CRITICAL INSTRUCTIONS FOR MISLEADING OR MESSY LIBRARY METADATA:\n"
-            "1. NOISY TITLES & ARTIFACTS: Raw titles/filenames frequently contain "
+            + "CRITICAL ANTI-HALLUCINATION & ACCURACY RULES:\n"
+            "1. NEVER INVENT OR GUESS BOOK TITLES: Never fabricate a title that "
+            "merely sounds like the series pattern (for example, NEVER invent a "
+            "non-existent title like 'A Schism of Souls' for 'A Practical Guide to "
+            "Sorcery' by Azalea Ellis, whose real books are 'A Conjuring of Ravens', "
+            "'A Binding of Blood', 'A Sacrifice of Light', 'A Foreboding of Woe', "
+            "and 'A Cauldron of Bitterness').\n"
+            "2. TRUST VERIFIED MAM RELEASES: When 'Verified Real Releases on "
+            "MyAnonamouse' are listed for a series, those are 100% real verified "
+            "books. You MUST use those exact book titles for those volume numbers!\n"
+            "3. VERIFY VIA GOOGLE SEARCH: For any series or volume not listed in the "
+            "MAM catalog, use Google Search to verify the exact real published title "
+            "and volume order on Goodreads/Audible/author bibliography. If you are "
+            "not 100% certain of a book's real published title, DO NOT include a "
+            "guessed title.\n"
+            "4. NOISY TITLES & ARTIFACTS: Raw owned titles/filenames often contain "
             "rip noise, format tags ('Unabridged', 'Dramatized Adaptation'), publisher/"
             "studio names ('GraphicAudio', 'Soundbooth Theater'), disc/CD numbers "
             "('Disc 01', 'CD 02'), or narrator names. Mentally strip these out to "
-            "identify the true canonical book.\n"
-            "2. MULTI-PART / SPLIT RELEASES: If the user owns multiple parts or files "
+            "identify the true canonical book the user owns.\n"
+            "5. MULTI-PART / SPLIT RELEASES: If the user owns multiple parts or files "
             "of the same book (e.g. 'The Way of Kings Part 1' and 'Part 2'), "
             "recognize that these are parts of the SAME single book. The book "
-            "is OWNED. Do NOT consider other parts of the same book as missing books!\n"
-            "3. OMNIBUSES, BUNDLES & BOX SETS: If an entry represents an omnibus or "
+            "is OWNED.\n"
+            "6. OMNIBUSES, BUNDLES & BOX SETS: If an entry represents an omnibus or "
             "collection (e.g. 'Dungeon Crawler Carl: Books 1-3 Omnibus'), recognize "
             "that ALL volumes contained in that omnibus (Books 1, 2, and 3) are "
             "ALREADY OWNED by the user. Do NOT report any of them as missing!\n"
-            "4. SUBTITLES & UNNUMBERED TITLES: Many books do not have volume numbers "
-            "in their metadata. Use your deep knowledge of author bibliographies to "
-            "map each owned title to its canonical volume number and series order.\n"
-            "5. ACCURATE SEQUELS & GAPS: Identify ONLY canonical books in the series "
-            "(mainline numbered entries or canonical novellas) that the user does "
-            "NOT own yet.\n"
-            "6. For each missing book, provide:\n"
-            "   - volume_number: canonical volume number (e.g. '1', '2', '2.5', '4')\n"
-            "   - title: clean, official standalone book title "
-            "(e.g. 'The Gate of the Feral Gods', NOT 'DCC Book 4 GraphicAudio')\n"
+            "7. SUBTITLES & UNNUMBERED TITLES: Map each owned title to its canonical "
+            "volume number so owned books are never reported as missing.\n"
+            "8. For each missing book that the user does NOT own yet, provide:\n"
+            "   - volume_number: canonical volume number (e.g. '1', '2', '3', '4')\n"
+            "   - title: exact, verified official book title\n"
             "   - author: primary author name\n"
             "   - summary: concise 1-2 sentence synopsis\n"
-            "7. Determine canonical_total_books and status ('complete' or 'ongoing').\n"
-            "8. Recommend 6 to 10 exciting new book series or standalone books "
+            "9. Determine canonical_total_books and status ('complete' or 'ongoing').\n"
+            "10. Recommend 6 to 10 exciting real book series or standalone books "
             "matching their taste.\n\n"
-            "Return valid JSON matching this schema:\n"
+            "Return ONLY valid JSON matching this schema (no markdown commentary):\n"
             "{\n"
             '  "series": [\n'
             "    {\n"
@@ -267,19 +315,26 @@ class GeminiClient:
             "}\n"
         )
 
-        payload = {
+        grounded_payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {
+                "temperature": 0.1,
+            },
+        }
+        ungrounded_payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "temperature": 0.2,
+                "temperature": 0.1,
             },
         }
 
-        # Modern active Gemini Flash models
+        # Prioritize full Flash models with strong bibliographic knowledge & grounding
         models_to_try = [
-            "gemini-3.5-flash-lite",
-            "gemini-3-flash-preview",
             "gemini-3.8-flash",
+            "gemini-2.5-flash",
+            "gemini-3-flash-preview",
             "gemini-flash-latest",
         ]
         last_error = ""
@@ -289,59 +344,60 @@ class GeminiClient:
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                 f"?key={self.api_key}"
             )
-            try:
-                res = await self.client.post(url, json=payload)
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if not candidates:
-                        continue
-                    text = (
-                        candidates[0]
-                        .get("content", {})
-                        .get("parts", [{}])[0]
-                        .get("text", "")
-                    )
-                    text = text.strip()
-                    if text.startswith("```json"):
-                        text = text[7:]
-                    elif text.startswith("```"):
-                        text = text[3:]
-                    text = text.removesuffix("```")
-                    parsed = json.loads(text.strip())
+            for payload in (grounded_payload, ungrounded_payload):
+                try:
+                    res = await self.client.post(url, json=payload)
+                    if res.status_code == 200:
+                        data = res.json()
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            continue
+                        parts = (
+                            candidates[0]
+                            .get("content", {})
+                            .get("parts", [])
+                        )
+                        text = "\n".join(
+                            str(p.get("text", ""))
+                            for p in parts
+                            if isinstance(p, dict) and p.get("text")
+                        )
+                        if not text.strip():
+                            continue
+                        parsed = _extract_json_dict(text)
 
-                    # If missing_books is at top-level, distribute or include
-                    top_missing = parsed.get("missing_books", [])
-                    parsed_series = parsed.get("series", [])
+                        top_missing = parsed.get("missing_books", [])
+                        parsed_series = parsed.get("series", [])
 
-                    # Ensure both formats work
-                    flat_missing: list[dict[str, Any]] = list(top_missing)
-                    for s_item in parsed_series:
-                        s_name = s_item.get("series_name", "")
-                        for m_item in s_item.get("missing_books", []):
-                            if not m_item.get("series_name"):
-                                m_item["series_name"] = s_name
-                            if not any(
-                                f.get("series_name", "").casefold()
-                                == s_name.casefold()
-                                and str(f.get("volume_number"))
-                                == str(m_item.get("volume_number"))
-                                for f in flat_missing
-                            ):
-                                flat_missing.append(m_item)
+                        flat_missing: list[dict[str, Any]] = list(top_missing)
+                        for s_item in parsed_series:
+                            s_name = s_item.get("series_name", "")
+                            for m_item in s_item.get("missing_books", []):
+                                if not m_item.get("series_name"):
+                                    m_item["series_name"] = s_name
+                                if not any(
+                                    f.get("series_name", "").casefold()
+                                    == s_name.casefold()
+                                    and str(f.get("volume_number"))
+                                    == str(m_item.get("volume_number"))
+                                    for f in flat_missing
+                                ):
+                                    flat_missing.append(m_item)
 
-                    return {
-                        "series": parsed_series,
-                        "missing_books": flat_missing,
-                        "recommendations": parsed.get("recommendations", []),
-                    }
-                else:
-                    last_error = (
-                        f"Gemini {model} returned HTTP {res.status_code}: "
-                        f"{res.text[:180]}"
-                    )
-            except Exception as error:
-                last_error = f"Gemini error with {model}: {error}"
+                        return {
+                            "series": parsed_series,
+                            "missing_books": flat_missing,
+                            "recommendations": parsed.get(
+                                "recommendations", []
+                            ),
+                        }
+                    else:
+                        last_error = (
+                            f"Gemini {model} returned HTTP {res.status_code}: "
+                            f"{res.text[:180]}"
+                        )
+                except Exception as error:
+                    last_error = f"Gemini error with {model}: {error}"
 
         return {
             "error": last_error,

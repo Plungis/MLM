@@ -522,3 +522,166 @@ async def test_search_mam_series_and_author_modes(tmp_path):
     assert len(author_cands) == 3
     assert [c["mam_id"] for c in author_cands] == [501, 502, 503]
 
+
+@pytest.mark.asyncio
+async def test_scan_series_grounds_titles_with_mam_and_rejects_hallucinations(
+    tmp_path,
+):
+    db_path = tmp_path / "data.sqlite3"
+    ensure_database(db_path)
+    repo = Repository(db_path)
+    repo.upsert_abs_books(
+        [
+            {
+                "id": "abs-apgts-1",
+                "title": "A Conjuring of Ravens",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "sequence": "1"}
+                ],
+            },
+            {
+                "id": "abs-apgts-2",
+                "title": "A Binding of Blood",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "sequence": "2"}
+                ],
+            },
+        ]
+    )
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('mam_id = "test_mam_id"\n', encoding="utf-8")
+    cfg = load_config(cfg_file)
+
+    mam_mock = AsyncMock()
+    mam_mock.search.return_value = {
+        "found": 5,
+        "data": [
+            {
+                "id": 701,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 1: "
+                    "A Conjuring of Ravens [Unabridged]"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["1"]}
+                ],
+                "size": "500 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 25,
+                "free": True,
+            },
+            {
+                "id": 702,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 2: "
+                    "A Binding of Blood [Unabridged]"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["2"]}
+                ],
+                "size": "520 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 22,
+                "free": True,
+            },
+            {
+                "id": 703,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 3: "
+                    "A Sacrifice of Light [Unabridged]"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["3"]}
+                ],
+                "size": "550 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 30,
+                "free": True,
+            },
+            {
+                "id": 704,
+                "title": "A Foreboding of Woe (A Practical Guide to Sorcery, Book 4)",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["4"]}
+                ],
+                "size": "580 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 28,
+                "free": True,
+            },
+            {
+                "id": 705,
+                "title": (
+                    "A Cauldron of Bitterness: "
+                    "A Practical Guide to Sorcery, Book 5"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["5"]}
+                ],
+                "size": "600 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 35,
+                "free": True,
+            },
+        ],
+    }
+
+    service = NextChapterService(cfg, repo, mam_mock)
+    service.settings.gemini_api_key = "dummy_gemini"
+
+    # Simulate Gemini returning a hallucinated title ("A Schism of Souls")
+    with patch(
+        "mlm.modules.nextchapter.service.GeminiClient.analyze_series",
+        new=AsyncMock(
+            return_value={
+                "series": [
+                    {
+                        "series_name": "A Practical Guide to Sorcery",
+                        "canonical_total_books": 6,
+                        "status": "ongoing",
+                        "missing_books": [
+                            {
+                                "volume_number": "3",
+                                "title": "A Schism of Souls",
+                                "author": "Azalea Ellis",
+                                "summary": "Hallucinated book title for #3.",
+                            },
+                            {
+                                "volume_number": "6",
+                                "title": "A Schism of Souls",
+                                "author": "Azalea Ellis",
+                                "summary": "Hallucinated book title for #6.",
+                            },
+                        ],
+                    }
+                ],
+                "recommendations": [],
+            }
+        ),
+    ):
+        scan_res = await service.scan_series(force=True)
+        series_list = scan_res["series"]
+        assert len(series_list) == 1
+        missing = series_list[0]["missing_volumes"]
+        assert [m["volume_number"] for m in missing] == ["3", "4", "5"]
+        assert [m["title"] for m in missing] == [
+            "A Sacrifice of Light",
+            "A Foreboding of Woe",
+            "A Cauldron of Bitterness",
+        ]
+        assert all("Schism of Souls" not in m["title"] for m in missing)
+
+

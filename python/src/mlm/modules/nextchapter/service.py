@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 import time
@@ -44,6 +45,183 @@ from .models import (
     NextChapterSettings,
     SeriesHubEntry,
 )
+
+STATE_SCHEMA_VERSION = 2
+
+OMNIBUS_TITLE_RE = re.compile(
+    r"\b(?:omnibus|box\s*set|anthology|collection|complete\s+series|"
+    r"books?\s+\d+\s*(?:[\-–—]|to|through)\s*\d+|"
+    r"vols?(?:umes?)?\s+\d+\s*(?:[\-–—]|to|through)\s*\d+)\b",
+    re.IGNORECASE,
+)
+RANGE_VOL_RE = re.compile(
+    r"(?:books?|vols?(?:umes?)?|#)?\s*(\d+)\s*(?:[\-–—]|to|through)\s*(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_volume_str(vol: str) -> str:
+    """Normalize a single numeric volume identifier (e.g. '01' -> '1')."""
+    if not vol or not str(vol).strip():
+        return ""
+    cleaned = str(vol).strip()
+    cleaned = re.sub(
+        r"^(?:book|vol(?:ume)?\.?|part|pt|#)\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not re.match(r"^\d+(?:\.\d+)?$", cleaned):
+        return ""
+    try:
+        num = float(cleaned)
+        if num <= 0 or num > 500:
+            return ""
+        if num.is_integer():
+            return str(int(num))
+        return str(num)
+    except ValueError:
+        return ""
+
+
+def _expand_owned_volumes(vol_str: str, title_str: str) -> set[str]:
+    """Extract owned volume numbers, expanding omnibus ranges like 'Books 1-3'."""
+    owned: set[str] = set()
+    single = _normalize_volume_str(vol_str)
+    if single:
+        owned.add(single)
+
+    for text in (vol_str, title_str):
+        if not text:
+            continue
+        for match in RANGE_VOL_RE.finditer(str(text)):
+            try:
+                start_v = int(match.group(1))
+                end_v = int(match.group(2))
+                if 1 <= start_v < end_v <= 100 and (end_v - start_v) <= 25:
+                    for v in range(start_v, end_v + 1):
+                        owned.add(str(v))
+            except ValueError:
+                pass
+    return owned
+
+
+def clean_mam_book_title(
+    raw_title: str,
+    series_name: str = "",
+    volume: str = "",
+    author: str = "",
+) -> tuple[str, bool]:
+    """Extract clean canonical book title from a MAM torrent title.
+
+    Returns (clean_title, is_distinct_title) where is_distinct_title is True
+    when the book has a real standalone title beyond 'Series Name #N'.
+    """
+    if not raw_title or not raw_title.strip():
+        return "", False
+    t = html.unescape(raw_title).strip()
+
+    # 1. Strip bracketed tags [Unabridged], [M4B], [2024], etc.
+    t = re.sub(r"\[[^\]]*\]", " ", t)
+    # Strip parenthetical format or book-number tags
+    t = re.sub(
+        r"\([^\)]*(?:unabridged|abridged|audiobooks?|ebooks?|retail|"
+        r"book\s*#?[\d.]+|vol(?:ume)?\s*\.?\s*#?[\d.]+|#\s*[\d.]+|"
+        r"m4b|mp3|epub|azw3|graphic\s*audio|dramatized)[^\)]*\)",
+        " ",
+        t,
+        flags=re.IGNORECASE,
+    )
+
+    # 2. Strip leading/trailing author name if present
+    if author and author.strip():
+        auth_esc = re.escape(author.strip())
+        t = re.sub(
+            rf"^\s*{auth_esc}\s*[\-–—:]+\s*", "", t, flags=re.IGNORECASE
+        )
+        t = re.sub(
+            rf"\s+by\s+{auth_esc}\s*$", "", t, flags=re.IGNORECASE
+        )
+
+    # 3. Strip series name + volume prefix/suffix if present
+    clean_s = normalize_series_name(series_name) if series_name else ""
+    s_variants = [
+        s.strip() for s in dict.fromkeys([series_name, clean_s]) if s and s.strip()
+    ]
+    for s_cand in s_variants:
+        s_esc = re.escape(s_cand)
+        t = re.sub(rf"\(\s*{s_esc}[^\)]*\)", " ", t, flags=re.IGNORECASE)
+        prefix_pat = (
+            rf"^\s*(?:the\s+)?{s_esc}\s*(?:series\s*)?"
+            rf"(?:[,:\-–—]?\s*(?:book|vol(?:ume)?\.?|part|pt|#)?\s*0*[\d.]+\s*[,:\-–—]+|[,:\-–—]+\s*)"
+        )
+        stripped = re.sub(prefix_pat, "", t, flags=re.IGNORECASE).strip()
+        if stripped:
+            t = stripped
+
+        suffix_pat = (
+            rf"\s*[,:\-–—]+\s*(?:the\s+)?{s_esc}\s*(?:series\s*)?"
+            rf"(?:[,:\-–—]?\s*(?:book|vol(?:ume)?\.?|#)?\s*0*[\d.]+)?\s*$"
+        )
+        stripped_suf = re.sub(suffix_pat, "", t, flags=re.IGNORECASE).strip()
+        if stripped_suf:
+            t = stripped_suf
+
+    # 4. Strip standalone volume prefixes/suffixes like "Book 3: Title", "03 - Title"
+    t = re.sub(
+        r"^\s*(?:book|vol(?:ume)?\.?|#)\s*0*[\d.]+\s*[,:\-–—]+\s*",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+    t = re.sub(r"^\s*0*[\d.]+\s*[\-–—:]+\s*", "", t).strip()
+    t = re.sub(
+        r"\s*[,:\-–—]+\s*(?:book|vol(?:ume)?\.?|#)\s*0*[\d.]+\s*$",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # 5. Strip generic subtitle noise like ": A Novel"
+    t = re.sub(
+        r":\s*a\s+(?:novel|thriller|mystery|memoir|litrpg[^\w]*|"
+        r"progression\s+fantasy[^\w]*)$",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    t = re.sub(r"\s+", " ", t).strip(" -–—:,")
+
+    # Check if what remains is just the series name + number or just a volume marker
+    vol_norm = _normalize_volume_str(volume)
+    for s_cand in s_variants:
+        s_esc = re.escape(s_cand)
+        if re.match(
+            rf"^(?:the\s+)?{s_esc}\s*(?:[,:\-–—]?\s*(?:book|vol(?:ume)?\.?|#)?\s*0*[\d.]+)?$",
+            t,
+            flags=re.IGNORECASE,
+        ):
+            if vol_norm == "1" and t.casefold() == s_cand.casefold():
+                return s_cand, True
+            fallback = (
+                f"{clean_s or s_cand} #{vol_norm}"
+                if vol_norm
+                else (clean_s or s_cand)
+            )
+            return fallback, False
+
+    if not t or re.match(
+        r"^(?:book|vol(?:ume)?\.?|part|pt|#)?\s*0*[\d.]+$",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        base_s = clean_s or series_name.strip()
+        if base_s and vol_norm:
+            return f"{base_s} #{vol_norm}", False
+        return html.unescape(raw_title).strip(), False
+
+    return t, True
 
 
 def format_mam_series(series_list: list[dict[str, Any]]) -> str:
@@ -106,16 +284,25 @@ class NextChapterService:
         return data
 
     def get_cached_state(self) -> dict[str, Any]:
-        if self._state_cache is not None:
+        if (
+            self._state_cache is not None
+            and self._state_cache.get("schema_version") == STATE_SCHEMA_VERSION
+        ):
             return self._state_cache
         saved = self.repository.config_value("nextchapter_state")
         if saved:
             try:
-                self._state_cache = json.loads(saved)
-                return self._state_cache
+                loaded = json.loads(saved)
+                if (
+                    isinstance(loaded, dict)
+                    and loaded.get("schema_version") == STATE_SCHEMA_VERSION
+                ):
+                    self._state_cache = loaded
+                    return self._state_cache
             except json.JSONDecodeError:
                 pass
         return {
+            "schema_version": STATE_SCHEMA_VERSION,
             "series": [],
             "missing_count": 0,
             "complete_count": 0,
@@ -124,12 +311,254 @@ class NextChapterService:
             "last_scan": 0,
         }
 
+    async def _fetch_mam_series_catalog(
+        self, series_entry: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Query MyAnonamouse for ground-truth series volumes and book titles."""
+        raw_series_name = str(series_entry.get("series_name") or "").strip()
+        authors = [
+            str(a).strip()
+            for a in (series_entry.get("authors") or [])
+            if str(a).strip()
+        ]
+        clean_series = (
+            normalize_series_name(raw_series_name) or raw_series_name
+        )
+        if authors and clean_series:
+            auth_esc = re.escape(authors[0])
+            stripped_s = re.sub(
+                rf"^\s*{auth_esc}\s*[\-–—:]+\s*",
+                "",
+                clean_series,
+                flags=re.IGNORECASE,
+            ).strip()
+            if stripped_s:
+                clean_series = stripped_s
+
+        empty_result: dict[str, Any] = {
+            "has_data": False,
+            "volumes": {},
+            "author_titles": set(),
+            "canonical_series_name": clean_series,
+            "authors": authors,
+        }
+        if not self.mam:
+            return empty_result
+
+        series_is_author = bool(
+            authors
+            and clean_series
+            and (
+                _field_matches(authors, clean_series)
+                or _field_matches([clean_series], authors[0])
+            )
+        )
+
+        rows_by_id: dict[int, dict[str, Any]] = {}
+
+        async def _q_mam(text_val: str, srch_in: list[str]) -> None:
+            q_str = text_val.strip()
+            if not q_str:
+                return
+            try:
+                res = await self.mam.search(
+                    {
+                        "dlLink": True,
+                        "mediaInfo": True,
+                        "isbn": True,
+                        "perpage": 100,
+                        "tor": {
+                            "text": q_str,
+                            "srchIn": srch_in,
+                            "startNumber": 0,
+                        },
+                    }
+                )
+                if not isinstance(res, dict) or not isinstance(
+                    res.get("data"), list
+                ):
+                    return
+                for row in res["data"]:
+                    if isinstance(row, dict):
+                        tid = as_int(row.get("id"))
+                        if tid and tid not in rows_by_id:
+                            rows_by_id[tid] = row
+            except Exception:
+                pass
+
+        if clean_series and not series_is_author:
+            q_s = clean_query_for_mam(clean_series) or clean_series
+            await _q_mam(q_s, ["series"])
+            if len(rows_by_id) < 3:
+                await _q_mam(q_s, ["title", "series"])
+
+        if authors:
+            a_terms = extract_author_mam_terms(authors[0])
+            if a_terms and (len(rows_by_id) < 4 or series_is_author):
+                await _q_mam(a_terms[0], ["author"])
+
+        if not rows_by_id:
+            return empty_result
+
+        pref = self.settings.preferred_media
+        pref_media = pref if pref in ("audiobook", "ebook") else None
+
+        volumes: dict[str, dict[str, Any]] = {}
+        author_titles: set[str] = set()
+        discovered_authors: list[str] = list(authors)
+        series_name_counts: dict[str, int] = {}
+
+        for tid, r in rows_by_id.items():
+            meta = torrent_meta(r) if "media_type" not in r else r
+            r_authors = meta.get("authors") or r.get("authors") or []
+            if not r_authors and "author_info" in r:
+                r_authors = decode_name_mapping(r.get("author_info"))
+            r_series = meta.get("series") or r.get("series") or []
+            if not r_series and "series_info" in r:
+                r_series = decode_series_info(r.get("series_info"))
+            r_title = str(meta.get("title") or r.get("title") or "").strip()
+            if not r_title:
+                continue
+
+            # If series has known authors, skip torrents by unrelated authors
+            if authors and r_authors:
+                if not any(
+                    _field_matches(r_authors, a)
+                    or _field_matches([a], ra)
+                    for a in authors
+                    for ra in r_authors
+                ):
+                    continue
+            elif not discovered_authors and r_authors:
+                discovered_authors = list(r_authors)
+
+            primary_author = (
+                r_authors[0]
+                if r_authors
+                else (discovered_authors[0] if discovered_authors else "")
+            )
+            cleaned_any_title, _ = clean_mam_book_title(
+                r_title, clean_series, "", primary_author
+            )
+            if cleaned_any_title:
+                norm_any = normalize_title(cleaned_any_title)
+                if norm_any:
+                    author_titles.add(norm_any)
+            norm_raw = normalize_title(r_title)
+            if norm_raw:
+                author_titles.add(norm_raw)
+
+            # Skip omnibus/box-set torrents when mapping single canonical volume numbers
+            if OMNIBUS_TITLE_RE.search(r_title):
+                continue
+
+            matched_s_obj: dict[str, Any] | None = None
+            for s_obj in r_series:
+                if not isinstance(s_obj, dict):
+                    continue
+                s_name = str(s_obj.get("name") or "").strip()
+                if not s_name:
+                    continue
+                if series_is_author or (
+                    clean_series
+                    and (
+                        _field_matches([s_name], clean_series)
+                        or _field_matches([clean_series], s_name)
+                    )
+                ):
+                    matched_s_obj = s_obj
+                    series_name_counts[s_name] = (
+                        series_name_counts.get(s_name, 0) + 1
+                    )
+                    break
+
+            if matched_s_obj is None:
+                # Check if series name appears directly in title
+                if clean_series and not series_is_author and _field_matches(
+                    [r_title], clean_series
+                ):
+                    matched_s_obj = {"name": clean_series, "entries": []}
+                else:
+                    continue
+
+            s_name_used = str(
+                matched_s_obj.get("name") or clean_series
+            ).strip()
+            entries = matched_s_obj.get("entries") or (
+                [matched_s_obj["sequence"]]
+                if matched_s_obj.get("sequence")
+                else []
+            )
+            clean_entries = [
+                str(e).strip() for e in entries if str(e).strip()
+            ]
+            # Skip multi-entry omnibus tags like ["1", "2", "3"] or ["1-3"]
+            if len(clean_entries) > 1:
+                continue
+            if clean_entries and RANGE_VOL_RE.search(clean_entries[0]):
+                continue
+
+            raw_vol = (
+                clean_entries[0]
+                if clean_entries
+                else extract_series_volume(
+                    {"series": r_series, "title": r_title}, s_name_used
+                )
+            )
+            vol_num = _normalize_volume_str(raw_vol)
+            if not vol_num:
+                continue
+
+            clean_t, is_distinct = clean_mam_book_title(
+                r_title, s_name_used, vol_num, primary_author
+            )
+            if not clean_t:
+                continue
+
+            base_sc = score_series_candidate(
+                r, self.config, preferred_media=pref_media
+            )
+            cand_score = (
+                (10000 if is_distinct else 0)
+                + (base_sc[0] * 1000)
+                + (base_sc[1] * 10)
+                + (base_sc[2] * 50)
+                + min(base_sc[3], 200)
+            )
+
+            existing = volumes.get(vol_num)
+            if existing is None or cand_score > existing["score"]:
+                volumes[vol_num] = {
+                    "volume_number": vol_num,
+                    "title": clean_t,
+                    "is_distinct_title": is_distinct,
+                    "author": primary_author,
+                    "mam_id": tid,
+                    "seeders": as_int(r.get("seeders", 0)),
+                    "score": cand_score,
+                }
+
+        best_series_name = clean_series
+        if series_name_counts:
+            best_series_name = max(
+                series_name_counts.items(), key=lambda kv: kv[1]
+            )[0]
+
+        return {
+            "has_data": True,
+            "volumes": volumes,
+            "author_titles": author_titles,
+            "canonical_series_name": best_series_name,
+            "authors": discovered_authors,
+        }
+
     async def scan_series(self, force: bool = False) -> dict[str, Any]:
         async with self._lock:
             cached = self.get_cached_state()
             now = time.time()
             if (
                 not force
+                and cached.get("schema_version") == STATE_SCHEMA_VERSION
                 and cached.get("series")
                 and (now - cached.get("last_scan", 0) < 300)
             ):
@@ -143,6 +572,35 @@ class NextChapterService:
             total_missing = 0
             complete_count = 0
 
+            # 2. Fetch Ground-Truth MAM Series Catalog for each series first
+            sem = asyncio.Semaphore(4)
+
+            async def _enrich_with_mam(
+                s_item: dict[str, Any],
+            ) -> dict[str, Any]:
+                async with sem:
+                    cat = await self._fetch_mam_series_catalog(s_item)
+                    s_item["_mam_cat"] = cat
+                    if not s_item.get("authors") and cat.get("authors"):
+                        s_item["authors"] = cat["authors"]
+                    s_item["mam_catalog"] = [
+                        {
+                            "volume_number": v_num,
+                            "title": v_info["title"],
+                            "author": v_info["author"],
+                        }
+                        for v_num, v_info in sorted(
+                            cat["volumes"].items(),
+                            key=lambda kv: parse_entry_number(kv[0]),
+                        )
+                    ]
+                    return s_item
+
+            if raw_series:
+                await asyncio.gather(
+                    *(_enrich_with_mam(s) for s in raw_series)
+                )
+
             # Collect top authors for context
             all_authors: list[str] = []
             for s in raw_series:
@@ -154,7 +612,7 @@ class NextChapterService:
             has_gemini = bool(self.settings.gemini_api_key)
 
             last_error = ""
-            if has_gemini:
+            if has_gemini and raw_series:
                 gemini_client = GeminiClient(self.settings.gemini_api_key)
                 try:
                     ai_result = await gemini_client.analyze_series(
@@ -162,9 +620,12 @@ class NextChapterService:
                     )
                     last_error = ai_result.get("error", "")
                     for s_item in ai_result.get("series", []):
-                        name_key = s_item.get("series_name", "").strip().casefold()
-                        if name_key:
-                            ai_series_map[name_key] = s_item
+                        raw_k = s_item.get("series_name", "").strip()
+                        if raw_k:
+                            ai_series_map[raw_k.casefold()] = s_item
+                            norm_k = normalize_series_name(raw_k).casefold()
+                            if norm_k:
+                                ai_series_map[norm_k] = s_item
                     raw_recs = ai_result.get("recommendations", [])
                     for rec in raw_recs:
                         ai_recommendations.append(
@@ -188,45 +649,216 @@ class NextChapterService:
                 series_name = s["series_name"]
                 authors = s.get("authors", [])
                 owned_books = s.get("books", [])
+                mam_cat = s.get("_mam_cat") or {
+                    "has_data": False,
+                    "volumes": {},
+                    "author_titles": set(),
+                }
+                mam_volumes: dict[str, dict[str, Any]] = mam_cat.get(
+                    "volumes", {}
+                )
+                author_titles: set[str] = mam_cat.get(
+                    "author_titles", set()
+                )
+
                 s_key = series_name.strip().casefold()
-                ai_data = ai_series_map.get(s_key)
+                norm_s_key = normalize_series_name(series_name).casefold()
+                ai_data = (
+                    ai_series_map.get(s_key)
+                    or ai_series_map.get(norm_s_key)
+                )
 
-                missing_items: list[MissingBook] = []
+                # Reconcile owned books & volume numbers against MAM catalog
+                owned_vol_set: set[str] = set()
+                owned_title_norms: set[str] = set()
 
-                if ai_data:
-                    canonical_total = int(ai_data.get("canonical_total_books") or 0)
-                    for m in ai_data.get("missing_books", []):
-                        vol_num = str(m.get("volume_number", "")).strip()
-                        m_title = str(m.get("title", "")).strip()
-                        m_author = (
-                            str(m.get("author", "")).strip()
-                            or (authors[0] if authors else "")
+                for b in owned_books:
+                    b_title = str(b.get("title") or "").strip()
+                    b_vol = str(b.get("volume") or "").strip()
+                    expanded = _expand_owned_volumes(b_vol, b_title)
+                    owned_vol_set.update(expanded)
+
+                    clean_b_title, _ = clean_mam_book_title(
+                        b_title,
+                        series_name,
+                        "",
+                        authors[0] if authors else "",
+                    )
+                    for t_cand in (b_title, clean_b_title):
+                        nt = normalize_title(t_cand)
+                        if nt:
+                            owned_title_norms.add(nt)
+
+                    norm_v = _normalize_volume_str(b_vol)
+                    if norm_v:
+                        b["volume"] = norm_v
+                    else:
+                        # Try to match unnumbered owned book title to MAM catalog volume
+                        matched_v = ""
+                        for v_num, v_info in mam_volumes.items():
+                            if v_info.get("is_distinct_title") and (
+                                _field_matches([b_title], v_info["title"])
+                                or _field_matches(
+                                    [v_info["title"]], clean_b_title or b_title
+                                )
+                            ):
+                                matched_v = v_num
+                                break
+                        b["volume"] = matched_v
+                        if matched_v:
+                            owned_vol_set.add(matched_v)
+
+                # Also mark any MAM volume as owned if its title or mam_id is in library
+                for v_num, v_info in mam_volumes.items():
+                    if v_num in owned_vol_set:
+                        continue
+                    v_title_norm = normalize_title(v_info["title"])
+                    if (
+                        v_info.get("is_distinct_title")
+                        and v_title_norm
+                        and v_title_norm in owned_title_norms
+                    ):
+                        owned_vol_set.add(v_num)
+                        continue
+                    for ob in owned_books:
+                        ob_t = str(ob.get("title") or "")
+                        if v_info.get("is_distinct_title") and _field_matches(
+                            [ob_t], v_info["title"]
+                        ):
+                            owned_vol_set.add(v_num)
+                            break
+
+                # Index AI missing books by normalized volume number
+                ai_missing_by_vol: dict[str, dict[str, Any]] = {}
+                ai_missing_list = (
+                    ai_data.get("missing_books", []) if ai_data else []
+                )
+                for m in ai_missing_list:
+                    v_norm = _normalize_volume_str(
+                        str(m.get("volume_number", ""))
+                    )
+                    if v_norm:
+                        ai_missing_by_vol[v_norm] = m
+
+                missing_by_vol: dict[str, MissingBook] = {}
+
+                # A. Ground-Truth Missing Volumes from MyAnonamouse
+                for v_num, v_info in mam_volumes.items():
+                    if v_num in owned_vol_set:
+                        continue
+                    ai_m = ai_missing_by_vol.get(v_num, {})
+                    # Ground-truth MAM title ALWAYS takes precedence over AI title
+                    if v_info.get("is_distinct_title"):
+                        verified_title = v_info["title"]
+                    else:
+                        verified_title = (
+                            str(ai_m.get("title") or "").strip()
+                            or v_info["title"]
                         )
-                        m_summary = str(m.get("summary", "")).strip()
-                        missing_items.append(
-                            MissingBook(
-                                series_name=series_name,
-                                volume_number=vol_num,
-                                title=m_title,
-                                author=m_author,
-                                summary=m_summary,
-                                source="gemini_ai",
+                    verified_author = (
+                        v_info.get("author")
+                        or str(ai_m.get("author") or "").strip()
+                        or (authors[0] if authors else "")
+                    )
+                    summary_str = str(ai_m.get("summary") or "").strip()
+                    missing_by_vol[v_num] = MissingBook(
+                        series_name=series_name,
+                        volume_number=v_num,
+                        title=verified_title,
+                        author=verified_author,
+                        summary=summary_str,
+                        source="mam_verified",
+                    )
+
+                # B. Additional Missing Volumes from Gemini AI (with verification)
+                for m in ai_missing_list:
+                    raw_vol = str(m.get("volume_number", "")).strip()
+                    vol_num = _normalize_volume_str(raw_vol) or raw_vol
+                    if not vol_num or vol_num in owned_vol_set:
+                        continue
+                    if vol_num in missing_by_vol:
+                        continue
+
+                    m_title = str(m.get("title", "")).strip()
+                    m_author = (
+                        str(m.get("author", "")).strip()
+                        or (authors[0] if authors else "")
+                    )
+                    m_summary = str(m.get("summary", "")).strip()
+                    if not m_title:
+                        continue
+
+                    # Skip if user already owns a book with this title
+                    m_norm = normalize_title(m_title)
+                    if m_norm and m_norm in owned_title_norms:
+                        continue
+                    if any(
+                        _field_matches([ob.get("title", "")], m_title)
+                        for ob in owned_books
+                    ):
+                        continue
+
+                    # Skip if m_title duplicates a volume already in mam_volumes
+                    if any(
+                        _field_matches([v_info["title"]], m_title)
+                        or _field_matches([m_title], v_info["title"])
+                        for v_info in mam_volumes.values()
+                        if v_info.get("is_distinct_title")
+                    ):
+                        continue
+
+                    # If MAM has real catalog data for this series/author, verify
+                    # that Gemini's extra book title exists in the MAM catalog
+                    if mam_cat.get("has_data") and (mam_volumes or author_titles):
+                        in_author_catalog = bool(
+                            m_norm
+                            and any(
+                                m_norm in at or at in m_norm
+                                for at in author_titles
                             )
                         )
-                elif not has_gemini:
-                    canonical_total = len(owned_books)
+                        if not in_author_catalog:
+                            continue
+
+                    missing_by_vol[vol_num] = MissingBook(
+                        series_name=series_name,
+                        volume_number=vol_num,
+                        title=m_title,
+                        author=m_author,
+                        summary=m_summary,
+                        source="gemini_ai",
+                    )
+
+                missing_items = sorted(
+                    missing_by_vol.values(),
+                    key=lambda item: parse_entry_number(item.volume_number),
+                )
+
+                effective_owned_count = max(
+                    len(owned_books), len(owned_vol_set)
+                )
+                if ai_data and not mam_volumes:
+                    canonical_total = int(
+                        ai_data.get("canonical_total_books") or 0
+                    )
+                elif mam_volumes:
+                    canonical_total = len(
+                        set(mam_volumes.keys())
+                        | owned_vol_set
+                        | set(missing_by_vol.keys())
+                    )
                 else:
-                    canonical_total = len(owned_books)
+                    canonical_total = effective_owned_count
 
                 total_known = max(
-                    len(owned_books) + len(missing_items), canonical_total
+                    effective_owned_count + len(missing_items), canonical_total
                 )
                 pct = (
-                    int((len(owned_books) / total_known) * 100)
+                    min(100, int((effective_owned_count / total_known) * 100))
                     if total_known
                     else 100
                 )
-                if not has_gemini:
+                if not has_gemini and not mam_volumes:
                     status = "unconfigured"
                 elif missing_items:
                     status = "incomplete"
@@ -260,6 +892,7 @@ class NextChapterService:
 
             recs = ai_recommendations or cached.get("recommendations", [])
             state = {
+                "schema_version": STATE_SCHEMA_VERSION,
                 "series": [se.to_dict() for se in series_entries],
                 "missing_count": total_missing,
                 "complete_count": complete_count,
