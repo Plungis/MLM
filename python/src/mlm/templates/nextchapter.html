@@ -4,10 +4,16 @@
   <div>
     <p class="eyebrow">MyAnonaSuite / Discovery &amp; Completion</p>
     <h1>NextChapter Hub</h1>
-    <p class="subtitle">Inspect library series, discover missing books &amp; sequels, and find recommendations powered by Gemini AI and MyAnonamouse.</p>
+    <p class="subtitle">Inspect library series, discover missing books &amp; sequels, track qBittorrent downloads, and curate your reading list.</p>
   </div>
   <div class="nextchapter-actions">
     <button class="button primary btn-primary-nc" type="button" data-nc-action="scan">⟳ Scan Series Now</button>
+    {% if nextchapter_view in ["series", "missing"] %}
+    <button class="button btn-outline-nc" type="button" data-nc-action="refresh-qbit" title="Sync live download progress and file names from qBittorrent">🔄 Sync qBittorrent</button>
+    {% endif %}
+    {% if nextchapter_view == "revisit" %}
+    <button class="button btn-outline-nc" type="button" data-nc-action="recheck-all" title="Search MyAnonamouse for all books currently marked Unable to Find">🔎 Re-Check Watchlist on MAM ({{ state.unable_to_find_count or 0 }})</button>
+    {% endif %}
     {% if nextchapter_view == "recommendations" %}
     <button class="button btn-outline-nc" type="button" data-nc-action="refresh-recs"><span class="ai-badge">AI</span> Refresh Recommendations</button>
     {% endif %}
@@ -15,10 +21,21 @@
 </header>
 
 <nav class="nextchapter-tabs" aria-label="NextChapter pages">
-  <a class="{% if nextchapter_view == 'series' %}active{% endif %}" href="/suite/nextchapter/series">Series Hub</a>
-  <a class="{% if nextchapter_view == 'missing' %}active{% endif %}" href="/suite/nextchapter/missing">Missing Volumes</a>
-  <a class="{% if nextchapter_view == 'recommendations' %}active{% endif %}" href="/suite/nextchapter/recommendations">Recommendations &amp; AI</a>
-  <a class="{% if nextchapter_view == 'settings' %}active{% endif %}" href="/suite/nextchapter/settings">Settings &amp; Keys</a>
+  <a class="{% if nextchapter_view == 'series' %}active{% endif %}" href="/suite/nextchapter/series">
+    Series Hub <span class="nc-tab-badge">{{ state.total_series or 0 }}</span>
+  </a>
+  <a class="{% if nextchapter_view == 'missing' %}active{% endif %}" href="/suite/nextchapter/missing">
+    Missing Volumes <span class="nc-tab-badge {% if state.missing_count %}alert{% endif %}" data-nc-count="missing">{{ state.missing_count or 0 }}</span>
+  </a>
+  <a class="{% if nextchapter_view == 'revisit' %}active{% endif %}" href="/suite/nextchapter/revisit">
+    Revisit &amp; Watchlist <span class="nc-tab-badge {% if state.unable_to_find_count %}warn{% endif %}" data-nc-count="dismissed">{{ state.dismissed_count or 0 }}</span>
+  </a>
+  <a class="{% if nextchapter_view == 'recommendations' %}active{% endif %}" href="/suite/nextchapter/recommendations">
+    Recommendations &amp; AI
+  </a>
+  <a class="{% if nextchapter_view == 'settings' %}active{% endif %}" href="/suite/nextchapter/settings">
+    Settings &amp; Keys
+  </a>
 </nav>
 
 <section class="metric-grid nextchapter-metrics">
@@ -28,20 +45,29 @@
     <span class="metric-help">in local library &amp; ABS</span>
   </article>
   <article class="metric">
-    <span class="metric-label">Missing Volumes</span>
-    <strong class="metric-value" style="color: {% if state.missing_count %}#fb7185{% else %}#34d399{% endif %};">{{ state.missing_count or 0 }}</strong>
-    <span class="metric-help">volume gaps detected</span>
+    <span class="metric-label">Active Missing</span>
+    <strong class="metric-value" data-nc-metric="missing" style="color: {% if state.missing_count %}#fb7185{% else %}#34d399{% endif %};">{{ state.missing_count or 0 }}</strong>
+    <span class="metric-help">
+      {% if state.queued_count %}
+      <span style="color: #38bdf8; font-weight: 600;" data-nc-metric="queued">✓ {{ state.queued_count }} queued in qBittorrent</span>
+      {% else %}
+      <span data-nc-metric="queued">volume gaps to review</span>
+      {% endif %}
+    </span>
   </article>
   <article class="metric">
     <span class="metric-label">Complete Series</span>
-    <strong class="metric-value" style="color: #34d399;">{{ state.complete_count or 0 }}</strong>
-    <span class="metric-help">no gaps detected</span>
+    <strong class="metric-value" data-nc-metric="complete" style="color: #34d399;">{{ state.complete_count or 0 }}</strong>
+    <span class="metric-help">all wanted books owned</span>
   </article>
-  <article class="metric">
-    <span class="metric-label">AI Recommendations</span>
-    <strong class="metric-value" style="color: #a855f7;">{{ (state.recommendations | length) if state.recommendations else 0 }}</strong>
-    <span class="metric-help">tailored to your library</span>
-  </article>
+  <a href="/suite/nextchapter/revisit" class="metric" style="text-decoration: none; cursor: pointer; transition: border-color 0.15s;" title="Open Revisit &amp; Watchlist Hub">
+    <span class="metric-label">Revisit &amp; Watchlist →</span>
+    <strong class="metric-value" data-nc-metric="dismissed" style="color: #f59e0b;">{{ state.dismissed_count or 0 }}</strong>
+    <span class="metric-help">
+      <span data-nc-metric="unable">{{ state.unable_to_find_count or 0 }}</span> unable to find &bull;
+      <span data-nc-metric="not_wanted">{{ state.not_wanted_count or 0 }}</span> skipped
+    </span>
+  </a>
 </section>
 
 {% if not settings.gemini_api_key and nextchapter_view != "settings" %}
@@ -51,7 +77,7 @@
     <div class="gemini-setup-title">Google Gemini API Key Required for Series Analysis &amp; Sequel Discovery</div>
     <p class="gemini-setup-desc">
       Regular expressions struggle to understand what titles actually mean (subtitles, unnumbered novellas, or upcoming sequels).
-      NextChapter uses Google Gemini 2.5 Flash to intelligently evaluate the canonical order of your book series, detect missing books by name, and discover newly released sequels.
+      NextChapter combines MyAnonamouse's ground-truth catalog with Google Gemini 2.5 Flash to evaluate canonical reading order, detect missing books by name, and discover newly released sequels.
     </p>
     <div class="gemini-steps-grid">
       <div class="gemini-step">
@@ -95,7 +121,7 @@
 
 <div class="series-list">
   {% for s in state.series %}
-  <article class="series-card" data-status="{{ s.status }}">
+  <article class="series-card" data-status="{{ s.status }}" data-series-card="{{ s.series_name }}">
     <div class="series-card-header">
       <div class="series-title-block">
         <h3>{{ s.series_name }}</h3>
@@ -109,6 +135,21 @@
             {{ s.percent_complete }}% Complete ({{ s.owned_count }}/{{ s.total_known_count }})
           {% endif %}
         </span>
+        {% if s.queued_count %}
+        <span class="chip" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4);">
+          ✓ {{ s.queued_count }} Queued
+        </span>
+        {% endif %}
+        {% if s.unable_to_find_count %}
+        <a href="/suite/nextchapter/revisit?tab=unable_to_find" class="chip" style="background: rgba(245, 158, 11, 0.18); color: #fbbf24; text-decoration: none;" title="View Unable to Find books in Revisit Hub">
+          🕵️ {{ s.unable_to_find_count }} Watchlist
+        </a>
+        {% endif %}
+        {% if s.not_wanted_count %}
+        <a href="/suite/nextchapter/revisit?tab=not_wanted" class="chip" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8; text-decoration: none;" title="View Skipped books in Revisit Hub">
+          🚫 {{ s.not_wanted_count }} Skipped
+        </a>
+        {% endif %}
         <button class="btn btn-sm btn-outline-nc" type="button" data-nc-browse-mam data-mode="series" data-series="{{ s.series_name }}" data-author="{{ s.authors | join(', ') if s.authors else '' }}" title="Browse all torrents in this series on MAM">
           📚 Series on MAM
         </button>
@@ -118,6 +159,9 @@
         </button>
         {% endif %}
         {% if s.missing_volumes %}
+        <button class="btn btn-sm btn-outline-nc" type="button" data-nc-skip-series data-series="{{ s.series_name }}" title="Mark all remaining missing volumes in this series as Not Wanted" style="color: #94a3b8; border-color: rgba(148, 163, 184, 0.35);">
+          🚫 Skip Remaining
+        </button>
         <button class="btn btn-sm btn-primary-nc" type="button" data-nc-queue-all data-series="{{ s.series_name }}">
           Queue All Missing ({{ s.missing_volumes | length }})
         </button>
@@ -144,31 +188,115 @@
 
     {% if s.missing_volumes %}
     <div class="volumes-section" style="border-top-color: rgba(244, 63, 94, 0.2);">
-      <div class="volumes-label" style="color: #fb7185;">Missing Books / Volume Gaps ({{ s.missing_volumes | length }})</div>
+      <div class="volumes-label" style="color: #fb7185;">Missing Books &amp; Active Queue ({{ s.missing_volumes | length }})</div>
       <div class="missing-volumes-grid">
         {% for m in s.missing_volumes %}
-        <div class="missing-vol-card">
+        <div class="missing-vol-card {% if m.status == 'queued' %}is-queued{% endif %}"
+             data-vol-card
+             data-disp-key="{{ m.disposition_key }}"
+             data-series="{{ s.series_name }}"
+             data-volume="{{ m.volume_number }}"
+             data-title="{{ m.title }}"
+             data-author="{{ m.author or (s.authors | join(', ')) }}"
+             data-status="{{ m.status }}">
+          <div class="missing-vol-status-banner" data-vol-banner style="{% if m.status != 'queued' %}display: none;{% endif %}">
+            <span class="queued-check-badge">✓ QUEUED</span>
+            <span class="queued-state-text" data-qbit-label>{{ m.qbit_state_label or 'Queued for Download' }}</span>
+            {% if m.queued_mam_id %}
+            <a href="https://www.myanonamouse.net/t/{{ m.queued_mam_id }}" target="_blank" rel="noreferrer" class="queued-mam-link" data-qbit-mam-link>#{{ m.queued_mam_id }} ↗</a>
+            {% else %}
+            <a href="#" target="_blank" rel="noreferrer" class="queued-mam-link" data-qbit-mam-link style="display: none;"></a>
+            {% endif %}
+          </div>
+
           <div class="missing-vol-info">
             {% if m.cover_url %}
             <img class="missing-vol-cover" src="{{ m.cover_url }}" alt="Cover" loading="lazy">
             {% else %}
-            <div class="missing-vol-cover" style="display:flex;align-items:center;justify-content:center;color:#64748b;font-weight:bold;">#{{ m.volume_number }}</div>
+            <div class="missing-vol-cover" style="display:flex;align-items:center;justify-content:center;color:{% if m.status == 'queued' %}#34d399{% else %}#64748b{% endif %};font-weight:bold;" data-vol-badge>#{{ m.volume_number }}</div>
             {% endif %}
             <div class="missing-vol-meta">
-              <span class="missing-vol-num">Book #{{ m.volume_number }}</span>
+              <span class="missing-vol-num" style="{% if m.status == 'queued' %}color: #34d399;{% endif %}">Book #{{ m.volume_number }}</span>
               <h4 class="missing-vol-title">{{ m.title or (s.series_name ~ ' #' ~ m.volume_number) }}</h4>
               {% if m.published_date %}<span class="missing-vol-date">{{ m.published_date }}</span>{% endif %}
             </div>
           </div>
-          <div class="missing-vol-actions">
-            <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" style="width: 100%;">
-              Search &amp; Queue on MAM
+
+          <div class="qbit-tracker-box" data-qbit-tracker style="{% if m.status != 'queued' %}display: none;{% endif %}">
+            <div class="qbit-progress-track">
+              <div class="qbit-progress-fill" data-qbit-bar style="width: {{ m.qbit_progress or 0 }}%;"></div>
+            </div>
+            <div class="qbit-file-row">
+              <span class="qbit-file-name" data-qbit-file title="{{ m.qbit_save_path or m.qbit_file or m.queued_title }}">
+                📄 {{ m.qbit_file or m.queued_title or 'Waiting for qBittorrent...' }}
+              </span>
+              <span class="qbit-speed" data-qbit-speed>{{ m.qbit_dlspeed or '' }}</span>
+            </div>
+          </div>
+
+          <div class="missing-vol-actions-stack">
+            <button class="btn btn-sm {% if m.status == 'queued' %}btn-queued-nc{% else %}btn-outline-nc{% endif %}"
+                    type="button"
+                    data-nc-download
+                    data-series="{{ s.series_name }}"
+                    data-volume="{{ m.volume_number }}"
+                    data-title="{{ m.title }}"
+                    data-author="{{ m.author or (s.authors | join(', ')) }}"
+                    style="width: 100%;">
+              {% if m.status == 'queued' %}
+              ✓ Queued (View / Change Release)
+              {% else %}
+              🔎 Search &amp; Queue on MAM
+              {% endif %}
             </button>
+            <div class="missing-vol-triage-row">
+              <button class="btn-triage unable" type="button" data-nc-mark="unable_to_find" data-disp-key="{{ m.disposition_key }}" data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" title="Mark as Unable to Find and add to Watchlist">
+                🕵️ Unable to Find
+              </button>
+              <button class="btn-triage not-wanted" type="button" data-nc-mark="not_wanted" data-disp-key="{{ m.disposition_key }}" data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" title="Mark as Not Needed / Not Wanted">
+                🚫 Not Wanted
+              </button>
+            </div>
           </div>
         </div>
         {% endfor %}
       </div>
     </div>
+    {% endif %}
+
+    {% if s.dismissed_volumes %}
+    <details class="dismissed-series-drawer">
+      <summary>
+        <span>👁️ {{ s.dismissed_volumes | length }} Triaged Volume{{ 's' if (s.dismissed_volumes | length) != 1 else '' }} Hidden ({{ s.unable_to_find_count }} Unable to Find, {{ s.not_wanted_count }} Not Wanted)</span>
+        <span class="drawer-hint">Click to review or restore</span>
+      </summary>
+      <div class="dismissed-mini-list">
+        {% for dm in s.dismissed_volumes %}
+        <div class="dismissed-mini-row" data-disp-key="{{ dm.disposition_key }}">
+          <div class="dismissed-mini-info">
+            <span class="disp-badge {{ dm.status }}">
+              {% if dm.status == 'unable_to_find' %}🕵️ Unable to Find{% else %}🚫 Not Wanted{% endif %}
+            </span>
+            <strong>#{{ dm.volume_number }}: {{ dm.title or (s.series_name ~ ' #' ~ dm.volume_number) }}</strong>
+            {% if dm.disposition_reason %}
+            <span class="disp-reason-chip">{{ dm.disposition_reason }}</span>
+            {% endif %}
+            {% if dm.disposition_notes %}
+            <span class="muted" style="font-size: 0.78rem;">— "{{ dm.disposition_notes }}"</span>
+            {% endif %}
+          </div>
+          <div class="dismissed-mini-actions">
+            <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ dm.volume_number }}" data-title="{{ dm.title }}" data-author="{{ dm.author or (s.authors | join(', ')) }}">
+              🔎 Search MAM
+            </button>
+            <button class="btn btn-sm btn-outline-nc" type="button" data-nc-restore data-disp-key="{{ dm.disposition_key }}" data-series="{{ s.series_name }}" data-volume="{{ dm.volume_number }}" data-title="{{ dm.title }}">
+              ↩ Restore
+            </button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
     {% endif %}
   </article>
   {% else %}
@@ -180,41 +308,246 @@
 
 {% elif nextchapter_view == "missing" %}
 <div class="panel panel-body">
-  <div class="panel-heading-row" style="margin-bottom: 1.5rem;">
+  <div class="panel-heading-row" style="margin-bottom: 1.25rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
     <div>
-      <p class="eyebrow">Gap Audit</p>
+      <p class="eyebrow">Gap Audit &amp; Queue Tracker</p>
       <h2>All Detected Missing Volumes</h2>
-      <p class="muted">List of every detected missing book or sequel across all your series.</p>
+      <p class="muted">Queue missing books from MAM, track live qBittorrent files, or mark volumes as <strong>Not Wanted</strong> or <strong>Unable to Find</strong>.</p>
+    </div>
+    <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+      <input type="search" id="nc-missing-filter-input" placeholder="Filter by series, title, or author..." style="padding: 0.5rem 0.85rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-size: 0.85rem; min-width: 240px;">
+      <a href="/suite/nextchapter/revisit" class="button btn-outline-nc" style="font-size: 0.85rem; padding: 0.5rem 0.9rem;">
+        👁️ Revisit Hidden ({{ state.dismissed_count or 0 }}) →
+      </a>
     </div>
   </div>
 
-  <div class="missing-volumes-grid" style="grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));">
-    {% set missing_count = 0 %}
+  <div class="series-filters" style="margin-bottom: 1.25rem;">
+    <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 0.35rem;">Show:</span>
+    <button type="button" class="active" data-filter-missing="all">All Active &amp; Queued ({{ (state.missing_count or 0) + (state.queued_count or 0) }})</button>
+    <button type="button" data-filter-missing="missing">Needs Action ({{ state.missing_count or 0 }})</button>
+    <button type="button" data-filter-missing="queued">✓ Queued / Downloading ({{ state.queued_count or 0 }})</button>
+  </div>
+
+  <div class="missing-volumes-grid" id="nc-missing-grid" style="grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));">
+    {% set ns = namespace(rendered=0) %}
     {% for s in state.series %}
       {% for m in s.missing_volumes %}
-      <div class="missing-vol-card" style="background: var(--surface, #1e293b); padding: 1rem;">
+      {% set ns.rendered = ns.rendered + 1 %}
+      <div class="missing-vol-card {% if m.status == 'queued' %}is-queued{% endif %}"
+           style="background: var(--surface, #1e293b); padding: 1rem;"
+           data-vol-card
+           data-disp-key="{{ m.disposition_key }}"
+           data-series="{{ s.series_name }}"
+           data-volume="{{ m.volume_number }}"
+           data-title="{{ m.title }}"
+           data-author="{{ m.author or (s.authors | join(', ')) }}"
+           data-status="{{ m.status }}">
+        <div class="missing-vol-status-banner" data-vol-banner style="{% if m.status != 'queued' %}display: none;{% endif %}">
+          <span class="queued-check-badge">✓ QUEUED</span>
+          <span class="queued-state-text" data-qbit-label>{{ m.qbit_state_label or 'Queued for Download' }}</span>
+          {% if m.queued_mam_id %}
+          <a href="https://www.myanonamouse.net/t/{{ m.queued_mam_id }}" target="_blank" rel="noreferrer" class="queued-mam-link" data-qbit-mam-link>#{{ m.queued_mam_id }} ↗</a>
+          {% else %}
+          <a href="#" target="_blank" rel="noreferrer" class="queued-mam-link" data-qbit-mam-link style="display: none;"></a>
+          {% endif %}
+        </div>
+
         <div class="missing-vol-info">
           {% if m.cover_url %}
           <img class="missing-vol-cover" style="width: 55px; height: 80px;" src="{{ m.cover_url }}" alt="Cover" loading="lazy">
           {% else %}
-          <div class="missing-vol-cover" style="width: 55px; height: 80px; display:flex;align-items:center;justify-content:center;color:#64748b;font-weight:bold;">#{{ m.volume_number }}</div>
+          <div class="missing-vol-cover" style="width: 55px; height: 80px; display:flex;align-items:center;justify-content:center;color:{% if m.status == 'queued' %}#34d399{% else %}#64748b{% endif %};font-weight:bold;" data-vol-badge>#{{ m.volume_number }}</div>
           {% endif %}
           <div class="missing-vol-meta">
-            <span class="missing-vol-num">{{ s.series_name }} #{{ m.volume_number }}</span>
+            <span class="missing-vol-num" style="{% if m.status == 'queued' %}color: #34d399;{% endif %}">{{ s.series_name }} #{{ m.volume_number }}</span>
             <h4 class="missing-vol-title">{{ m.title or (s.series_name ~ ' #' ~ m.volume_number) }}</h4>
             <span class="series-authors">{{ m.author or (s.authors | join(', ')) }}</span>
             {% if m.summary %}<p style="font-size: 0.75rem; color: #94a3b8; margin: 0.35rem 0 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">{{ m.summary }}</p>{% endif %}
           </div>
         </div>
-        <div class="missing-vol-actions">
-          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" style="width: 100%;">
-            Find on MAM &amp; 1-Click Queue
+
+        <div class="qbit-tracker-box" data-qbit-tracker style="{% if m.status != 'queued' %}display: none;{% endif %}">
+          <div class="qbit-progress-track">
+            <div class="qbit-progress-fill" data-qbit-bar style="width: {{ m.qbit_progress or 0 }}%;"></div>
+          </div>
+          <div class="qbit-file-row">
+            <span class="qbit-file-name" data-qbit-file title="{{ m.qbit_save_path or m.qbit_file or m.queued_title }}">
+              📄 {{ m.qbit_file or m.queued_title or 'Waiting for qBittorrent...' }}
+            </span>
+            <span class="qbit-speed" data-qbit-speed>{{ m.qbit_dlspeed or '' }}</span>
+          </div>
+        </div>
+
+        <div class="missing-vol-actions-stack">
+          <button class="btn btn-sm {% if m.status == 'queued' %}btn-queued-nc{% else %}btn-primary-nc{% endif %}"
+                  type="button"
+                  data-nc-download
+                  data-series="{{ s.series_name }}"
+                  data-volume="{{ m.volume_number }}"
+                  data-title="{{ m.title }}"
+                  data-author="{{ m.author or (s.authors | join(', ')) }}"
+                  style="width: 100%;">
+            {% if m.status == 'queued' %}
+            ✓ Queued (View / Change Release)
+            {% else %}
+            🔎 Find on MAM &amp; 1-Click Queue
+            {% endif %}
           </button>
+          <div class="missing-vol-triage-row">
+            <button class="btn-triage unable" type="button" data-nc-mark="unable_to_find" data-disp-key="{{ m.disposition_key }}" data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" title="Couldn't find a good release? Move to Watchlist to revisit later">
+              🕵️ Unable to Find
+            </button>
+            <button class="btn-triage not-wanted" type="button" data-nc-mark="not_wanted" data-disp-key="{{ m.disposition_key }}" data-series="{{ s.series_name }}" data-volume="{{ m.volume_number }}" data-title="{{ m.title }}" data-author="{{ m.author or (s.authors | join(', ')) }}" title="Don't want or need this volume? Hide from Missing Volumes">
+              🚫 Not Wanted
+            </button>
+          </div>
         </div>
       </div>
       {% endfor %}
     {% endfor %}
+    {% if ns.rendered == 0 %}
+    <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1rem;">
+      <p class="muted" style="font-size: 1rem; margin-bottom: 0.75rem;">No active missing volumes! All tracked series are complete or triaged.</p>
+      {% if state.dismissed_count %}
+      <a href="/suite/nextchapter/revisit" class="button btn-outline-nc">Review {{ state.dismissed_count }} Triaged Volume(s) in Watchlist / Skipped →</a>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
+</div>
+
+{% elif nextchapter_view == "revisit" %}
+<div class="panel panel-body">
+  <div class="panel-heading-row" style="margin-bottom: 1.25rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+    <div>
+      <p class="eyebrow">Triage Archive &amp; Availability Watchlist</p>
+      <h2>Revisit: Unable to Find &amp; Not Wanted</h2>
+      <p class="muted">Re-check MyAnonamouse availability for hard-to-find volumes, update notes, or restore skipped books back to Active Missing.</p>
+    </div>
+    <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+      <input type="search" id="nc-revisit-filter-input" placeholder="Search watchlist &amp; skipped books..." style="padding: 0.5rem 0.85rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-size: 0.85rem; min-width: 240px;">
+      <button class="button primary btn-primary-nc" type="button" data-nc-action="recheck-all">
+        🔎 Re-Check Watchlist on MAM ({{ state.unable_to_find_count or 0 }})
+      </button>
+    </div>
+  </div>
+
+  <div class="series-filters" style="margin-bottom: 1.5rem;">
+    <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 0.35rem;">Category:</span>
+    <button type="button" class="{% if nextchapter_tab not in ['unable_to_find', 'not_wanted'] %}active{% endif %}" data-filter-revisit="all">
+      All Triaged ({{ state.dismissed_count or 0 }})
+    </button>
+    <button type="button" class="{% if nextchapter_tab == 'unable_to_find' %}active{% endif %}" data-filter-revisit="unable_to_find">
+      🕵️ Unable to Find / Watchlist ({{ state.unable_to_find_count or 0 }})
+    </button>
+    <button type="button" class="{% if nextchapter_tab == 'not_wanted' %}active{% endif %}" data-filter-revisit="not_wanted">
+      🚫 Not Wanted / Skipped ({{ state.not_wanted_count or 0 }})
+    </button>
+  </div>
+
+  {% if state.dismissed_volumes %}
+  <div class="missing-volumes-grid" id="nc-revisit-grid" style="grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));">
+    {% for item in state.dismissed_volumes %}
+    <article class="revisit-card {% if item.status == 'unable_to_find' %}is-watchlist{% else %}is-skipped{% endif %} {% if item.mam_available_count and item.mam_available_count > 0 %}is-now-available{% endif %}"
+             data-revisit-card
+             data-disp-key="{{ item.disposition_key }}"
+             data-status="{{ item.status }}"
+             data-series="{{ item.series_name }}"
+             data-volume="{{ item.volume_number }}"
+             data-title="{{ item.title }}"
+             data-author="{{ item.author }}"
+             data-reason="{{ item.disposition_reason }}"
+             data-notes="{{ item.disposition_notes }}"
+             style="{% if nextchapter_tab in ['unable_to_find', 'not_wanted'] and item.status != nextchapter_tab %}display: none;{% endif %}">
+      <div class="revisit-card-top">
+        <span class="disp-badge {{ item.status }}">
+          {% if item.status == 'unable_to_find' %}
+          🕵️ Unable to Find
+          {% else %}
+          🚫 Not Wanted
+          {% endif %}
+        </span>
+        {% if item.disposition_reason %}
+        <span class="disp-reason-chip">{{ item.disposition_reason }}</span>
+        {% endif %}
+        <button type="button" class="btn-link-subtle" data-nc-edit-disp data-disp-key="{{ item.disposition_key }}" title="Change status, reason, or note" style="margin-left: auto;">
+          ✏️ Edit
+        </button>
+      </div>
+
+      <div class="missing-vol-info" style="margin-top: 0.6rem;">
+        {% if item.cover_url %}
+        <img class="missing-vol-cover" style="width: 52px; height: 76px;" src="{{ item.cover_url }}" alt="Cover" loading="lazy">
+        {% else %}
+        <div class="missing-vol-cover" style="width: 52px; height: 76px; display:flex;align-items:center;justify-content:center;color:#94a3b8;font-weight:bold;">
+          {% if item.volume_number %}#{{ item.volume_number }}{% else %}📚{% endif %}
+        </div>
+        {% endif %}
+        <div class="missing-vol-meta">
+          <span class="missing-vol-num" style="color: {% if item.status == 'unable_to_find' %}#fbbf24{% else %}#94a3b8{% endif %};">
+            {{ item.series_name }}{% if item.volume_number %} #{{ item.volume_number }}{% endif %}
+          </span>
+          <h4 class="missing-vol-title">{{ item.title or (item.series_name ~ ' #' ~ item.volume_number) }}</h4>
+          <span class="series-authors">{{ item.author or 'Unknown Author' }}</span>
+        </div>
+      </div>
+
+      {% if item.disposition_notes %}
+      <div class="revisit-note-box">
+        📝 <em>{{ item.disposition_notes }}</em>
+      </div>
+      {% endif %}
+
+      <div class="revisit-mam-status" data-revisit-mam-box>
+        {% if item.mam_available_count and item.mam_available_count > 0 and item.best_candidate %}
+        <div class="revisit-found-banner">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+            <strong style="color: #34d399; font-size: 0.82rem;">✨ Found on MAM ({{ item.mam_available_count }} release{{ 's' if item.mam_available_count != 1 else '' }})</strong>
+            <span style="color: #38bdf8; font-size: 0.75rem; font-weight: 600;">▲ {{ item.best_candidate.seeders }} seeders</span>
+          </div>
+          <div style="font-size: 0.8rem; color: #e2e8f0; margin-bottom: 0.45rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ item.best_candidate.title }}">
+            {{ item.best_candidate.title }}
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 0.75rem; color: #94a3b8;">{{ item.best_candidate.media_type | capitalize }} &bull; {{ item.best_candidate.size }}</span>
+            <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ item.best_candidate.mam_id }}" data-series="{{ item.series_name }}" data-volume="{{ item.volume_number }}" data-title="{{ item.title }}">
+              1-Click Queue
+            </button>
+          </div>
+        </div>
+        {% elif item.last_checked_at %}
+        <div class="revisit-checked-line">
+          <span>🔍 Checked on MAM &bull; 0 exact matches found</span>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="revisit-actions-row">
+        <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-series="{{ item.series_name }}" data-volume="{{ item.volume_number }}" data-title="{{ item.title }}" data-author="{{ item.author }}">
+          🔎 Search MAM
+        </button>
+        {% if item.status == 'unable_to_find' %}
+        <button class="btn btn-sm btn-outline-nc" type="button" data-nc-recheck-one="{{ item.disposition_key }}" title="Check if this book is now available on MAM">
+          🔄 Check Now
+        </button>
+        {% endif %}
+        <button class="btn btn-sm btn-outline-nc" type="button" data-nc-restore data-disp-key="{{ item.disposition_key }}" data-series="{{ item.series_name }}" data-volume="{{ item.volume_number }}" data-title="{{ item.title }}" style="margin-left: auto;" title="Restore back to Active Missing">
+          ↩ Restore
+        </button>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 3.5rem 1rem;">
+    <p style="font-size: 1.05rem; color: #f8fafc; font-weight: 600; margin-bottom: 0.5rem;">No volumes in Watchlist or Skipped yet</p>
+    <p class="muted" style="max-width: 520px; margin: 0 auto 1.25rem;">
+      When reviewing <a href="/suite/nextchapter/missing" style="color: #38bdf8; text-decoration: underline;">Missing Volumes</a> or <a href="/suite/nextchapter/series" style="color: #38bdf8; text-decoration: underline;">Series Hub</a>, click <strong>🕵️ Unable to Find</strong> or <strong>🚫 Not Wanted</strong> on any book to organize it here.
+    </p>
+    <a href="/suite/nextchapter/missing" class="button btn-primary-nc">Go to Missing Volumes →</a>
+  </div>
+  {% endif %}
 </div>
 
 {% elif nextchapter_view == "recommendations" %}
@@ -286,7 +619,7 @@
           <button class="btn btn-sm btn-outline-nc" type="button" data-nc-download data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}" data-title="{{ r.title }}" data-author="{{ r.author }}">
             Browse Releases
           </button>
-          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ r.best_candidate.mam_id }}" data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}">
+          <button class="btn btn-sm btn-primary-nc" type="button" data-nc-download data-mam-id="{{ r.best_candidate.mam_id }}" data-series="{{ r.series_name or r.title }}" data-volume="{{ r.volume }}" data-title="{{ r.title }}">
             1-Click Queue
           </button>
         </div>
@@ -321,7 +654,7 @@
     <span>✨</span> How to Get Your Free Google Gemini API Key
   </h3>
   <p style="color: #cbd5e1; font-size: 0.92rem; line-height: 1.55;">
-    NextChapter is powered exclusively by <strong>Google Gemini Flash</strong>. Regular expressions fail to understand what book titles actually mean (subtitles, unnumbered novellas, spin-offs, and future sequels). Gemini uses comprehensive literary intelligence to analyze your series, map real volume numbers to official titles, and find missing books.
+    NextChapter is powered by <strong>MyAnonamouse Catalog Grounding + Google Gemini Flash</strong>. Regular expressions fail to understand what book titles actually mean (subtitles, unnumbered novellas, spin-offs, and future sequels). Gemini uses comprehensive literary intelligence alongside your MAM catalog to analyze your series, map real volume numbers to official titles, and find missing books.
   </p>
   <ol style="color: #e2e8f0; font-size: 0.9rem; padding-left: 1.25rem; line-height: 1.6; margin-bottom: 1rem;">
     <li>Open <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style="color: #38bdf8; font-weight: 600; text-decoration: underline;">Google AI Studio API Keys (aistudio.google.com/app/apikey) ↗</a> in a new tab.</li>

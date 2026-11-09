@@ -1467,7 +1467,13 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         raise HTTPException(404, "unknown MAM-Spender action")
 
 
-    nextchapter_views = {"series", "missing", "recommendations", "settings"}
+    nextchapter_views = {
+        "series",
+        "missing",
+        "revisit",
+        "recommendations",
+        "settings",
+    }
 
     def nextchapter_service() -> NextChapterService:
         services = getattr(app.state, "services", None)
@@ -1487,10 +1493,12 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         labels = {
             "series": "Series Hub",
             "missing": "Missing Volumes",
+            "revisit": "Revisit & Watchlist",
             "recommendations": "Recommendations",
             "settings": "Settings",
         }
         saved = request.query_params.get("saved") == "1"
+        active_tab = request.query_params.get("tab", "all").strip().casefold()
         return templates.TemplateResponse(
             request,
             "nextchapter.html",
@@ -1499,6 +1507,7 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
                 title=f"NextChapter {labels[normalized]}",
                 suite_module="nextchapter",
                 nextchapter_view=normalized,
+                nextchapter_tab=active_tab,
                 state=state,
                 settings=settings_data,
                 saved=saved,
@@ -1575,8 +1584,16 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         mam_id = int(payload.get("mam_id", 0))
         series_name = str(payload.get("series_name", ""))
         volume = payload.get("volume")
+        title = payload.get("title")
         nc = nextchapter_service()
-        return await nc.queue_download(mam_id, series_name, volume)
+        res = await nc.queue_download(
+            mam_id, series_name, volume, title=title
+        )
+        if res.get("ok") and hasattr(app.state, "services"):
+            snapshot_cache["expires"] = 0.0
+            with suppress(Exception):
+                asyncio.create_task(app.state.services.trigger("downloader"))
+        return res
 
     @app.post("/api/nextchapter/series/download-all")
     async def nextchapter_api_download_all(request: Request) -> dict:
@@ -1585,7 +1602,90 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         payload = await request.json()
         series_name = str(payload.get("series_name", ""))
         nc = nextchapter_service()
-        return await nc.queue_all_missing(series_name)
+        res = await nc.queue_all_missing(series_name)
+        if res.get("ok") and res.get("queued_count", 0) > 0:
+            snapshot_cache["expires"] = 0.0
+            if hasattr(app.state, "services"):
+                with suppress(Exception):
+                    asyncio.create_task(
+                        app.state.services.trigger("downloader")
+                    )
+        return res
+
+    @app.get("/api/nextchapter/dispositions")
+    async def nextchapter_api_get_dispositions(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        return nc.get_dispositions()
+
+    @app.post("/api/nextchapter/dispositions")
+    async def nextchapter_api_set_disposition(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        payload = await request.json()
+        nc = nextchapter_service()
+        return nc.set_volume_disposition(
+            series_name=str(payload.get("series_name") or ""),
+            volume_number=str(payload.get("volume_number") or ""),
+            title=str(payload.get("title") or ""),
+            author=str(payload.get("author") or ""),
+            status=str(payload.get("status") or "not_wanted"),
+            reason=str(payload.get("reason") or ""),
+            notes=str(payload.get("notes") or ""),
+            cover_url=str(payload.get("cover_url") or ""),
+            summary=str(payload.get("summary") or ""),
+            disposition_key=str(payload.get("disposition_key") or ""),
+        )
+
+    @app.post("/api/nextchapter/dispositions/series")
+    async def nextchapter_api_set_series_disposition(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        payload = await request.json()
+        nc = nextchapter_service()
+        return nc.set_series_disposition(
+            series_name=str(payload.get("series_name") or ""),
+            status=str(payload.get("status") or "not_wanted"),
+            reason=str(payload.get("reason") or ""),
+            notes=str(payload.get("notes") or ""),
+        )
+
+    @app.post("/api/nextchapter/dispositions/restore")
+    async def nextchapter_api_restore_disposition(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        payload = await request.json()
+        nc = nextchapter_service()
+        return nc.restore_volume_disposition(
+            disposition_key=str(payload.get("disposition_key") or ""),
+            series_name=str(payload.get("series_name") or ""),
+            volume_number=str(payload.get("volume_number") or ""),
+            title=str(payload.get("title") or ""),
+        )
+
+    @app.post("/api/nextchapter/dispositions/recheck")
+    async def nextchapter_api_recheck_dispositions(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        disposition_key = ""
+        try:
+            payload = await request.json()
+            if isinstance(payload, dict):
+                disposition_key = str(payload.get("disposition_key") or "")
+        except Exception:
+            pass
+        nc = nextchapter_service()
+        return await nc.recheck_unable_to_find(
+            disposition_key=disposition_key
+        )
+
+    @app.get("/api/nextchapter/queue-status")
+    async def nextchapter_api_queue_status(request: Request) -> dict:
+        if not local_request(request):
+            raise HTTPException(403, "NextChapter controls are local-only")
+        nc = nextchapter_service()
+        return await nc.get_live_queue_status()
 
     @app.post("/api/nextchapter/settings")
     async def nextchapter_api_settings(

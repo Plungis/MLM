@@ -127,7 +127,9 @@ async def select_row(
     force_download = bool(
         rule.get("force_download")
         or rule.get("allow_duplicate")
-        or rule.get("name", "").startswith(("manual", "series:", "request:"))
+        or rule.get("name", "").startswith(
+            ("manual", "series:", "request:", "nextchapter:")
+        )
     )
     if not force_download and repository.has_mam_id(torrent_id):
         return False

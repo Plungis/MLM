@@ -705,3 +705,378 @@
   color: #cbd5e1;
   border: 1px solid rgba(100, 116, 139, 0.35);
 }
+
+/* Tab Badges */
+.nc-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  margin-left: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.nc-tab-badge.alert {
+  background: rgba(244, 63, 94, 0.22);
+  color: #fb7185;
+}
+
+.nc-tab-badge.warn {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+}
+
+/* Queued & qBittorrent Live Tracker on Volume Cards */
+.missing-vol-card.is-queued {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, rgba(15, 23, 42, 0.75) 100%);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.18);
+}
+
+.missing-vol-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  font-size: 0.75rem;
+}
+
+.queued-check-badge {
+  background: #10b981;
+  color: #06281e;
+  font-weight: 800;
+  font-size: 0.68rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.queued-state-text {
+  color: #a7f3d0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-mam-link {
+  margin-left: auto;
+  color: #38bdf8;
+  font-weight: 600;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.queued-mam-link:hover {
+  text-decoration: underline;
+}
+
+.qbit-tracker-box {
+  background: rgba(11, 17, 32, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.qbit-progress-track {
+  width: 100%;
+  height: 6px;
+  background: #1e293b;
+  border-radius: 9999px;
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
+
+.qbit-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #38bdf8);
+  border-radius: 9999px;
+  transition: width 0.35s ease;
+}
+
+.qbit-file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+}
+
+.qbit-file-name {
+  color: #cbd5e1;
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qbit-speed {
+  color: #38bdf8;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.btn-queued-nc {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-queued-nc:hover {
+  background: rgba(16, 185, 129, 0.28);
+  border-color: #34d399;
+}
+
+/* Triage Action Buttons on Missing Volume Cards */
+.missing-vol-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: auto;
+}
+
+.missing-vol-triage-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.btn-triage {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #94a3b8;
+  border-radius: 5px;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.btn-triage.unable:hover {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+}
+
+.btn-triage.not-wanted:hover {
+  background: rgba(244, 63, 94, 0.14);
+  border-color: rgba(244, 63, 94, 0.45);
+  color: #fb7185;
+}
+
+/* Collapsible Hidden Volumes Drawer on Series Cards */
+.dismissed-series-drawer {
+  margin-top: 1rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.22);
+  padding-top: 0.75rem;
+}
+
+.dismissed-series-drawer summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: #94a3b8;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+
+.dismissed-series-drawer summary:hover {
+  color: #e2e8f0;
+}
+
+.drawer-hint {
+  font-size: 0.75rem;
+  color: #38bdf8;
+}
+
+.dismissed-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.dismissed-mini-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.83rem;
+}
+
+.dismissed-mini-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dismissed-mini-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* Disposition Badges & Revisit Cards */
+.disp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.disp-badge.unable_to_find {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.disp-badge.not_wanted {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.disp-reason-chip {
+  font-size: 0.73rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.revisit-card {
+  background: var(--surface, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.revisit-card.is-watchlist {
+  border-left: 3px solid #f59e0b;
+}
+
+.revisit-card.is-skipped {
+  border-left: 3px solid #64748b;
+}
+
+.revisit-card.is-now-available {
+  border-color: rgba(16, 185, 129, 0.6);
+  border-left: 4px solid #10b981;
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.09) 0%, rgba(30, 41, 59, 0.95) 100%);
+}
+
+.revisit-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.btn-link-subtle {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.btn-link-subtle:hover {
+  color: #38bdf8;
+  text-decoration: underline;
+}
+
+.revisit-note-box {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  border-left: 2px solid #6366f1;
+  padding: 0.4rem 0.65rem;
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 0.65rem;
+}
+
+.revisit-found-banner {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.38);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.revisit-checked-line {
+  font-size: 0.76rem;
+  color: #64748b;
+  margin-bottom: 0.65rem;
+}
+
+.revisit-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Quick Reason & Note Modal */
+.nc-reason-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.65rem 0 1rem 0;
+}
+
+.nc-reason-pill {
+  background: #162032;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  padding: 0.4rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nc-reason-pill:hover,
+.nc-reason-pill.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  font-weight: 600;
+}

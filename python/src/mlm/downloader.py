@@ -167,7 +167,9 @@ async def grab_selected_torrents(
         is_manual = bool(
             selected.get("force_download")
             or selected.get("grabber") == "manual"
-            or str(selected.get("grabber", "")).startswith(("series:", "request:"))
+            or str(selected.get("grabber", "")).startswith(
+                ("series:", "request:", "nextchapter:")
+            )
             or selected.get("source") in {"manual", "request"}
         )
         diagnostic_context: dict[str, object] = {

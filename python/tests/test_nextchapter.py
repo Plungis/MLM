@@ -685,3 +685,234 @@ async def test_scan_series_grounds_titles_with_mam_and_rejects_hallucinations(
         assert all("Schism of Souls" not in m["title"] for m in missing)
 
 
+@pytest.mark.asyncio
+async def test_dispositions_revisit_and_qbit_queue_tracking(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "test_disp_qbit.db"
+    ensure_database(db_path)
+    repo = Repository(db_path)
+
+    repo.upsert_abs_books(
+        [
+            {
+                "id": "abs-s1",
+                "title": "A Conjuring of Ravens",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "sequence": "1"}
+                ],
+                "library_path": "/books/Sorcery 1",
+            },
+            {
+                "id": "abs-s2",
+                "title": "A Binding of Blood",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "sequence": "2"}
+                ],
+                "library_path": "/books/Sorcery 2",
+            },
+        ]
+    )
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        'mam_id = "test_mam_id"\n'
+        "[[qbittorrent]]\n"
+        'url = "http://127.0.0.1:8080"\n'
+        'username = "admin"\n'
+        'password = "secret"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_file)
+
+    mam_mock = AsyncMock()
+    mam_mock.search.return_value = {
+        "found": 4,
+        "data": [
+            {
+                "id": 701,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 1: "
+                    "A Conjuring of Ravens"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["1"]}
+                ],
+                "size": "500 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 25,
+                "free": True,
+            },
+            {
+                "id": 702,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 2: A Binding of Blood"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["2"]}
+                ],
+                "size": "520 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 22,
+                "free": True,
+            },
+            {
+                "id": 703,
+                "title": (
+                    "A Practical Guide to Sorcery, Book 3: "
+                    "A Sacrifice of Light"
+                ),
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["3"]}
+                ],
+                "size": "550 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 30,
+                "free": True,
+            },
+            {
+                "id": 704,
+                "title": "A Foreboding of Woe (A Practical Guide to Sorcery #4)",
+                "authors": ["Azalea Ellis"],
+                "series": [
+                    {"name": "A Practical Guide to Sorcery", "entries": ["4"]}
+                ],
+                "size": "580 MB",
+                "filetypes": ["m4b"],
+                "media_type": "audiobook",
+                "seeders": 28,
+                "free": True,
+            },
+        ],
+    }
+    mam_mock.get_torrent_info_by_id.return_value = {
+        "id": 703,
+        "title": "A Practical Guide to Sorcery, Book 3: A Sacrifice of Light",
+        "dl": "dl_link_703",
+        "vip": 0,
+        "free": 1,
+        "personal_freeleech": 0,
+        "fl_vip": 0,
+        "size": "550 MB",
+        "numfiles": 1,
+        "filetype": "m4b",
+        "category": 13,
+        "main_cat": 13,
+        "author_info": '{"1": "Azalea Ellis"}',
+        "narrator_info": "{}",
+        "series_info": '{"1": ["A Practical Guide to Sorcery", "3", 3.0]}',
+    }
+
+    service = NextChapterService(cfg, repo, mam_mock)
+    await service.scan_series(force=True)
+
+    # Initially Books #3 and #4 are missing
+    state = service.get_cached_state()
+    assert state["missing_count"] == 2
+
+    # 1. Mark Book #4 as "not_wanted" and Book #3 as "unable_to_find"
+    res_nw = service.set_volume_disposition(
+        series_name="A Practical Guide to Sorcery",
+        volume_number="4",
+        title="A Foreboding of Woe",
+        status="not_wanted",
+        reason="Already read / Own elsewhere",
+        notes="Read on Kindle",
+    )
+    assert res_nw["ok"] is True
+    assert res_nw["counts"]["not_wanted_count"] == 1
+    assert res_nw["counts"]["missing_count"] == 1
+
+    res_utf = service.set_volume_disposition(
+        series_name="A Practical Guide to Sorcery",
+        volume_number="3",
+        title="A Sacrifice of Light",
+        status="unable_to_find",
+        reason="Wrong format",
+        notes="Waiting for M4B",
+    )
+    assert res_utf["ok"] is True
+    assert res_utf["counts"]["unable_to_find_count"] == 1
+    assert res_utf["counts"]["missing_count"] == 0
+
+    # Verify Re-Check on MAM finds Book #3
+    recheck_res = await service.recheck_unable_to_find()
+    assert recheck_res["ok"] is True
+    assert recheck_res["checked_count"] == 1
+    assert recheck_res["found_count"] == 1
+    assert recheck_res["items"][0]["mam_available_count"] >= 1
+    assert recheck_res["items"][0]["best_candidate"]["mam_id"] == 703
+
+    # 2. Queue Book #3 -> should auto-clear unable_to_find and mark it queued
+    q_res = await service.queue_download(
+        703,
+        "A Practical Guide to Sorcery",
+        "3",
+        title="A Sacrifice of Light",
+    )
+    assert q_res["ok"] is True
+    assert q_res["counts"]["unable_to_find_count"] == 0
+    assert q_res["counts"]["queued_count"] == 1
+
+    # 3. Simulate qBittorrent live tracking
+    with (
+        patch("mlm.modules.nextchapter.service.QbitClient.login", new=AsyncMock()),
+        patch(
+            "mlm.modules.nextchapter.service.QbitClient.torrents",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "hash": "abc123hash",
+                        "name": (
+                            "A Practical Guide to Sorcery, Book 3: "
+                            "A Sacrifice of Light"
+                        ),
+                        "state": "downloading",
+                        "progress": 0.642,
+                        "dlspeed": 3145728,
+                        "content_path": (
+                            "/downloads/Azalea Ellis - A Sacrifice of Light.m4b"
+                        ),
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mlm.modules.nextchapter.service.QbitClient.files",
+            new=AsyncMock(
+                return_value=[
+                    {"name": "Azalea Ellis - A Sacrifice of Light.m4b"}
+                ]
+            ),
+        ),
+    ):
+        live_q = await service.get_live_queue_status()
+        assert live_q["ok"] is True
+        q_vols = live_q["queued_volumes"]
+        assert len(q_vols) == 1
+        assert q_vols[0]["qbit_state"] == "downloading"
+        assert q_vols[0]["qbit_progress"] == 64.2
+        assert (
+            "Azalea Ellis - A Sacrifice of Light.m4b" in q_vols[0]["qbit_file"]
+        )
+        assert q_vols[0]["qbit_dlspeed"] == "3.0 MB/s"
+
+    # 4. Restore Book #4 back to missing
+    rest_res = service.restore_volume_disposition(
+        series_name="A Practical Guide to Sorcery",
+        volume_number="4",
+    )
+    assert rest_res["ok"] is True
+    assert rest_res["counts"]["not_wanted_count"] == 0
+    assert rest_res["counts"]["missing_count"] == 1
+
+
+

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
 import re
@@ -9,7 +10,9 @@ from typing import Any
 
 from ...autograbber import select_row
 from ...config import Config
+from ...database import connect
 from ...mam import MamClient
+from ...qbittorrent import QbitClient
 from ...repository import Repository
 from ...search import (
     as_bool,
@@ -44,6 +47,7 @@ from .models import (
     MissingBook,
     NextChapterSettings,
     SeriesHubEntry,
+    VolumeDisposition,
 )
 
 STATE_SCHEMA_VERSION = 2
@@ -104,6 +108,37 @@ def _expand_owned_volumes(vol_str: str, title_str: str) -> set[str]:
             except ValueError:
                 pass
     return owned
+
+
+def make_disposition_key(
+    series_name: str, volume_number: str = "", title: str = ""
+) -> str:
+    """Create a deterministic normalized key for a series + volume/title."""
+    s_norm = (
+        normalize_series_name(series_name).strip().casefold()
+        if series_name
+        else ""
+    )
+    if not s_norm and series_name:
+        s_norm = series_name.strip().casefold()
+    v_norm = _normalize_volume_str(volume_number) or (
+        str(volume_number).strip().casefold() if volume_number else ""
+    )
+    if v_norm:
+        return f"{s_norm}::vol:{v_norm}"
+    t_norm = normalize_title(title) if title else ""
+    return f"{s_norm}::title:{t_norm}"
+
+
+def _format_speed(bytes_per_sec: float) -> str:
+    val = float(bytes_per_sec or 0)
+    if val <= 0:
+        return ""
+    if val >= 1024 * 1024:
+        return f"{val / (1024 * 1024):.1f} MB/s"
+    if val >= 1024:
+        return f"{val / 1024:.0f} KB/s"
+    return f"{int(val)} B/s"
 
 
 def clean_mam_book_title(
@@ -283,12 +318,513 @@ class NextChapterService:
         data["has_google_books"] = bool(self.settings.google_books_api_key)
         return data
 
+    def _load_dispositions(self) -> dict[str, dict[str, Any]]:
+        raw = self.repository.config_value("nextchapter_dispositions")
+        if not raw:
+            return {}
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                return {
+                    str(k): v
+                    for k, v in loaded.items()
+                    if isinstance(v, dict)
+                }
+        except json.JSONDecodeError:
+            pass
+        return {}
+
+    def _save_dispositions(self, dispositions: dict[str, dict[str, Any]]) -> None:
+        self.repository.set_config_value(
+            "nextchapter_dispositions", json.dumps(dispositions)
+        )
+
+    def _load_queued_volumes(self) -> dict[str, dict[str, Any]]:
+        raw = self.repository.config_value("nextchapter_queued_volumes")
+        if not raw:
+            return {}
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                return {
+                    str(k): v
+                    for k, v in loaded.items()
+                    if isinstance(v, dict)
+                }
+        except json.JSONDecodeError:
+            pass
+        return {}
+
+    def _save_queued_volumes(self, queued: dict[str, dict[str, Any]]) -> None:
+        self.repository.set_config_value(
+            "nextchapter_queued_volumes", json.dumps(queued)
+        )
+
+    def _collect_repo_queue_snapshot(self) -> dict[int, dict[str, Any]]:
+        """Read selected_torrents and torrents from SQLite to map mam_id -> status."""
+        by_mam_id: dict[int, dict[str, Any]] = {}
+        try:
+            with connect(self.repository.path) as conn:
+                sel_rows = conn.execute(
+                    """SELECT mam_id, hash, payload_json
+                       FROM selected_torrents
+                       WHERE json_extract(payload_json, '$.removed_at') IS NULL"""
+                ).fetchall()
+                for row in sel_rows:
+                    mid = int(row["mam_id"] or 0)
+                    if not mid:
+                        continue
+                    payload = json.loads(row["payload_json"])
+                    thash = str(
+                        row["hash"] or payload.get("hash") or ""
+                    ).strip()
+                    started = bool(payload.get("started_at"))
+                    check_status = str(
+                        payload.get("last_check_status") or ""
+                    ).strip()
+                    check_reason = str(
+                        payload.get("last_check_reason") or ""
+                    ).strip()
+                    meta = payload.get("meta") or {}
+                    qbit_state = "downloading" if (started or thash) else "queued_mam"
+                    qbit_label = (
+                        "Sent to qBittorrent"
+                        if (started or thash)
+                        else "Queued for MAM Grab"
+                    )
+                    if check_status == "error":
+                        qbit_state = "error"
+                        qbit_label = f"Error: {check_reason or 'Grab failed'}"
+                    elif check_status == "deferred":
+                        qbit_state = "queued_mam"
+                        qbit_label = f"Queued ({check_reason or 'Waiting for slot'})"
+                    by_mam_id[mid] = {
+                        "mam_id": mid,
+                        "title": str(meta.get("title") or ""),
+                        "torrent_hash": thash,
+                        "qbit_state": qbit_state,
+                        "qbit_state_label": qbit_label,
+                        "qbit_progress": 0.0,
+                        "qbit_file": "",
+                        "qbit_save_path": "",
+                        "qbit_dlspeed": "",
+                    }
+
+                tor_rows = conn.execute(
+                    """SELECT id, mam_id, payload_json
+                       FROM torrents
+                       WHERE json_extract(payload_json, '$.deleted_from_disk_at')
+                             IS NULL"""
+                ).fetchall()
+                for row in tor_rows:
+                    mid = int(row["mam_id"] or 0)
+                    if not mid:
+                        continue
+                    payload = json.loads(row["payload_json"])
+                    thash = (
+                        str(row["id"] or "")
+                        if payload.get("id_is_hash")
+                        else ""
+                    )
+                    lib_path = str(payload.get("library_path") or "").strip()
+                    lib_files = payload.get("library_files") or []
+                    meta = payload.get("meta") or {}
+                    file_label = ""
+                    if lib_files:
+                        file_label = str(lib_files[0])
+                        if len(lib_files) > 1:
+                            file_label += f" (+{len(lib_files) - 1} files)"
+                    elif lib_path:
+                        file_label = lib_path.replace("\\", "/").split("/")[-1]
+                    if lib_path:
+                        by_mam_id[mid] = {
+                            "mam_id": mid,
+                            "title": str(meta.get("title") or ""),
+                            "torrent_hash": thash,
+                            "qbit_state": "linked",
+                            "qbit_state_label": "Imported to Library",
+                            "qbit_progress": 100.0,
+                            "qbit_file": file_label,
+                            "qbit_save_path": lib_path,
+                            "qbit_dlspeed": "",
+                        }
+                    elif mid not in by_mam_id or thash:
+                        prev = by_mam_id.get(mid, {})
+                        by_mam_id[mid] = {
+                            "mam_id": mid,
+                            "title": str(
+                                meta.get("title") or prev.get("title") or ""
+                            ),
+                            "torrent_hash": thash or prev.get("torrent_hash", ""),
+                            "qbit_state": prev.get("qbit_state") or "downloading",
+                            "qbit_state_label": (
+                                prev.get("qbit_state_label")
+                                or "Active in qBittorrent"
+                            ),
+                            "qbit_progress": float(prev.get("qbit_progress") or 0.0),
+                            "qbit_file": file_label or prev.get("qbit_file", ""),
+                            "qbit_save_path": prev.get("qbit_save_path", ""),
+                            "qbit_dlspeed": prev.get("qbit_dlspeed", ""),
+                        }
+        except Exception:
+            pass
+        return by_mam_id
+
+    def _match_disposition(
+        self,
+        dispositions: dict[str, dict[str, Any]],
+        series_name: str,
+        volume_number: str,
+        title: str,
+    ) -> dict[str, Any] | None:
+        if not dispositions:
+            return None
+        primary_key = make_disposition_key(series_name, volume_number, title)
+        if primary_key in dispositions:
+            return dispositions[primary_key]
+        if title:
+            title_key = make_disposition_key(series_name, "", title)
+            if title_key in dispositions:
+                return dispositions[title_key]
+        v_norm = _normalize_volume_str(volume_number)
+        t_norm = normalize_title(title) if title else ""
+        for disp in dispositions.values():
+            d_series = str(disp.get("series_name") or "")
+            if not d_series or not (
+                _field_matches([d_series], series_name)
+                or _field_matches([series_name], d_series)
+            ):
+                continue
+            d_vol = _normalize_volume_str(str(disp.get("volume_number") or ""))
+            if v_norm and d_vol and v_norm == d_vol:
+                return disp
+            d_title_norm = normalize_title(str(disp.get("title") or ""))
+            if t_norm and d_title_norm and t_norm == d_title_norm:
+                return disp
+        return None
+
+    def _match_queued_volume(
+        self,
+        queued_map: dict[str, dict[str, Any]],
+        series_name: str,
+        volume_number: str,
+        title: str,
+    ) -> dict[str, Any] | None:
+        if not queued_map:
+            return None
+        primary_key = make_disposition_key(series_name, volume_number, title)
+        if primary_key in queued_map:
+            return queued_map[primary_key]
+        v_norm = _normalize_volume_str(volume_number)
+        t_norm = normalize_title(title) if title else ""
+        for q_entry in queued_map.values():
+            q_series = str(q_entry.get("series_name") or "")
+            if not q_series or not (
+                _field_matches([q_series], series_name)
+                or _field_matches([series_name], q_series)
+            ):
+                continue
+            q_vol = _normalize_volume_str(
+                str(q_entry.get("volume_number") or "")
+            )
+            if v_norm and q_vol and v_norm == q_vol:
+                return q_entry
+            q_title_norm = normalize_title(str(q_entry.get("title") or ""))
+            if t_norm and q_title_norm and t_norm == q_title_norm:
+                return q_entry
+        return None
+
+    def _apply_dispositions_to_state(
+        self, state: dict[str, Any]
+    ) -> dict[str, Any]:
+        dispositions = self._load_dispositions()
+        queued_map = self._load_queued_volumes()
+        repo_queue = self._collect_repo_queue_snapshot()
+
+        matched_disp_keys: set[str] = set()
+        not_wanted_volumes: list[dict[str, Any]] = []
+        unable_to_find_volumes: list[dict[str, Any]] = []
+        queued_volumes: list[dict[str, Any]] = []
+
+        total_missing = 0
+        complete_count = 0
+
+        for s in state.get("series", []):
+            s_name = str(s.get("series_name") or "")
+            s_authors = s.get("authors") or []
+            default_author = s_authors[0] if s_authors else ""
+
+            raw_all = s.get("all_missing_volumes")
+            if not raw_all:
+                combined = list(s.get("missing_volumes") or []) + list(
+                    s.get("dismissed_volumes") or []
+                )
+                seen_keys: set[str] = set()
+                raw_all = []
+                for item in combined:
+                    ik = make_disposition_key(
+                        s_name,
+                        str(item.get("volume_number") or ""),
+                        str(item.get("title") or ""),
+                    )
+                    if ik not in seen_keys:
+                        seen_keys.add(ik)
+                        raw_all.append(dict(item))
+            else:
+                raw_all = [dict(item) for item in raw_all]
+
+            s["all_missing_volumes"] = raw_all
+
+            active_missing: list[dict[str, Any]] = []
+            series_dismissed: list[dict[str, Any]] = []
+
+            for item in raw_all:
+                vol_str = str(item.get("volume_number") or "")
+                title_str = str(item.get("title") or "")
+                item_author = str(item.get("author") or default_author)
+                d_key = make_disposition_key(s_name, vol_str, title_str)
+                item["disposition_key"] = d_key
+                item["series_name"] = s_name
+                if not item.get("author") and item_author:
+                    item["author"] = item_author
+
+                # Check if queued
+                q_info = self._match_queued_volume(
+                    queued_map, s_name, vol_str, title_str
+                )
+                q_mam_id = int(
+                    (q_info or {}).get("mam_id")
+                    or item.get("queued_mam_id")
+                    or 0
+                )
+                repo_q = repo_queue.get(q_mam_id) if q_mam_id else None
+
+                if q_info or repo_q:
+                    item["queued_mam_id"] = q_mam_id
+                    item["queued_title"] = str(
+                        (repo_q or {}).get("title")
+                        or (q_info or {}).get("queued_title")
+                        or item.get("queued_title")
+                        or title_str
+                    )
+                    item["queued_at"] = int(
+                        (q_info or {}).get("queued_at")
+                        or item.get("queued_at")
+                        or 0
+                    )
+                    is_linked = (repo_q or {}).get("qbit_state") == "linked"
+                    primary_q = repo_q if is_linked else (q_info or repo_q or {})
+                    secondary_q = (q_info or {}) if is_linked else (repo_q or {})
+
+                    item["torrent_hash"] = str(
+                        primary_q.get("torrent_hash")
+                        or secondary_q.get("torrent_hash")
+                        or item.get("torrent_hash")
+                        or ""
+                    )
+                    item["qbit_state"] = str(
+                        primary_q.get("qbit_state")
+                        or secondary_q.get("qbit_state")
+                        or item.get("qbit_state")
+                        or "queued_mam"
+                    )
+                    item["qbit_state_label"] = str(
+                        primary_q.get("qbit_state_label")
+                        or secondary_q.get("qbit_state_label")
+                        or item.get("qbit_state_label")
+                        or "Queued for Download"
+                    )
+                    item["qbit_progress"] = float(
+                        primary_q.get("qbit_progress")
+                        if primary_q.get("qbit_progress") is not None
+                        else (
+                            secondary_q.get("qbit_progress")
+                            or item.get("qbit_progress")
+                            or 0.0
+                        )
+                    )
+                    item["qbit_file"] = str(
+                        primary_q.get("qbit_file")
+                        or secondary_q.get("qbit_file")
+                        or item.get("qbit_file")
+                        or ""
+                    )
+                    item["qbit_save_path"] = str(
+                        primary_q.get("qbit_save_path")
+                        or secondary_q.get("qbit_save_path")
+                        or item.get("qbit_save_path")
+                        or ""
+                    )
+                    item["qbit_dlspeed"] = str(
+                        primary_q.get("qbit_dlspeed")
+                        or secondary_q.get("qbit_dlspeed")
+                        or item.get("qbit_dlspeed")
+                        or ""
+                    )
+
+                disp = self._match_disposition(
+                    dispositions, s_name, vol_str, title_str
+                )
+                if disp and disp.get("status") in {
+                    "not_wanted",
+                    "unable_to_find",
+                }:
+                    matched_disp_keys.add(
+                        str(disp.get("disposition_key") or d_key)
+                    )
+                    d_status = str(disp["status"])
+                    item["status"] = d_status
+                    item["disposition_key"] = str(
+                        disp.get("disposition_key") or d_key
+                    )
+                    item["disposition_reason"] = str(disp.get("reason") or "")
+                    item["disposition_notes"] = str(disp.get("notes") or "")
+                    item["disposition_updated_at"] = int(
+                        disp.get("updated_at") or 0
+                    )
+                    item["last_checked_at"] = int(
+                        disp.get("last_checked_at") or 0
+                    )
+                    item["mam_available_count"] = int(
+                        disp.get("mam_available_count") or 0
+                    )
+                    if disp.get("best_candidate"):
+                        item["best_candidate"] = disp["best_candidate"]
+
+                    series_dismissed.append(item)
+                    if d_status == "not_wanted":
+                        not_wanted_volumes.append(item)
+                    else:
+                        unable_to_find_volumes.append(item)
+                else:
+                    if q_info or repo_q:
+                        item["status"] = "queued"
+                        queued_volumes.append(item)
+                    else:
+                        item["status"] = "missing"
+                    item["disposition_reason"] = ""
+                    item["disposition_notes"] = ""
+                    item["disposition_updated_at"] = 0
+                    active_missing.append(item)
+
+            s["missing_volumes"] = active_missing
+            s["dismissed_volumes"] = series_dismissed
+            s["not_wanted_count"] = sum(
+                1 for d in series_dismissed if d.get("status") == "not_wanted"
+            )
+            s["unable_to_find_count"] = sum(
+                1
+                for d in series_dismissed
+                if d.get("status") == "unable_to_find"
+            )
+            s["queued_count"] = sum(
+                1 for m in active_missing if m.get("status") == "queued"
+            )
+
+            owned_cnt = int(
+                s.get("owned_count") or len(s.get("owned_volumes") or [])
+            )
+            raw_total = max(
+                owned_cnt + len(raw_all),
+                int(
+                    s.get("raw_total_known_count")
+                    or s.get("total_known_count")
+                    or 0
+                ),
+            )
+            s["raw_total_known_count"] = raw_total
+            wanted_total = max(
+                owned_cnt + len(active_missing) + s["unable_to_find_count"],
+                raw_total - s["not_wanted_count"],
+            )
+            s["total_known_count"] = wanted_total
+            s["percent_complete"] = (
+                min(100, int((owned_cnt / wanted_total) * 100))
+                if wanted_total
+                else 100
+            )
+
+            unqueued_missing = [
+                m for m in active_missing if m.get("status") != "queued"
+            ]
+            if s.get("status") != "unconfigured":
+                if not unqueued_missing and s["unable_to_find_count"] == 0:
+                    s["status"] = "complete"
+                else:
+                    s["status"] = "incomplete"
+
+            if s.get("status") == "complete":
+                complete_count += 1
+            total_missing += len(unqueued_missing)
+
+        # Include any standalone dispositions not yet in scanned series
+        for d_key, disp in dispositions.items():
+            if d_key in matched_disp_keys:
+                continue
+            d_status = str(disp.get("status") or "")
+            if d_status not in {"not_wanted", "unable_to_find"}:
+                continue
+            standalone = {
+                "series_name": str(disp.get("series_name") or ""),
+                "volume_number": str(disp.get("volume_number") or ""),
+                "title": str(disp.get("title") or ""),
+                "author": str(disp.get("author") or ""),
+                "cover_url": str(disp.get("cover_url") or ""),
+                "summary": str(disp.get("summary") or ""),
+                "status": d_status,
+                "disposition_key": d_key,
+                "disposition_reason": str(disp.get("reason") or ""),
+                "disposition_notes": str(disp.get("notes") or ""),
+                "disposition_updated_at": int(disp.get("updated_at") or 0),
+                "last_checked_at": int(disp.get("last_checked_at") or 0),
+                "mam_available_count": int(
+                    disp.get("mam_available_count") or 0
+                ),
+                "best_candidate": disp.get("best_candidate"),
+            }
+            if d_status == "not_wanted":
+                not_wanted_volumes.append(standalone)
+            else:
+                unable_to_find_volumes.append(standalone)
+
+        unable_to_find_volumes.sort(
+            key=lambda x: (
+                0 if int(x.get("mam_available_count") or 0) > 0 else 1,
+                -int(x.get("disposition_updated_at") or 0),
+                str(x.get("series_name") or "").casefold(),
+                parse_entry_number(str(x.get("volume_number") or "")),
+            )
+        )
+        not_wanted_volumes.sort(
+            key=lambda x: (
+                -int(x.get("disposition_updated_at") or 0),
+                str(x.get("series_name") or "").casefold(),
+                parse_entry_number(str(x.get("volume_number") or "")),
+            )
+        )
+
+        state["missing_count"] = total_missing
+        state["complete_count"] = complete_count
+        state["not_wanted_count"] = len(not_wanted_volumes)
+        state["unable_to_find_count"] = len(unable_to_find_volumes)
+        state["dismissed_count"] = len(not_wanted_volumes) + len(
+            unable_to_find_volumes
+        )
+        state["queued_count"] = len(queued_volumes)
+        state["not_wanted_volumes"] = not_wanted_volumes
+        state["unable_to_find_volumes"] = unable_to_find_volumes
+        state["dismissed_volumes"] = (
+            unable_to_find_volumes + not_wanted_volumes
+        )
+        state["queued_volumes"] = queued_volumes
+        return state
+
     def get_cached_state(self) -> dict[str, Any]:
         if (
             self._state_cache is not None
             and self._state_cache.get("schema_version") == STATE_SCHEMA_VERSION
         ):
-            return self._state_cache
+            return self._apply_dispositions_to_state(self._state_cache)
         saved = self.repository.config_value("nextchapter_state")
         if saved:
             try:
@@ -297,11 +833,13 @@ class NextChapterService:
                     isinstance(loaded, dict)
                     and loaded.get("schema_version") == STATE_SCHEMA_VERSION
                 ):
-                    self._state_cache = loaded
+                    self._state_cache = self._apply_dispositions_to_state(
+                        loaded
+                    )
                     return self._state_cache
             except json.JSONDecodeError:
                 pass
-        return {
+        empty = {
             "schema_version": STATE_SCHEMA_VERSION,
             "series": [],
             "missing_count": 0,
@@ -310,6 +848,7 @@ class NextChapterService:
             "recommendations": [],
             "last_scan": 0,
         }
+        return self._apply_dispositions_to_state(empty)
 
     async def _fetch_mam_series_catalog(
         self, series_entry: dict[str, Any]
@@ -877,6 +1416,7 @@ class NextChapterService:
                         total_known_count=total_known,
                         owned_volumes=owned_books,
                         missing_volumes=missing_items,
+                        all_missing_volumes=missing_items,
                         percent_complete=pct,
                         status=status,
                     )
@@ -902,6 +1442,7 @@ class NextChapterService:
                 "last_error": last_error,
                 "last_scan": int(now),
             }
+            state = self._apply_dispositions_to_state(state)
             self._state_cache = state
             self.repository.set_config_value(
                 "nextchapter_state", json.dumps(state)
@@ -1409,7 +1950,11 @@ class NextChapterService:
         return scored_candidates[:limit]
 
     async def queue_download(
-        self, mam_id: int, series_name: str, volume: str | None = None
+        self,
+        mam_id: int,
+        series_name: str,
+        volume: str | None = None,
+        title: str | None = None,
     ) -> dict[str, Any]:
         if not self.mam:
             return {"ok": False, "error": "MAM client not initialized"}
@@ -1427,9 +1972,65 @@ class NextChapterService:
                 "name": f"nextchapter:{series_name}",
                 "allow_any_format": True,
                 "allow_duplicate": True,
+                "force_download": True,
             },
         )
         _ = selected
+        vol_str = str(volume or "").strip()
+        raw_title = str(raw_row.get("title") or title or "").strip()
+
+        # If volume wasn't explicitly passed, try extracting from torrent series
+        if not vol_str:
+            meta = torrent_meta(raw_row)
+            r_series = meta.get("series") or []
+            if r_series and isinstance(r_series[0], dict):
+                entries = r_series[0].get("entries") or (
+                    [r_series[0]["sequence"]]
+                    if r_series[0].get("sequence")
+                    else []
+                )
+                if entries:
+                    vol_str = _normalize_volume_str(str(entries[0]))
+
+        d_key = make_disposition_key(series_name, vol_str, title or raw_title)
+        now = int(time.time())
+        queued_map = self._load_queued_volumes()
+        q_record = {
+            "disposition_key": d_key,
+            "mam_id": mam_id,
+            "series_name": series_name,
+            "volume_number": vol_str,
+            "title": str(title or raw_title),
+            "queued_title": raw_title,
+            "queued_at": now,
+            "torrent_hash": "",
+            "qbit_state": "queued_mam",
+            "qbit_state_label": "Queued • Sending to qBittorrent...",
+            "qbit_progress": 0.0,
+            "qbit_file": "",
+            "qbit_save_path": "",
+            "qbit_dlspeed": "",
+        }
+        queued_map[d_key] = q_record
+        self._save_queued_volumes(queued_map)
+
+        # Auto-resolve any "unable_to_find" disposition when user queues the volume
+        dispositions = self._load_dispositions()
+        existing_disp = self._match_disposition(
+            dispositions, series_name, vol_str, title or raw_title
+        )
+        if existing_disp and existing_disp.get("status") == "unable_to_find":
+            ex_key = str(existing_disp.get("disposition_key") or d_key)
+            dispositions.pop(ex_key, None)
+            dispositions.pop(d_key, None)
+            self._save_dispositions(dispositions)
+
+        state = self._apply_dispositions_to_state(self.get_cached_state())
+        self._state_cache = state
+        self.repository.set_config_value(
+            "nextchapter_state", json.dumps(state)
+        )
+
         log_msg = (
             f"NextChapter queued #{mam_id} for series '{series_name}' "
             f"({raw_row.get('title')})"
@@ -1441,10 +2042,551 @@ class NextChapterService:
             context={
                 "mam_id": mam_id,
                 "series": series_name,
-                "volume": volume,
+                "volume": vol_str,
             },
         )
-        return {"ok": True, "mam_id": mam_id, "title": raw_row.get("title")}
+        return {
+            "ok": True,
+            "mam_id": mam_id,
+            "title": raw_row.get("title"),
+            "series_name": series_name,
+            "volume_number": vol_str,
+            "disposition_key": d_key,
+            "queued_item": q_record,
+            "counts": self._summary_counts(state),
+        }
+
+    def _summary_counts(self, state: dict[str, Any]) -> dict[str, int]:
+        return {
+            "missing_count": int(state.get("missing_count") or 0),
+            "complete_count": int(state.get("complete_count") or 0),
+            "not_wanted_count": int(state.get("not_wanted_count") or 0),
+            "unable_to_find_count": int(state.get("unable_to_find_count") or 0),
+            "dismissed_count": int(state.get("dismissed_count") or 0),
+            "queued_count": int(state.get("queued_count") or 0),
+            "total_series": int(state.get("total_series") or 0),
+        }
+
+    def get_dispositions(self) -> dict[str, Any]:
+        state = self.get_cached_state()
+        return {
+            "ok": True,
+            "not_wanted": state.get("not_wanted_volumes", []),
+            "unable_to_find": state.get("unable_to_find_volumes", []),
+            "dismissed": state.get("dismissed_volumes", []),
+            "queued": state.get("queued_volumes", []),
+            "counts": self._summary_counts(state),
+        }
+
+    def set_volume_disposition(
+        self,
+        series_name: str,
+        volume_number: str = "",
+        title: str = "",
+        author: str = "",
+        status: str = "not_wanted",
+        reason: str = "",
+        notes: str = "",
+        cover_url: str = "",
+        summary: str = "",
+        disposition_key: str = "",
+    ) -> dict[str, Any]:
+        norm_status = str(status or "").strip().casefold()
+        if norm_status in {"missing", "restore", "active", ""}:
+            return self.restore_volume_disposition(
+                disposition_key=disposition_key,
+                series_name=series_name,
+                volume_number=volume_number,
+                title=title,
+            )
+        if norm_status not in {"not_wanted", "unable_to_find"}:
+            return {
+                "ok": False,
+                "error": f"Invalid disposition status: {status}",
+            }
+
+        state = self.get_cached_state()
+        vol_str = _normalize_volume_str(volume_number) or str(
+            volume_number or ""
+        ).strip()
+
+        # Enrich metadata from cached series if missing
+        for s in state.get("series", []):
+            s_name = str(s.get("series_name") or "")
+            if not (
+                _field_matches([s_name], series_name)
+                or _field_matches([series_name], s_name)
+            ):
+                continue
+            series_name = s_name
+            if not author and s.get("authors"):
+                author = str(s["authors"][0])
+            for m in s.get("all_missing_volumes") or s.get(
+                "missing_volumes", []
+            ):
+                m_vol = _normalize_volume_str(
+                    str(m.get("volume_number") or "")
+                ) or str(m.get("volume_number") or "").strip()
+                if (vol_str and m_vol == vol_str) or (
+                    title and _field_matches([m.get("title", "")], title)
+                ):
+                    if not title:
+                        title = str(m.get("title") or "")
+                    if not author:
+                        author = str(m.get("author") or "")
+                    if not cover_url:
+                        cover_url = str(m.get("cover_url") or "")
+                    if not summary:
+                        summary = str(m.get("summary") or "")
+                    break
+            break
+
+        dispositions = self._load_dispositions()
+        existing = self._match_disposition(
+            dispositions, series_name, vol_str, title
+        )
+        d_key = (
+            str(existing.get("disposition_key"))
+            if existing and existing.get("disposition_key")
+            else (
+                disposition_key.strip()
+                if disposition_key and disposition_key.strip()
+                else make_disposition_key(series_name, vol_str, title)
+            )
+        )
+
+        default_reason = (
+            "Not needed / Skipped"
+            if norm_status == "not_wanted"
+            else "Unable to find on MAM"
+        )
+        clean_reason = str(reason or "").strip() or (
+            str((existing or {}).get("reason") or "")
+            if existing and existing.get("status") == norm_status
+            else default_reason
+        )
+        clean_notes = (
+            str(notes).strip()
+            if notes is not None
+            else str((existing or {}).get("notes") or "")
+        )
+
+        disp_obj = VolumeDisposition(
+            disposition_key=d_key,
+            series_name=series_name,
+            volume_number=vol_str,
+            title=title or (f"{series_name} #{vol_str}" if vol_str else series_name),
+            author=author,
+            cover_url=cover_url,
+            summary=summary,
+            status=norm_status,
+            reason=clean_reason,
+            notes=clean_notes,
+            updated_at=int(time.time()),
+            last_checked_at=int((existing or {}).get("last_checked_at") or 0),
+            mam_available_count=int(
+                (existing or {}).get("mam_available_count") or 0
+            ),
+            best_candidate=(existing or {}).get("best_candidate"),
+        )
+        dispositions[d_key] = disp_obj.to_dict()
+        self._save_dispositions(dispositions)
+
+        state = self._apply_dispositions_to_state(state)
+        self._state_cache = state
+        self.repository.set_config_value(
+            "nextchapter_state", json.dumps(state)
+        )
+        return {
+            "ok": True,
+            "disposition": disp_obj.to_dict(),
+            "counts": self._summary_counts(state),
+        }
+
+    def restore_volume_disposition(
+        self,
+        disposition_key: str = "",
+        series_name: str = "",
+        volume_number: str = "",
+        title: str = "",
+    ) -> dict[str, Any]:
+        dispositions = self._load_dispositions()
+        removed = False
+        if disposition_key and disposition_key in dispositions:
+            dispositions.pop(disposition_key, None)
+            removed = True
+        else:
+            matched = self._match_disposition(
+                dispositions, series_name, volume_number, title
+            )
+            if matched:
+                mk = str(matched.get("disposition_key") or "")
+                if mk in dispositions:
+                    dispositions.pop(mk, None)
+                    removed = True
+            cand_key = make_disposition_key(series_name, volume_number, title)
+            if cand_key in dispositions:
+                dispositions.pop(cand_key, None)
+                removed = True
+
+        self._save_dispositions(dispositions)
+        state = self._apply_dispositions_to_state(self.get_cached_state())
+        self._state_cache = state
+        self.repository.set_config_value(
+            "nextchapter_state", json.dumps(state)
+        )
+        return {
+            "ok": True,
+            "removed": removed,
+            "counts": self._summary_counts(state),
+        }
+
+    def set_series_disposition(
+        self,
+        series_name: str,
+        status: str = "not_wanted",
+        reason: str = "",
+        notes: str = "",
+    ) -> dict[str, Any]:
+        norm_status = str(status or "").strip().casefold()
+        state = self.get_cached_state()
+        target_series = next(
+            (
+                s
+                for s in state.get("series", [])
+                if _field_matches([s.get("series_name", "")], series_name)
+                or _field_matches([series_name], s.get("series_name", ""))
+            ),
+            None,
+        )
+        if not target_series:
+            return {"ok": False, "error": f"Series '{series_name}' not found"}
+
+        canonical_s = str(target_series.get("series_name") or series_name)
+        s_authors = target_series.get("authors") or []
+        default_author = str(s_authors[0]) if s_authors else ""
+        dispositions = self._load_dispositions()
+        updated_count = 0
+
+        if norm_status in {"missing", "restore", "active"}:
+            to_remove = [
+                k
+                for k, v in dispositions.items()
+                if _field_matches([v.get("series_name", "")], canonical_s)
+                or _field_matches([canonical_s], v.get("series_name", ""))
+            ]
+            for k in to_remove:
+                dispositions.pop(k, None)
+                updated_count += 1
+        elif norm_status in {"not_wanted", "unable_to_find"}:
+            default_reason = (
+                reason.strip()
+                if reason and reason.strip()
+                else (
+                    "Skipped remaining in series"
+                    if norm_status == "not_wanted"
+                    else "Unable to find on MAM"
+                )
+            )
+            now = int(time.time())
+            for m in target_series.get("missing_volumes", []):
+                if m.get("status") == "queued":
+                    continue
+                vol_str = str(m.get("volume_number") or "")
+                m_title = str(m.get("title") or "")
+                d_key = make_disposition_key(canonical_s, vol_str, m_title)
+                disp_obj = VolumeDisposition(
+                    disposition_key=d_key,
+                    series_name=canonical_s,
+                    volume_number=vol_str,
+                    title=m_title or f"{canonical_s} #{vol_str}",
+                    author=str(m.get("author") or default_author),
+                    cover_url=str(m.get("cover_url") or ""),
+                    summary=str(m.get("summary") or ""),
+                    status=norm_status,
+                    reason=default_reason,
+                    notes=notes.strip() if notes else "",
+                    updated_at=now,
+                )
+                dispositions[d_key] = disp_obj.to_dict()
+                updated_count += 1
+        else:
+            return {"ok": False, "error": f"Invalid status: {status}"}
+
+        self._save_dispositions(dispositions)
+        state = self._apply_dispositions_to_state(state)
+        self._state_cache = state
+        self.repository.set_config_value(
+            "nextchapter_state", json.dumps(state)
+        )
+        return {
+            "ok": True,
+            "series_name": canonical_s,
+            "updated_count": updated_count,
+            "counts": self._summary_counts(state),
+        }
+
+    async def recheck_unable_to_find(
+        self, disposition_key: str = ""
+    ) -> dict[str, Any]:
+        dispositions = self._load_dispositions()
+        if disposition_key:
+            target_keys = (
+                [disposition_key] if disposition_key in dispositions else []
+            )
+        else:
+            target_keys = [
+                k
+                for k, v in dispositions.items()
+                if v.get("status") == "unable_to_find"
+            ]
+
+        if not target_keys:
+            state = self.get_cached_state()
+            return {
+                "ok": True,
+                "checked_count": 0,
+                "found_count": 0,
+                "items": [],
+                "counts": self._summary_counts(state),
+            }
+
+        sem = asyncio.Semaphore(4)
+        now = int(time.time())
+        found_count = 0
+        updated_items: list[dict[str, Any]] = []
+
+        async def _check_one(k: str) -> None:
+            nonlocal found_count
+            disp = dispositions.get(k)
+            if not disp:
+                return
+            async with sem:
+                try:
+                    candidates = await self.search_mam_for_missing(
+                        series_name=str(disp.get("series_name") or ""),
+                        volume=str(disp.get("volume_number") or ""),
+                        title=str(disp.get("title") or ""),
+                        author=str(disp.get("author") or ""),
+                        mode="smart",
+                        limit=10,
+                    )
+                except Exception:
+                    candidates = []
+                disp["last_checked_at"] = now
+                disp["mam_available_count"] = len(candidates)
+                disp["best_candidate"] = candidates[0] if candidates else None
+                if candidates:
+                    found_count += 1
+                updated_items.append(dict(disp))
+
+        await asyncio.gather(*[_check_one(k) for k in target_keys])
+        self._save_dispositions(dispositions)
+
+        state = self._apply_dispositions_to_state(self.get_cached_state())
+        self._state_cache = state
+        self.repository.set_config_value(
+            "nextchapter_state", json.dumps(state)
+        )
+        return {
+            "ok": True,
+            "checked_count": len(target_keys),
+            "found_count": found_count,
+            "items": updated_items,
+            "counts": self._summary_counts(state),
+        }
+
+    async def get_live_queue_status(self) -> dict[str, Any]:
+        """Connect to qBittorrent and SQLite to track queued NextChapter volumes."""
+        queued_map = self._load_queued_volumes()
+        repo_queue = self._collect_repo_queue_snapshot()
+
+        # Connect to configured qBittorrent client(s) to get live progress & files
+        qbit_by_hash: dict[str, dict[str, Any]] = {}
+        qbit_configs = getattr(self.config, "qbittorrent", ()) or ()
+        for q_cfg in qbit_configs:
+            q_url = getattr(q_cfg, "url", None) or (
+                q_cfg.get("url") if isinstance(q_cfg, dict) else None
+            )
+            if not q_url:
+                continue
+            q_user = getattr(q_cfg, "username", "") or (
+                q_cfg.get("username", "") if isinstance(q_cfg, dict) else ""
+            )
+            q_pass = getattr(q_cfg, "password", "") or (
+                q_cfg.get("password", "") if isinstance(q_cfg, dict) else ""
+            )
+            client = QbitClient(str(q_url), timeout=8.0)
+            try:
+                await client.login(str(q_user), str(q_pass))
+                torrents_list = await client.torrents()
+                for t in torrents_list:
+                    th = str(t.get("hash") or "").strip().lower()
+                    if not th:
+                        continue
+                    raw_state = str(t.get("state") or "").strip()
+                    st_lower = raw_state.lower()
+                    prog = round(float(t.get("progress") or 0.0) * 100.0, 1)
+                    dlspeed = _format_speed(float(t.get("dlspeed") or 0))
+                    content_path = str(
+                        t.get("content_path") or t.get("save_path") or ""
+                    ).strip()
+                    t_name = str(t.get("name") or "").strip()
+
+                    if any(
+                        w in st_lower
+                        for w in ("error", "missing")
+                    ):
+                        q_state = "error"
+                        q_label = f"qBittorrent Error ({raw_state})"
+                    elif prog >= 100.0 or any(
+                        w in st_lower
+                        for w in ("up", "seed")
+                    ):
+                        q_state = "completed"
+                        q_label = "Completed in qBittorrent (100%)"
+                        prog = 100.0
+                    elif any(
+                        w in st_lower
+                        for w in ("pause", "stop")
+                    ):
+                        q_state = "paused"
+                        q_label = f"Paused in qBittorrent ({prog:.0f}%)"
+                    elif any(
+                        w in st_lower
+                        for w in ("down", "meta", "stall")
+                    ):
+                        q_state = "downloading"
+                        q_label = f"Downloading in qBittorrent ({prog:.1f}%)"
+                    else:
+                        q_state = "queued_qbit"
+                        q_label = f"Queued in qBittorrent ({prog:.0f}%)"
+
+                    file_display = t_name
+                    if content_path:
+                        leaf = (
+                            content_path.replace("\\", "/")
+                            .rstrip("/")
+                            .split("/")[-1]
+                        )
+                        if leaf:
+                            file_display = leaf
+
+                    qbit_by_hash[th] = {
+                        "torrent_hash": th,
+                        "qbit_state": q_state,
+                        "qbit_state_label": q_label,
+                        "qbit_progress": prog,
+                        "qbit_file": file_display,
+                        "qbit_save_path": content_path,
+                        "qbit_dlspeed": dlspeed,
+                        "name": t_name,
+                    }
+
+                # For any tracked hash in queued_map or repo_queue, fetch files
+                tracked_hashes: set[str] = set()
+                queued_title_norms = {
+                    normalize_title(str(qv.get("queued_title") or ""))
+                    for qv in queued_map.values()
+                    if qv.get("queued_title")
+                }
+                for qv in queued_map.values():
+                    th = str(qv.get("torrent_hash") or "").strip().lower()
+                    if th:
+                        tracked_hashes.add(th)
+                for rq in repo_queue.values():
+                    th = str(rq.get("torrent_hash") or "").strip().lower()
+                    if th:
+                        tracked_hashes.add(th)
+                for th, qb_entry in qbit_by_hash.items():
+                    if normalize_title(qb_entry.get("name", "")) in queued_title_norms:
+                        tracked_hashes.add(th)
+
+                for th in tracked_hashes:
+                    if th in qbit_by_hash:
+                        try:
+                            files = await client.files(th)
+                            if files and isinstance(files, list):
+                                first_f = str(
+                                    files[0].get("name") or ""
+                                ).strip()
+                                if first_f:
+                                    leaf_f = first_f.replace("\\", "/").split(
+                                        "/"
+                                    )[-1]
+                                    if len(files) > 1:
+                                        leaf_f += (
+                                            f" (+{len(files) - 1} files)"
+                                        )
+                                    qbit_by_hash[th]["qbit_file"] = leaf_f
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    await client.close()
+
+        # Merge live qBittorrent data into queued_map
+        changed = False
+        for _d_key, qv in queued_map.items():
+            mid = int(qv.get("mam_id") or 0)
+            rq = repo_queue.get(mid) if mid else None
+            if rq:
+                if rq.get("torrent_hash") and not qv.get("torrent_hash"):
+                    qv["torrent_hash"] = rq["torrent_hash"]
+                    changed = True
+                if rq.get("qbit_state") == "linked":
+                    qv["qbit_state"] = "linked"
+                    qv["qbit_state_label"] = "Imported to Library"
+                    qv["qbit_progress"] = 100.0
+                    qv["qbit_file"] = rq.get("qbit_file") or qv.get(
+                        "qbit_file", ""
+                    )
+                    qv["qbit_save_path"] = rq.get("qbit_save_path") or qv.get(
+                        "qbit_save_path", ""
+                    )
+                    changed = True
+                    continue
+
+            th = str(qv.get("torrent_hash") or "").strip().lower()
+            qb = qbit_by_hash.get(th) if th else None
+            if not qb and qv.get("queued_title"):
+                # Fallback match by normalized torrent name in qBittorrent
+                qt_norm = normalize_title(str(qv.get("queued_title") or ""))
+                if qt_norm:
+                    for cand_qb in qbit_by_hash.values():
+                        if normalize_title(cand_qb.get("name", "")) == qt_norm:
+                            qb = cand_qb
+                            qv["torrent_hash"] = cand_qb["torrent_hash"]
+                            break
+
+            if qb:
+                qv["qbit_state"] = qb["qbit_state"]
+                qv["qbit_state_label"] = qb["qbit_state_label"]
+                qv["qbit_progress"] = qb["qbit_progress"]
+                qv["qbit_file"] = qb["qbit_file"] or qv.get("qbit_file", "")
+                qv["qbit_save_path"] = qb["qbit_save_path"] or qv.get(
+                    "qbit_save_path", ""
+                )
+                qv["qbit_dlspeed"] = qb["qbit_dlspeed"]
+                changed = True
+            elif rq:
+                qv["qbit_state"] = rq["qbit_state"]
+                qv["qbit_state_label"] = rq["qbit_state_label"]
+                changed = True
+
+        if changed:
+            self._save_queued_volumes(queued_map)
+
+        state = self._apply_dispositions_to_state(self.get_cached_state())
+        self._state_cache = state
+        return {
+            "ok": True,
+            "queued_volumes": state.get("queued_volumes", []),
+            "by_key": queued_map,
+            "counts": self._summary_counts(state),
+        }
 
     async def queue_all_missing(self, series_name: str) -> dict[str, Any]:
         state = self.get_cached_state()
@@ -1459,7 +2601,11 @@ class NextChapterService:
         if not target_series:
             return {"ok": False, "error": f"Series '{series_name}' not found"}
 
-        missing_list = target_series.get("missing_volumes", [])
+        missing_list = [
+            m
+            for m in target_series.get("missing_volumes", [])
+            if m.get("status") not in {"not_wanted", "unable_to_find"}
+        ]
         queued_count = 0
         queued_items: list[dict[str, Any]] = []
 
@@ -1473,7 +2619,7 @@ class NextChapterService:
             if candidates:
                 best = candidates[0]
                 res = await self.queue_download(
-                    best["mam_id"], series_name, vol
+                    best["mam_id"], series_name, vol, title=title
                 )
                 if res.get("ok"):
                     queued_count += 1
@@ -1482,6 +2628,8 @@ class NextChapterService:
                             "volume": vol,
                             "mam_id": best["mam_id"],
                             "title": best["title"],
+                            "disposition_key": res.get("disposition_key", ""),
+                            "queued_item": res.get("queued_item"),
                         }
                     )
 
