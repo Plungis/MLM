@@ -915,4 +915,100 @@ async def test_dispositions_revisit_and_qbit_queue_tracking(
     assert rest_res["counts"]["missing_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_nextchapter_queue_resolves_library_category_and_autoheals_qbit(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "test_cat_heal.db"
+    ensure_database(db_path)
+    repo = Repository(db_path)
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        'mam_id = "test_mam_id"\n'
+        "[[qbittorrent]]\n"
+        'url = "http://127.0.0.1:8080"\n'
+        'username = "admin"\n'
+        'password = "secret"\n'
+        "[[library]]\n"
+        'category = "Audiobooks"\n'
+        f'library_dir = "{(tmp_path / "audiobooks").as_posix()}"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_file)
+
+    mam_mock = AsyncMock()
+    mam_mock.get_torrent_info_by_id.return_value = {
+        "id": 999,
+        "title": "A Practical Guide to Sorcery, Book 3: A Sacrifice of Light",
+        "dl": "dl_link_999",
+        "vip": 0,
+        "free": 1,
+        "personal_freeleech": 0,
+        "fl_vip": 0,
+        "size": "550 MB",
+        "numfiles": 1,
+        "filetype": "m4b",
+        "mediatype": 1,
+        "maincat": 13,
+        "author_info": '{"1": "Azalea Ellis"}',
+        "narrator_info": "{}",
+        "series_info": '{"1": ["A Practical Guide to Sorcery", "3", 3.0]}',
+    }
+
+    service = NextChapterService(cfg, repo, mam_mock)
+    q_res = await service.queue_download(
+        999,
+        "A Practical Guide to Sorcery",
+        "3",
+        title="A Sacrifice of Light",
+    )
+    assert q_res["ok"] is True
+    assert q_res["category"] == "Audiobooks"
+
+    pending = repo.pending_selected()
+    assert len(pending) == 1
+    assert pending[0]["category"] == "Audiobooks"
+
+    set_cat_mock = AsyncMock()
+    with (
+        patch("mlm.modules.nextchapter.service.QbitClient.login", new=AsyncMock()),
+        patch(
+            "mlm.modules.nextchapter.service.QbitClient.torrents",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "hash": "heal999hash",
+                        "name": (
+                            "A Practical Guide to Sorcery, Book 3: "
+                            "A Sacrifice of Light"
+                        ),
+                        "state": "uploading",
+                        "progress": 1.0,
+                        "dlspeed": 0,
+                        "category": "",
+                        "tags": "",
+                        "content_path": "/downloads/Sacrifice.m4b",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mlm.modules.nextchapter.service.QbitClient.set_category",
+            new=set_cat_mock,
+        ),
+        patch(
+            "mlm.modules.nextchapter.service.QbitClient.files",
+            new=AsyncMock(return_value=[{"name": "Sacrifice.m4b"}]),
+        ),
+    ):
+        live_q = await service.get_live_queue_status()
+        assert live_q["ok"] is True
+        set_cat_mock.assert_awaited_once_with(["heal999hash"], "Audiobooks")
+        assert live_q["needs_organizer"] is True
+        assert live_q["queued_volumes"][0]["category"] == "Audiobooks"
+        assert "[Audiobooks]" in live_q["queued_volumes"][0]["qbit_state_label"]
+
+
+
 

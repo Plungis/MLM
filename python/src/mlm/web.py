@@ -1685,7 +1685,19 @@ def create_app(config_path: Path, database_path: Path) -> FastAPI:
         if not local_request(request):
             raise HTTPException(403, "NextChapter controls are local-only")
         nc = nextchapter_service()
-        return await nc.get_live_queue_status()
+        res = await nc.get_live_queue_status()
+        if hasattr(app.state, "services"):
+            if res.get("needs_downloader"):
+                with suppress(Exception):
+                    asyncio.create_task(
+                        app.state.services.trigger("downloader")
+                    )
+            if res.get("needs_organizer"):
+                with suppress(Exception):
+                    asyncio.create_task(
+                        app.state.services.trigger("organizer")
+                    )
+        return res
 
     @app.post("/api/nextchapter/settings")
     async def nextchapter_api_settings(

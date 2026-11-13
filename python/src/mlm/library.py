@@ -869,123 +869,194 @@ async def _organize_torrent(
         )
         staging_dir: Path | None = None
         placement_results: list[dict[str, Any]] = []
-        try:
-            staging_dir = await asyncio.to_thread(
-                _prepare_staging_directory, target_dir
-            )
-            for file_index, (source, relative, source_size) in enumerate(
-                planned, start=1
+        already_placed_in_target = False
+        if target_dir.exists() and target_dir.is_dir():
+            existing_entries = list(target_dir.iterdir())
+            non_meta = [
+                p
+                for p in existing_entries
+                if p.name.lower()
+                not in {
+                    "metadata.json",
+                    "cover.jpg",
+                    "cover.png",
+                    "desc.txt",
+                    "reader.txt",
+                }
+            ]
+            if not non_meta:
+                for p in existing_entries:
+                    with suppress(OSError):
+                        if p.is_file() or p.is_symlink():
+                            p.unlink()
+                with suppress(OSError):
+                    target_dir.rmdir()
+            elif planned and all(
+                (target_dir / rel).exists()
+                and (target_dir / rel).is_file()
+                and (target_dir / rel).stat().st_size == src_size
+                for _, rel, src_size in planned
             ):
-                staging_destination = staging_dir / relative
-                final_destination = target_dir / relative
-                _progress(
-                    progress,
-                    f"Placing file {file_index}/{len(planned)}: {relative}",
-                    context={
-                        **context,
-                        "method": method,
-                        "source": str(source),
-                        "destination": str(final_destination),
-                        "source_bytes": source_size,
-                    },
-                )
-                await asyncio.to_thread(
-                    staging_destination.parent.mkdir, parents=True, exist_ok=True
-                )
-                try:
-                    placement_res = await asyncio.to_thread(
-                        _place_file,
-                        source,
-                        staging_destination,
-                        method,
-                        force_hardlinks=config.force_hardlinks,
-                        source_size=source_size,
+                already_placed_in_target = True
+                for src, rel, src_size in planned:
+                    dest_file = target_dir / rel
+                    try:
+                        same_f = os.path.samefile(src, dest_file)
+                    except OSError:
+                        same_f = False
+                    try:
+                        nlink_val = os.stat(dest_file).st_nlink
+                    except OSError:
+                        nlink_val = 1
+                    is_hl = bool(same_f or nlink_val > 1)
+                    library_files.append(str(rel))
+                    placement_results.append(
+                        {
+                            "relative": str(rel),
+                            "hardlinked": is_hl,
+                            "samefile": same_f,
+                            "nlink": nlink_val,
+                            "method": "hardlink" if is_hl else "existing",
+                            "bytes_duplicated": 0 if is_hl else src_size,
+                            "source_size": src_size,
+                        }
                     )
+                with suppress(OSError):
                     await asyncio.to_thread(
-                        _validate_placed_file,
-                        source,
-                        staging_destination,
-                        method,
-                        source_size,
+                        _write_metadata,
+                        target_dir / "metadata.json",
+                        {"mam": mam_row, "meta": meta},
                     )
-                except FilePlacementError:
-                    raise
-                except OSError as error:
-                    raise FilePlacementError(
-                        f"file placement failed: {error}",
-                        source=source,
-                        destination=final_destination,
-                        method=method,
-                        remediation=(
-                            "Check the library drive's free space and Windows "
-                            "permissions. For different drives, use method = "
-                            '"hardlink_or_copy" or "copy".'
-                        ),
-                    ) from error
-                library_files.append(str(relative))
-                placement_results.append({
-                    "relative": str(relative),
-                    "hardlinked": placement_res.hardlinked,
-                    "samefile": placement_res.samefile,
-                    "nlink": placement_res.nlink,
-                    "method": placement_res.method_used,
-                    "bytes_duplicated": placement_res.bytes_duplicated,
-                    "source_size": source_size,
-                })
-                verified_note = (
-                    "🔗 hardlinked (0 B extra)"
-                    if placement_res.hardlinked
-                    else f"📄 copied ({source_size} B duplicated)"
-                )
                 _progress(
                     progress,
-                    f"Verified: {relative} ({verified_note})",
+                    f"Re-linked existing library folder: {target_dir}",
                     level="success",
                     context={
                         **context,
-                        "source": str(source),
-                        "destination": str(final_destination),
-                        "bytes": source_size,
-                        "hardlinked": placement_res.hardlinked,
+                        "destination": str(target_dir),
+                        "files": len(library_files),
                     },
                 )
+        if not already_placed_in_target:
             try:
-                await asyncio.to_thread(
-                    _write_metadata,
-                    staging_dir / "metadata.json",
-                    {"mam": mam_row, "meta": meta},
+                staging_dir = await asyncio.to_thread(
+                    _prepare_staging_directory, target_dir
                 )
-            except OSError as error:
-                raise FilePlacementError(
-                    f"could not write library metadata: {error}",
-                    destination=target_dir / "metadata.json",
-                    method=method,
-                    remediation=(
-                        "Check the library drive's free space and Windows write "
-                        "permissions, then run the organizer again."
-                    ),
-                ) from error
-            await asyncio.to_thread(_publish_staging_directory, staging_dir, target_dir)
-            staging_dir = None
-            _progress(
-                progress,
-                f"Published complete library folder: {target_dir}",
-                level="success",
-                context={
-                    **context,
-                    "destination": str(target_dir),
-                    "files": len(library_files),
-                },
-            )
-        finally:
-            if staging_dir is not None:
-                await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+                for file_index, (source, relative, source_size) in enumerate(
+                    planned, start=1
+                ):
+                    staging_destination = staging_dir / relative
+                    final_destination = target_dir / relative
+                    _progress(
+                        progress,
+                        f"Placing file {file_index}/{len(planned)}: {relative}",
+                        context={
+                            **context,
+                            "method": method,
+                            "source": str(source),
+                            "destination": str(final_destination),
+                            "source_bytes": source_size,
+                        },
+                    )
+                    await asyncio.to_thread(
+                        staging_destination.parent.mkdir, parents=True, exist_ok=True
+                    )
+                    try:
+                        placement_res = await asyncio.to_thread(
+                            _place_file,
+                            source,
+                            staging_destination,
+                            method,
+                            force_hardlinks=config.force_hardlinks,
+                            source_size=source_size,
+                        )
+                        await asyncio.to_thread(
+                            _validate_placed_file,
+                            source,
+                            staging_destination,
+                            method,
+                            source_size,
+                        )
+                    except FilePlacementError:
+                        raise
+                    except OSError as error:
+                        raise FilePlacementError(
+                            f"file placement failed: {error}",
+                            source=source,
+                            destination=final_destination,
+                            method=method,
+                            remediation=(
+                                "Check the library drive's free space and Windows "
+                                "permissions. For different drives, use method = "
+                                '"hardlink_or_copy" or "copy".'
+                            ),
+                        ) from error
+                    library_files.append(str(relative))
+                    placement_results.append({
+                        "relative": str(relative),
+                        "hardlinked": placement_res.hardlinked,
+                        "samefile": placement_res.samefile,
+                        "nlink": placement_res.nlink,
+                        "method": placement_res.method_used,
+                        "bytes_duplicated": placement_res.bytes_duplicated,
+                        "source_size": source_size,
+                    })
+                    verified_note = (
+                        "🔗 hardlinked (0 B extra)"
+                        if placement_res.hardlinked
+                        else f"📄 copied ({source_size} B duplicated)"
+                    )
+                    _progress(
+                        progress,
+                        f"Verified: {relative} ({verified_note})",
+                        level="success",
+                        context={
+                            **context,
+                            "source": str(source),
+                            "destination": str(final_destination),
+                            "bytes": source_size,
+                            "hardlinked": placement_res.hardlinked,
+                        },
+                    )
+                try:
+                    await asyncio.to_thread(
+                        _write_metadata,
+                        staging_dir / "metadata.json",
+                        {"mam": mam_row, "meta": meta},
+                    )
+                except OSError as error:
+                    raise FilePlacementError(
+                        f"could not write library metadata: {error}",
+                        destination=target_dir / "metadata.json",
+                        method=method,
+                        remediation=(
+                            "Check the library drive's free space and Windows write "
+                            "permissions, then run the organizer again."
+                        ),
+                    ) from error
+                await asyncio.to_thread(
+                    _publish_staging_directory, staging_dir, target_dir
+                )
+                staging_dir = None
                 _progress(
                     progress,
-                    f"Rolled back incomplete library copy: {target_dir}",
-                    level="warning",
-                    context={**context, "target": str(target_dir)},
+                    f"Published complete library folder: {target_dir}",
+                    level="success",
+                    context={
+                        **context,
+                        "destination": str(target_dir),
+                        "files": len(library_files),
+                    },
                 )
+            finally:
+                if staging_dir is not None:
+                    await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+                    _progress(
+                        progress,
+                        f"Rolled back incomplete library copy: {target_dir}",
+                        level="warning",
+                        context={**context, "target": str(target_dir)},
+                    )
 
     file_diagnostics: list[dict[str, Any]] = []
     all_hardlinked = bool(placement_results)

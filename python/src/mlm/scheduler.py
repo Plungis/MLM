@@ -28,6 +28,7 @@ class JobStatus:
     last_error: str | None = None
     last_result: object | None = None
     running: bool = False
+    pending_rerun: bool = False
     progress: list[dict[str, object]] = field(default_factory=list)
 
 
@@ -107,48 +108,57 @@ class ServiceState:
     async def run_job(self, name: str, job: Callable[[], Awaitable[object]]) -> None:
         status = self.jobs.setdefault(name, JobStatus())
         if status.running:
+            status.pending_rerun = True
             return
         status.running = True
-        status.last_run = datetime.now(UTC).isoformat()
-        status.last_error = None
-        status.last_result = None
-        status.progress.clear()
-        self.report_progress(name, "Job started", context={"job": name})
-        self.repository.log_activity(
-            "scheduler", f"Started job: {name}", context={"job": name}
-        )
         try:
-            result = await job()
-            status.last_result = asdict(result) if is_dataclass(result) else result
-            self.report_progress(
-                name,
-                "Job completed",
-                level="success",
-                context={"result": status.last_result},
-            )
-            self.repository.log_activity(
-                "scheduler",
-                f"Completed job: {name}",
-                level="success",
-                context={"job": name, "result": status.last_result},
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
-            status.last_error = f"{type(error).__name__}: {error}"
-            self.report_progress(
-                name,
-                f"Job failed: {status.last_error}",
-                level="error",
-            )
-            self.repository.log_activity(
-                "scheduler",
-                f"Job failed: {name}",
-                level="error",
-                context={"job": name, "error": status.last_error},
-            )
+            while True:
+                status.pending_rerun = False
+                status.last_run = datetime.now(UTC).isoformat()
+                status.last_error = None
+                status.last_result = None
+                status.progress.clear()
+                self.report_progress(name, "Job started", context={"job": name})
+                self.repository.log_activity(
+                    "scheduler", f"Started job: {name}", context={"job": name}
+                )
+                try:
+                    result = await job()
+                    status.last_result = (
+                        asdict(result) if is_dataclass(result) else result
+                    )
+                    self.report_progress(
+                        name,
+                        "Job completed",
+                        level="success",
+                        context={"result": status.last_result},
+                    )
+                    self.repository.log_activity(
+                        "scheduler",
+                        f"Completed job: {name}",
+                        level="success",
+                        context={"job": name, "result": status.last_result},
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:  # noqa: BLE001 - jobs must not stop the scheduler
+                    status.last_error = f"{type(error).__name__}: {error}"
+                    self.report_progress(
+                        name,
+                        f"Job failed: {status.last_error}",
+                        level="error",
+                    )
+                    self.repository.log_activity(
+                        "scheduler",
+                        f"Job failed: {name}",
+                        level="error",
+                        context={"job": name, "error": status.last_error},
+                    )
+                if not status.pending_rerun or self.stop_event.is_set():
+                    break
         finally:
             status.running = False
+            status.pending_rerun = False
 
     async def _periodic(
         self,
@@ -191,6 +201,8 @@ class ServiceState:
                 "wedges": result.wedges_remaining,
                 "wedge_buffer": result.wedge_buffer,
             }
+            if getattr(result, "downloaded", 0) > 0:
+                asyncio.create_task(self.trigger("organizer"))
             return result
         finally:
             for qbit in qbits:

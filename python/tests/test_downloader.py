@@ -529,3 +529,85 @@ def test_download_job_records_deferral_status_on_selected_record(
     updated_rows = repository.table_rows("selected_torrents")
     assert updated_rows[0]["force_download"] is True
     assert updated_rows[0]["last_check_status"] == "forced"
+
+
+def test_download_job_resolves_library_category_and_sets_category_on_existing_torrent(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data.sqlite3"
+    ensure_database(database)
+    repository = Repository(database)
+    repository.add_selected(
+        {
+            "mam_id": 42,
+            "goodreads_id": None,
+            "hash": None,
+            "dl_link": "secret-hash",
+            "unsat_buffer": 0,
+            "wedge_buffer": None,
+            "cost": "Ratio",
+            "category": None,
+            "tags": [],
+            "title_search": "book",
+            "meta": {
+                "mam_id": 42,
+                "title": "Book",
+                "size": 12,
+                "media_type": "audiobook",
+            },
+            "grabber": "nextchapter:Test Series",
+            "created_at": "2025-01-01T00:00:00Z",
+            "started_at": None,
+            "removed_at": None,
+            "force_download": True,
+        }
+    )
+
+    class ExistingTorrentQbit(FakeQbit):
+        def __init__(self) -> None:
+            super().__init__()
+            self.categories_set: list[tuple[list[str], str]] = []
+            self.tags_added: list[tuple[list[str], list[str]]] = []
+            self.resumed: list[list[str]] = []
+
+        async def torrents(self, *, hashes=()) -> list[dict]:
+            return [
+                {
+                    "hash": next(iter(hashes), "abc"),
+                    "state": "pausedUP",
+                    "category": "",
+                }
+            ]
+
+        async def set_category(self, hashes, category: str) -> None:
+            self.categories_set.append((list(hashes), category))
+
+        async def add_tags(self, hashes, tags) -> None:
+            self.tags_added.append((list(hashes), list(tags)))
+
+        async def resume_torrents(self, hashes) -> None:
+            self.resumed.append(list(hashes))
+
+    qbit = ExistingTorrentQbit()
+    cfg = Config(
+        mam_id="cookie",
+        libraries=(
+            {
+                "category": "Audiobooks",
+                "library_dir": str(tmp_path / "lib"),
+                "allow_tags": ["mlm"],
+            },
+        ),
+    )
+
+    result = asyncio.run(
+        grab_selected_torrents(cfg, repository, FakeMam(), qbit)
+    )
+
+    assert result.downloaded == 1
+    assert len(qbit.categories_set) == 1
+    assert qbit.categories_set[0][1] == "Audiobooks"
+    assert len(qbit.tags_added) == 1
+    assert qbit.tags_added[0][1] == ["mlm"]
+    assert len(qbit.resumed) == 1
+    assert repository.table_rows("torrents")[0]["category"] == "Audiobooks"

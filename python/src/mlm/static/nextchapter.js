@@ -1095,14 +1095,20 @@ document.addEventListener("DOMContentLoaded", () => {
             `<span class="chip" style="background: rgba(56, 189, 248, 0.14); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 0.72rem; font-weight: 600;">${escapeHtml(reason)}</span>`
           ).join(" ");
 
-          const inLibraryBadge = c.in_library
-            ? `<span class="chip" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 600;">✓ In Library / Queue</span>`
-            : "";
+          const inLibraryOnDisk = Boolean(c.in_library_on_disk);
+          const inQueueOnly = Boolean(c.in_queue && !inLibraryOnDisk);
+          const inLibraryBadge = inLibraryOnDisk
+            ? `<span class="chip" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 600;">✓ In Library</span>`
+            : (inQueueOnly
+              ? `<span class="chip" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.45); font-weight: 600;">⏳ In Queue / qBittorrent</span>`
+              : (c.in_library
+                ? `<span class="chip" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 600;">✓ In Library / Queue</span>`
+                : ""));
 
           const seedersNum = parseInt(c.seeders, 10) || 0;
           const leechersNum = parseInt(c.leechers, 10) || 0;
           const seedColor = seedersNum > 5 ? "#34d399" : (seedersNum > 0 ? "#38bdf8" : "#fb7185");
-          const mamSeriesPrimary = c.series_name_mam || "";
+          const mamSeriesPrimary = c.series_name_primary || c.series_name_mam || "";
 
           html += `
             <div class="candidate-card" style="${c.in_library ? 'border-color: rgba(16, 185, 129, 0.35);' : ''}">
@@ -1172,7 +1178,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   ` : ""}
                 </div>
                 <button class="btn btn-sm ${c.in_library ? 'btn-queued-nc' : 'btn-primary-nc'}" data-modal-queue="${c.mam_id}" data-series="${escapeHtml(state.seriesName || mamSeriesPrimary)}" data-vol="${escapeHtml(state.volume || c.series_volume)}" data-title="${escapeHtml(state.title || c.title)}" style="padding: 0.45rem 1rem; font-weight: 600;">
-                  ${c.in_library ? "✓ In Queue / Queue Again" : "1-Click Queue"}
+                  ${inQueueOnly ? "↻ Queue Again & Assign Category" : (c.in_library ? "✓ In Library / Queue Again" : "1-Click Queue")}
                 </button>
               </div>
             </div>
@@ -1231,9 +1237,12 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const qData = await qRes.json();
             if (qData.ok) {
-              qBtn.innerHTML = "✓ Queued in qBittorrent";
+              const catInfo = qData.category ? ` [${escapeHtml(qData.category)}]` : "";
+              qBtn.disabled = false;
+              qBtn.innerHTML = `✓ Queued${catInfo} • Queue Again`;
               qBtn.classList.remove("btn-primary-nc");
               qBtn.classList.add("btn-queued-nc");
+              const qItem = qData.queued_item || {};
               markCardQueuedInDOM({
                 disposition_key: qData.disposition_key || "",
                 series_name: qSeries,
@@ -1241,11 +1250,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 title: qTitle,
                 mam_id: parseInt(id, 10),
                 queued_title: qData.title || qTitle,
-                qbit_state_label: "Queued • Sending to qBittorrent...",
+                qbit_state_label: qItem.qbit_state_label || `Queued${qData.category ? " [" + qData.category + "]" : ""} • Sending to qBittorrent...`,
                 qbit_progress: 0
               });
               if (qData.counts) updatePageCounts(qData.counts);
-              showToast(`✓ Queued #${id}: ${qData.title || qSeries}`);
+              showToast(`✓ Queued #${id}${qData.category ? " [" + qData.category + "]" : ""}: ${qData.title || qSeries}`);
               startQbitPolling();
             } else {
               alert("Error: " + (qData.error || "Failed to queue"));

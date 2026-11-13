@@ -334,7 +334,20 @@ def matches_filter(row: dict[str, Any], rule: dict[str, Any]) -> bool:
 
     categories = rule.get("categories", {})
     if categories:
-        main = MAIN_CATEGORY_BY_ID.get(as_int(row.get("main_cat")))
+        main_id = as_int(row.get("main_cat")) or as_int(row.get("maincat"))
+        main = MAIN_CATEGORY_BY_ID.get(main_id)
+        if not main and actual_media:
+            if "audio" in actual_media:
+                main = "audiobook"
+            elif actual_media in {
+                "ebook",
+                "periodical_ebook",
+                "comic_book",
+                "manga",
+            }:
+                main = "ebook"
+            else:
+                main = actual_media
         category_rule = categories.get({"audiobook": "audio"}.get(main, main), False)
         if category_rule is False:
             return False

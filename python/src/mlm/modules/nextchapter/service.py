@@ -8,9 +8,10 @@ import re
 import time
 from typing import Any
 
-from ...autograbber import select_row
+from ...autograbber import resolve_torrent_category_and_tags, select_row
 from ...config import Config
 from ...database import connect
+from ...library import find_library
 from ...mam import MamClient
 from ...qbittorrent import QbitClient
 from ...repository import Repository
@@ -661,6 +662,13 @@ class NextChapterService:
                         or item.get("qbit_dlspeed")
                         or ""
                     )
+                    item["category"] = str(
+                        primary_q.get("category")
+                        or secondary_q.get("category")
+                        or (q_info or {}).get("category")
+                        or item.get("category")
+                        or ""
+                    )
 
                 disp = self._match_disposition(
                     dispositions, s_name, vol_str, title_str
@@ -756,6 +764,18 @@ class NextChapterService:
             if s.get("status") == "complete":
                 complete_count += 1
             total_missing += len(unqueued_missing)
+
+        matched_q_keys = {
+            str(q.get("disposition_key") or "")
+            for q in queued_volumes
+            if q.get("disposition_key")
+        }
+        for q_key, q_val in queued_map.items():
+            if q_key in matched_q_keys:
+                continue
+            q_copy = dict(q_val)
+            q_copy.setdefault("status", "queued")
+            queued_volumes.append(q_copy)
 
         # Include any standalone dispositions not yet in scanned series
         for d_key, disp in dispositions.items():
@@ -1682,6 +1702,12 @@ class NextChapterService:
         # Score and enrich candidates
         scored_candidates: list[dict[str, Any]] = []
         author_matched_found = False
+        repo_queue = self._collect_repo_queue_snapshot()
+        queued_mam_ids = {
+            int(qv.get("mam_id") or 0)
+            for qv in self._load_queued_volumes().values()
+            if qv.get("mam_id")
+        }
         strict_media_filter = (
             media_filter.strip().casefold()
             if media_filter
@@ -1845,20 +1871,43 @@ class NextChapterService:
             cand_title_str = str(
                 meta.get("title") or r.get("title", "Untitled")
             )
+            in_library_on_disk = False
+            in_queue = False
             try:
-                in_library = bool(
-                    tid and self.repository.is_book_present(tid, meta)
-                )
-                if not in_library and cand_title_str:
-                    norm_t = normalize_title(cand_title_str)
-                    if norm_t:
-                        existing_recs = self.repository.records_with_title(
-                            norm_t
-                        )
-                        if existing_recs:
-                            in_library = True
+                rq_entry = repo_queue.get(tid) if tid else None
+                if rq_entry:
+                    if rq_entry.get("qbit_state") == "linked":
+                        in_library_on_disk = True
+                    else:
+                        in_queue = True
+                elif tid and tid in queued_mam_ids:
+                    in_queue = True
+                else:
+                    in_library_on_disk = bool(
+                        tid and self.repository.is_book_present(tid, meta)
+                    )
+                    if not in_library_on_disk and cand_title_str:
+                        norm_t = normalize_title(cand_title_str)
+                        if norm_t:
+                            existing_recs = self.repository.records_with_title(
+                                norm_t
+                            )
+                            for ex_rec in existing_recs:
+                                if (
+                                    ex_rec.get("library_path")
+                                    or ex_rec.get("source") == "abs"
+                                    or ex_rec.get("abs_id")
+                                    or (
+                                        ex_rec.get("id")
+                                        and not ex_rec.get("mam_id")
+                                    )
+                                ):
+                                    in_library_on_disk = True
+                                    break
+                                in_queue = True
             except Exception:
-                in_library = False
+                in_library_on_disk = False
+            in_library = bool(in_library_on_disk or in_queue)
 
             scored_candidates.append(
                 {
@@ -1869,6 +1918,7 @@ class NextChapterService:
                     "series": series_info,
                     "series_display": series_display,
                     "series_name_primary": series_name_primary,
+                    "series_name_mam": series_name_primary,
                     "series_volume": cand_vol,
                     "size": size_str,
                     "filetypes": [ft.upper() for ft in filetypes],
@@ -1892,6 +1942,8 @@ class NextChapterService:
                     "series_matched": series_is_match,
                     "match_reasons": match_reasons,
                     "in_library": in_library,
+                    "in_library_on_disk": in_library_on_disk,
+                    "in_queue": in_queue,
                 }
             )
 
@@ -1963,6 +2015,10 @@ class NextChapterService:
         if not raw_row:
             return {"ok": False, "error": f"Torrent #{mam_id} not found on MAM"}
 
+        meta = torrent_meta(raw_row)
+        category, tags = resolve_torrent_category_and_tags(
+            self.config, raw_row, meta=meta
+        )
         selected = await select_row(
             self.config,
             self.repository,
@@ -1970,6 +2026,8 @@ class NextChapterService:
             {
                 "cost": "ratio",
                 "name": f"nextchapter:{series_name}",
+                "category": category,
+                "tags": tags,
                 "allow_any_format": True,
                 "allow_duplicate": True,
                 "force_download": True,
@@ -1981,7 +2039,6 @@ class NextChapterService:
 
         # If volume wasn't explicitly passed, try extracting from torrent series
         if not vol_str:
-            meta = torrent_meta(raw_row)
             r_series = meta.get("series") or []
             if r_series and isinstance(r_series[0], dict):
                 entries = r_series[0].get("entries") or (
@@ -1995,6 +2052,7 @@ class NextChapterService:
         d_key = make_disposition_key(series_name, vol_str, title or raw_title)
         now = int(time.time())
         queued_map = self._load_queued_volumes()
+        cat_badge = f" [{category}]" if category else ""
         q_record = {
             "disposition_key": d_key,
             "mam_id": mam_id,
@@ -2003,9 +2061,10 @@ class NextChapterService:
             "title": str(title or raw_title),
             "queued_title": raw_title,
             "queued_at": now,
+            "category": category or "",
             "torrent_hash": "",
             "qbit_state": "queued_mam",
-            "qbit_state_label": "Queued • Sending to qBittorrent...",
+            "qbit_state_label": f"Queued{cat_badge} • Sending to qBittorrent...",
             "qbit_progress": 0.0,
             "qbit_file": "",
             "qbit_save_path": "",
@@ -2043,6 +2102,7 @@ class NextChapterService:
                 "mam_id": mam_id,
                 "series": series_name,
                 "volume": vol_str,
+                "category": category,
             },
         )
         return {
@@ -2051,6 +2111,7 @@ class NextChapterService:
             "title": raw_row.get("title"),
             "series_name": series_name,
             "volume_number": vol_str,
+            "category": category,
             "disposition_key": d_key,
             "queued_item": q_record,
             "counts": self._summary_counts(state),
@@ -2433,34 +2494,39 @@ class NextChapterService:
                     ).strip()
                     t_name = str(t.get("name") or "").strip()
 
+                    t_cat = str(t.get("category") or "").strip()
+                    cat_suffix = f" [{t_cat}]" if t_cat else ""
+
                     if any(
                         w in st_lower
                         for w in ("error", "missing")
                     ):
                         q_state = "error"
-                        q_label = f"qBittorrent Error ({raw_state})"
+                        q_label = f"qBittorrent Error{cat_suffix} ({raw_state})"
                     elif prog >= 100.0 or any(
                         w in st_lower
                         for w in ("up", "seed")
                     ):
                         q_state = "completed"
-                        q_label = "Completed in qBittorrent (100%)"
+                        q_label = f"Completed in qBittorrent{cat_suffix} (100%)"
                         prog = 100.0
                     elif any(
                         w in st_lower
                         for w in ("pause", "stop")
                     ):
                         q_state = "paused"
-                        q_label = f"Paused in qBittorrent ({prog:.0f}%)"
+                        q_label = f"Paused in qBittorrent{cat_suffix} ({prog:.0f}%)"
                     elif any(
                         w in st_lower
                         for w in ("down", "meta", "stall")
                     ):
                         q_state = "downloading"
-                        q_label = f"Downloading in qBittorrent ({prog:.1f}%)"
+                        q_label = (
+                            f"Downloading in qBittorrent{cat_suffix} ({prog:.1f}%)"
+                        )
                     else:
                         q_state = "queued_qbit"
-                        q_label = f"Queued in qBittorrent ({prog:.0f}%)"
+                        q_label = f"Queued in qBittorrent{cat_suffix} ({prog:.0f}%)"
 
                     file_display = t_name
                     if content_path:
@@ -2480,10 +2546,13 @@ class NextChapterService:
                         "qbit_file": file_display,
                         "qbit_save_path": content_path,
                         "qbit_dlspeed": dlspeed,
+                        "qbit_category": t_cat,
                         "name": t_name,
+                        "raw_torrent": t,
                     }
 
                 # For any tracked hash in queued_map or repo_queue, fetch files
+                # and auto-heal missing library category in qBittorrent
                 tracked_hashes: set[str] = set()
                 queued_title_norms = {
                     normalize_title(str(qv.get("queued_title") or ""))
@@ -2504,6 +2573,49 @@ class NextChapterService:
 
                 for th in tracked_hashes:
                     if th in qbit_by_hash:
+                        qb_item = qbit_by_hash[th]
+                        raw_t = qb_item.get("raw_torrent") or {}
+                        if find_library(self.config, raw_t) is None:
+                            target_cat, target_tags = (
+                                resolve_torrent_category_and_tags(
+                                    self.config, {}
+                                )
+                            )
+                            if target_cat and hasattr(client, "set_category"):
+                                try:
+                                    await client.set_category([th], target_cat)
+                                    if target_tags and hasattr(
+                                        client, "add_tags"
+                                    ):
+                                        await client.add_tags(
+                                            [th], target_tags
+                                        )
+                                    qb_item["qbit_category"] = target_cat
+                                    old_label = str(
+                                        qb_item.get("qbit_state_label") or ""
+                                    )
+                                    if f"[{target_cat}]" not in old_label:
+                                        qb_item["qbit_state_label"] = (
+                                            old_label.replace(
+                                                "in qBittorrent",
+                                                f"in qBittorrent [{target_cat}]",
+                                            )
+                                        )
+                                    self.repository.log_activity(
+                                        "nextchapter",
+                                        (
+                                            "Auto-assigned qBittorrent category "
+                                            f"'{target_cat}' to queued torrent "
+                                            f"{qb_item.get('name') or th}"
+                                        ),
+                                        level="info",
+                                        context={
+                                            "torrent_hash": th,
+                                            "category": target_cat,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
                         try:
                             files = await client.files(th)
                             if files and isinstance(files, list):
@@ -2570,6 +2682,8 @@ class NextChapterService:
                     "qbit_save_path", ""
                 )
                 qv["qbit_dlspeed"] = qb["qbit_dlspeed"]
+                if qb.get("qbit_category"):
+                    qv["category"] = qb["qbit_category"]
                 changed = True
             elif rq:
                 qv["qbit_state"] = rq["qbit_state"]
@@ -2579,6 +2693,13 @@ class NextChapterService:
         if changed:
             self._save_queued_volumes(queued_map)
 
+        needs_downloader = any(
+            qv.get("qbit_state") == "queued_mam" for qv in queued_map.values()
+        ) and bool(self.repository.pending_selected())
+        needs_organizer = any(
+            qv.get("qbit_state") == "completed" for qv in queued_map.values()
+        )
+
         state = self._apply_dispositions_to_state(self.get_cached_state())
         self._state_cache = state
         return {
@@ -2586,6 +2707,8 @@ class NextChapterService:
             "queued_volumes": state.get("queued_volumes", []),
             "by_key": queued_map,
             "counts": self._summary_counts(state),
+            "needs_downloader": needs_downloader,
+            "needs_organizer": needs_organizer,
         }
 
     async def queue_all_missing(self, series_name: str) -> dict[str, Any]:

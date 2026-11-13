@@ -59,13 +59,14 @@ class QbitClient:
         paused: bool = False,
     ) -> None:
         data: dict[str, str] = {"paused": str(paused).lower()}
-        if category:
-            data["category"] = category
-        tags_value = ",".join(tags)
+        if category and str(category).strip():
+            resolved_category = await self.resolve_category_name(
+                str(category).strip()
+            )
+            data["category"] = resolved_category
+        tags_value = ",".join(str(t) for t in tags if str(t).strip())
         if tags_value:
             data["tags"] = tags_value
-        if category:
-            await self.ensure_category(category)
         response = await self.client.post(
             "/api/v2/torrents/add",
             data=data,
@@ -113,29 +114,46 @@ class QbitClient:
         response = self._check(await self.client.get("/api/v2/torrents/categories"))
         return response.json()
 
-    async def ensure_category(self, category: str) -> None:
-        if category in await self.categories():
-            return
+    async def resolve_category_name(self, category: str) -> str:
+        clean = str(category or "").strip()
+        if not clean:
+            return ""
+        existing = await self.categories()
+        if clean in existing:
+            return clean
+        target_fold = clean.casefold()
+        for existing_name in existing:
+            if str(existing_name).strip().casefold() == target_fold:
+                return str(existing_name)
         response = await self.client.post(
-            "/api/v2/torrents/createCategory", data={"category": category}
+            "/api/v2/torrents/createCategory", data={"category": clean}
         )
         self._check(response)
+        return clean
+
+    async def ensure_category(self, category: str) -> None:
+        await self.resolve_category_name(category)
 
     async def set_category(self, hashes: Iterable[str], category: str) -> None:
-        await self.ensure_category(category)
+        hash_list = [h for h in hashes if h]
+        clean = str(category or "").strip()
+        if not hash_list or not clean:
+            return
+        resolved = await self.resolve_category_name(clean)
         response = await self.client.post(
             "/api/v2/torrents/setCategory",
-            data={"hashes": "|".join(hashes), "category": category},
+            data={"hashes": "|".join(hash_list), "category": resolved},
         )
         self._check(response)
 
     async def add_tags(self, hashes: Iterable[str], tags: Iterable[str]) -> None:
-        tags_value = ",".join(tags)
-        if not tags_value:
+        hash_list = [h for h in hashes if h]
+        tags_value = ",".join(str(t) for t in tags if str(t).strip())
+        if not hash_list or not tags_value:
             return
         response = await self.client.post(
             "/api/v2/torrents/addTags",
-            data={"hashes": "|".join(hashes), "tags": tags_value},
+            data={"hashes": "|".join(hash_list), "tags": tags_value},
         )
         self._check(response)
 

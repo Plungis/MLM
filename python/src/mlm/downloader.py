@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from .autograbber import resolve_torrent_category_and_tags
 from .config import Config
 from .mam import MamClient, MamRateLimitError, MamWedgeError
 from .qbittorrent import QbitClient
@@ -211,11 +213,28 @@ async def grab_selected_torrents(
                 continue
             torrent_file = await _torrent_file_with_backoff(mam, torrent_id)
             torrent_hash = info_hash(torrent_file)
+            target_cat = str(selected.get("category") or "").strip() or None
+            target_tags = list(selected.get("tags") or [])
+            if not target_cat:
+                resolved_cat, resolved_tags = resolve_torrent_category_and_tags(
+                    config,
+                    {},
+                    meta=selected.get("meta") or {},
+                    rule=selected,
+                )
+                target_cat = resolved_cat
+                for rt in resolved_tags:
+                    if rt not in target_tags:
+                        target_tags.append(rt)
+                selected["category"] = target_cat
+                selected["tags"] = target_tags
+            target_qbit = qbit
             existing = await qbit.torrents(hashes=[torrent_hash])
             if not existing:
                 for other_qbit in other_qbits:
                     existing = await other_qbit.torrents(hashes=[torrent_hash])
                     if existing:
+                        target_qbit = other_qbit
                         break
             wedged = False
             wedge_failed_fallback = False
@@ -455,19 +474,28 @@ async def grab_selected_torrents(
                     )
                     continue
             if not existing:
-                await qbit.add_torrent(
+                await target_qbit.add_torrent(
                     torrent_file,
-                    category=selected.get("category"),
-                    tags=selected.get("tags", []),
+                    category=target_cat,
+                    tags=target_tags,
                     paused=config.add_torrents_stopped,
                 )
+                if target_cat and hasattr(target_qbit, "set_category"):
+                    with contextlib.suppress(Exception):
+                        await target_qbit.set_category(
+                            [torrent_hash], target_cat
+                        )
             else:
+                if target_cat and hasattr(target_qbit, "set_category"):
+                    await target_qbit.set_category([torrent_hash], target_cat)
+                if target_tags and hasattr(target_qbit, "add_tags"):
+                    await target_qbit.add_tags([torrent_hash], target_tags)
                 state = str(existing[0].get("state", "")).lower()
                 if "pause" in state or "stop" in state:
-                    await qbit.resume_torrents([torrent_hash])
+                    await target_qbit.resume_torrents([torrent_hash])
                 elif "error" in state or "missing" in state:
-                    await qbit.recheck_torrents([torrent_hash])
-                    await qbit.resume_torrents([torrent_hash])
+                    await target_qbit.recheck_torrents([torrent_hash])
+                    await target_qbit.resume_torrents([torrent_hash])
             repository.record_started(selected, torrent_hash, wedged=wedged)
             downloaded += 1
             if uses_ratio:
@@ -479,6 +507,7 @@ async def grab_selected_torrents(
                 context={
                     "mam_id": torrent_id,
                     "torrent_hash": torrent_hash,
+                    "category": target_cat,
                     "wedged": wedged,
                     "wedge_fallback_used": wedge_failed_fallback,
                     "already_present": bool(existing),
